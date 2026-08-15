@@ -1452,8 +1452,8 @@ function renderMap(mapData) {
         fullscreenControlOptions: { position: 'topright' }
     });
 
-    // CartoDB Dark Matter tiles
-    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+    // CartoDB Voyager — clean, professional basemap
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
         attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/">CARTO</a>',
         subdomains: 'abcd',
         maxZoom: 19
@@ -1485,12 +1485,18 @@ function renderMap(mapData) {
 
     // Color mapping by source type
     var sourceColors = {
-        exif: '#9b59b6',
-        ip: '#8b5cf6',
-        social: '#d946ef',
-        manual: '#6b3fa0',
-        address: '#bb6bd9',
-        default: '#9b59b6'
+        exif: '#16a34a',
+        ip_geolocation: '#2563eb',
+        ip: '#2563eb',
+        geotag: '#7c3aed',
+        social: '#7c3aed',
+        geocoding: '#0891b2',
+        address: '#0891b2',
+        mention: '#dc2626',
+        manual: '#d97706',
+        user_input: '#d97706',
+        osint: '#7c3aed',
+        default: '#2563eb'
     };
 
     // Render markers
@@ -1500,24 +1506,35 @@ function renderMap(mapData) {
             var lng = m.lng || m.longitude;
             if (lat == null || lng == null) return;
 
-            var color = sourceColors[m.source_type || m.type] || sourceColors.default;
+            var srcType = m.source_type || m.type || 'default';
+            var color = sourceColors[srcType] || sourceColors.default;
 
+            // Outer glow ring
+            L.circleMarker([lat, lng], {
+                radius: 16,
+                fillColor: color,
+                color: 'transparent',
+                fillOpacity: 0.12,
+                interactive: false
+            }).addTo(markerLayer);
+
+            // Main marker
             var marker = L.circleMarker([lat, lng], {
-                radius: 8,
+                radius: 7,
                 fillColor: color,
                 color: '#ffffff',
                 weight: 2,
-                opacity: 0.9,
-                fillOpacity: 0.8
+                opacity: 1,
+                fillOpacity: 0.9
             });
 
             // Popup
             var popupHtml = '<div class="map-popup">';
-            if (m.label || m.name) popupHtml += '<strong>' + escapeHtml(m.label || m.name) + '</strong><br>';
-            popupHtml += 'Lat: ' + lat.toFixed(4) + ', Lng: ' + lng.toFixed(4);
-            if (m.source_type || m.type) popupHtml += '<br>Source: ' + escapeHtml(m.source_type || m.type);
-            if (m.confidence) popupHtml += '<br>Confidence: ' + escapeHtml(String(m.confidence));
-            if (m.description) popupHtml += '<br>' + escapeHtml(m.description);
+            if (m.label || m.name) popupHtml += '<div class="map-popup-title">' + escapeHtml(m.label || m.name) + '</div>';
+            popupHtml += '<div class="map-popup-coords">' + lat.toFixed(5) + ', ' + lng.toFixed(5) + '</div>';
+            if (srcType !== 'default') popupHtml += '<div class="map-popup-meta"><span class="map-popup-badge" style="background:' + color + '">' + escapeHtml(srcType.replace(/_/g, ' ')) + '</span></div>';
+            if (m.confidence) popupHtml += '<div class="map-popup-meta">Confidence: ' + (typeof m.confidence === 'number' ? (m.confidence * 100).toFixed(0) + '%' : escapeHtml(String(m.confidence))) + '</div>';
+            if (m.description) popupHtml += '<div class="map-popup-meta">' + escapeHtml(m.description) + '</div>';
             popupHtml += '</div>';
             marker.bindPopup(popupHtml);
 
@@ -1537,7 +1554,7 @@ function renderMap(mapData) {
             tri.source_points.forEach(function (pt) {
                 L.polyline(
                     [[pt.lat || pt[0], pt.lng || pt[1]], [tri.center.lat || tri.center[0], tri.center.lng || tri.center[1]]],
-                    { color: '#9b59b6', weight: 2, dashArray: '8, 4', opacity: 0.7 }
+                    { color: '#2563eb', weight: 1.5, dashArray: '6, 4', opacity: 0.5 }
                 ).addTo(triLayer);
             });
         }
@@ -1548,30 +1565,45 @@ function renderMap(mapData) {
                 [tri.center.lat || tri.center[0], tri.center.lng || tri.center[1]],
                 {
                     radius: tri.confidence_radius,
-                    color: '#9b59b6',
-                    fillColor: '#9b59b6',
-                    fillOpacity: 0.1,
-                    weight: 2,
+                    color: '#2563eb',
+                    fillColor: '#2563eb',
+                    fillOpacity: 0.06,
+                    weight: 1.5,
                     dashArray: '4, 4'
                 }
             ).addTo(triLayer);
         }
 
-        // Pulsing center marker
+        // Center marker with glow
         if (tri.center) {
             var centerLat = tri.center.lat || tri.center[0];
             var centerLng = tri.center.lng || tri.center[1];
 
+            // Outer glow
             L.circleMarker([centerLat, centerLng], {
-                radius: 12,
-                fillColor: '#d946ef',
+                radius: 22,
+                fillColor: '#dc2626',
+                color: 'transparent',
+                fillOpacity: 0.1,
+                interactive: false
+            }).addTo(triLayer);
+
+            L.circleMarker([centerLat, centerLng], {
+                radius: 10,
+                fillColor: '#dc2626',
                 color: '#ffffff',
-                weight: 3,
+                weight: 2.5,
                 opacity: 1,
                 fillOpacity: 0.9,
                 className: 'pulse-marker'
-            }).bindPopup('<strong>Triangulated Center</strong><br>Lat: ' + centerLat.toFixed(4) + ', Lng: ' + centerLng.toFixed(4))
-                .addTo(triLayer);
+            }).bindPopup(
+                '<div class="map-popup">' +
+                '<div class="map-popup-title">Triangulated Center</div>' +
+                '<div class="map-popup-coords">' + centerLat.toFixed(5) + ', ' + centerLng.toFixed(5) + '</div>' +
+                (tri.method ? '<div class="map-popup-meta">Method: ' + escapeHtml(tri.method) + '</div>' : '') +
+                (tri.confidence ? '<div class="map-popup-meta">Confidence: ' + (tri.confidence * 100).toFixed(0) + '%</div>' : '') +
+                '</div>'
+            ).addTo(triLayer);
 
             bounds.push([centerLat, centerLng]);
         }
@@ -1586,7 +1618,7 @@ function renderMap(mapData) {
             if (conn.from && conn.to) {
                 L.polyline(
                     [[conn.from.lat, conn.from.lng], [conn.to.lat, conn.to.lng]],
-                    { color: '#8b5cf6', weight: 1.5, opacity: 0.5 }
+                    { color: '#2563eb', weight: 1.5, opacity: 0.4 }
                 ).addTo(connLayer);
             }
         });
@@ -1600,14 +1632,15 @@ function renderMap(mapData) {
 
         var heatLayer = L.heatLayer(heatPoints, {
             radius: 25,
-            blur: 15,
+            blur: 18,
             maxZoom: 17,
             gradient: {
-                0.0: '#1a0a2e',
-                0.3: '#6b3fa0',
-                0.5: '#9b59b6',
-                0.7: '#d946ef',
-                1.0: '#f5d0fe'
+                0.0: 'rgba(37, 99, 235, 0)',
+                0.2: 'rgba(37, 99, 235, 0.3)',
+                0.4: 'rgba(124, 58, 237, 0.5)',
+                0.6: 'rgba(220, 38, 38, 0.6)',
+                0.8: 'rgba(234, 88, 12, 0.8)',
+                1.0: 'rgba(250, 204, 21, 0.9)'
             }
         }).addTo(mapInstance);
 
