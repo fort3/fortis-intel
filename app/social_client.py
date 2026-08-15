@@ -815,6 +815,9 @@ class SocialClient:
                 timeout=15,
             )
             resp.raise_for_status()
+            if not resp.text.strip():
+                log.warning("Mastodon search returned empty body — check token scopes (need read:search)")
+                return []
             accounts = resp.json().get("accounts", [])
             results: list[dict[str, Any]] = []
             for acct in accounts:
@@ -880,44 +883,105 @@ class SocialClient:
             log.error("Mastodon get_user_posts(%r) failed: %s", user_id, exc)
             return []
 
+    def _mastodon_parse_statuses(self, statuses: list[dict]) -> list[dict[str, Any]]:
+        posts: list[dict[str, Any]] = []
+        for st in statuses:
+            content = st.get("content", "")
+            hashtags_raw = [t.get("name", "") for t in st.get("tags", [])]
+            mentions_raw = [m.get("acct", "") for m in st.get("mentions", [])]
+            media_urls = [m.get("url", "") for m in st.get("media_attachments", []) if m.get("url")]
+            posts.append(self._normalise_post(
+                platform="mastodon",
+                post_id=str(st.get("id", "")),
+                author_username=st.get("account", {}).get("acct", ""),
+                content=content,
+                url=st.get("url", ""),
+                timestamp=st.get("created_at"),
+                likes=st.get("favourites_count", 0),
+                shares=st.get("reblogs_count", 0),
+                replies=st.get("replies_count", 0),
+                hashtags=hashtags_raw,
+                mentions=mentions_raw,
+                media_urls=media_urls,
+            ))
+        return posts
+
     def _mastodon_search_content(
         self, query: str, limit: int = 40,
     ) -> list[dict[str, Any]]:
         if not self._mastodon_base_url:
             return []
+
+        seen_ids: set[str] = set()
+        posts: list[dict[str, Any]] = []
+        cap = min(limit, 40)
+
+        # Layer 1: hashtag timeline — public posts across the fediverse
+        tags = [w.lstrip("#") for w in query.split() if len(w.lstrip("#")) >= 2]
+        for tag in tags[:3]:
+            try:
+                resp = requests.get(
+                    f"{self._mastodon_base_url}/api/v1/timelines/tag/{tag}",
+                    params={"limit": cap},
+                    headers=self._mastodon_headers(),
+                    timeout=15,
+                )
+                resp.raise_for_status()
+                if resp.text.strip():
+                    for p in self._mastodon_parse_statuses(resp.json()):
+                        pid = p.get("post_id", "")
+                        if pid and pid not in seen_ids:
+                            seen_ids.add(pid)
+                            posts.append(p)
+            except Exception as exc:
+                log.warning("Mastodon hashtag timeline(%r) failed: %s", tag, exc)
+
+        # Layer 2: interaction-based search (returns posts you interacted with)
         try:
-            url = f"{self._mastodon_base_url}/api/v2/search"
             resp = requests.get(
-                url,
-                params={"q": query, "type": "statuses", "limit": min(limit, 40)},
+                f"{self._mastodon_base_url}/api/v2/search",
+                params={"q": query, "type": "statuses", "limit": cap},
                 headers=self._mastodon_headers(),
                 timeout=15,
             )
             resp.raise_for_status()
-            statuses = resp.json().get("statuses", [])
-            posts: list[dict[str, Any]] = []
-            for st in statuses:
-                content = st.get("content", "")
-                hashtags_raw = [t.get("name", "") for t in st.get("tags", [])]
-                mentions_raw = [m.get("acct", "") for m in st.get("mentions", [])]
-                media_urls = [m.get("url", "") for m in st.get("media_attachments", []) if m.get("url")]
-                posts.append(self._normalise_post(
-                    platform="mastodon",
-                    post_id=str(st.get("id", "")),
-                    author_username=st.get("account", {}).get("acct", ""),
-                    content=content,
-                    url=st.get("url", ""),
-                    timestamp=st.get("created_at"),
-                    likes=st.get("favourites_count", 0),
-                    shares=st.get("reblogs_count", 0),
-                    replies=st.get("replies_count", 0),
-                    hashtags=hashtags_raw,
-                    mentions=mentions_raw,
-                    media_urls=media_urls,
-                ))
-            return posts
+            if resp.text.strip():
+                for p in self._mastodon_parse_statuses(resp.json().get("statuses", [])):
+                    pid = p.get("post_id", "")
+                    if pid and pid not in seen_ids:
+                        seen_ids.add(pid)
+                        posts.append(p)
         except Exception as exc:
-            log.error("Mastodon search_content(%r) failed: %s", query, exc)
+            log.warning("Mastodon search API(%r) failed: %s", query, exc)
+
+        if not posts:
+            log.info("Mastodon search_content(%r): no results from hashtag timeline or search API", query)
+        else:
+            log.info("Mastodon search_content(%r): %d results", query, len(posts))
+        return posts
+
+    def _mastodon_public_timeline(
+        self, limit: int = 40, since_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Fetch the federated public timeline. Used by the feed monitor."""
+        if not self._mastodon_base_url:
+            return []
+        try:
+            params: dict[str, Any] = {"limit": min(limit, 40)}
+            if since_id:
+                params["since_id"] = since_id
+            resp = requests.get(
+                f"{self._mastodon_base_url}/api/v1/timelines/public",
+                params=params,
+                headers=self._mastodon_headers(),
+                timeout=15,
+            )
+            resp.raise_for_status()
+            if not resp.text.strip():
+                return []
+            return self._mastodon_parse_statuses(resp.json())
+        except Exception as exc:
+            log.error("Mastodon public_timeline failed: %s", exc)
             return []
 
     # ==================================================================
@@ -1569,9 +1633,31 @@ class SocialClient:
         if monitor_type == "username":
             return self.search_username(query, platforms=platforms)
 
-        return self.search_content(
+        results = self.search_content(
             query,
             platforms=platforms,
             date_from=date_from,
             date_to=date_to,
         )
+
+        # For keyword monitors, also pull the Mastodon public timeline and
+        # filter client-side — the search API only covers your own interactions.
+        resolved = self._resolve_platforms(platforms)
+        if "mastodon" in resolved and self._mastodon_base_url:
+            try:
+                timeline = self._mastodon_public_timeline(limit=40)
+                seen_ids = {r.get("post_id") for r in results}
+                q_lower = query.lower()
+                for post in timeline:
+                    pid = post.get("post_id", "")
+                    if pid in seen_ids:
+                        continue
+                    content = (post.get("content") or "").lower()
+                    tags = " ".join(post.get("hashtags") or []).lower()
+                    if q_lower in content or q_lower in tags:
+                        results.append(post)
+                        seen_ids.add(pid)
+            except Exception as exc:
+                log.warning("Mastodon public timeline poll failed: %s", exc)
+
+        return results
