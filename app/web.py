@@ -36,14 +36,14 @@ from flask_limiter.util import get_remote_address
 from app.auth import (
     login_required,
     admin_required,
-    is_current_request_admin,
     get_oauth_client,
     OAuthError,
     session_manager,
     get_audit_logger,
     validate_auth_config,
+    ADMIN_EMAILS,
 )
-from app.auth.config import AUTH_ENABLED, ADMIN_EMAILS, SESSION_SECRET_KEY, SESSION_TIMEOUT_MINUTES
+from app.auth.config import AUTH_ENABLED, SESSION_SECRET_KEY, SESSION_TIMEOUT_MINUTES
 from app.chains import (
     get_rag_chain,
     get_investigation_chain,
@@ -121,6 +121,7 @@ def _get_user_hash() -> str:
 def _is_admin() -> bool:
     """Check if the current request user is an admin."""
     return getattr(getattr(g, "user_session", None), "is_admin", False)
+
 
 
 def _save_to_kb(
@@ -373,7 +374,7 @@ def create_app():
     # ── Session configuration ──────────────────────────────────────
     app.config.update(
         SECRET_KEY=SESSION_SECRET_KEY,
-        MAX_CONTENT_LENGTH=200 * 1024 * 1024,  # 200 MB (admins); non-admins capped at 50 MB in route
+        MAX_CONTENT_LENGTH=50 * 1024 * 1024,  # 50 MB upload limit
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SECURE=os.getenv("FLASK_ENV") == "production",
         SESSION_COOKIE_SAMESITE="Lax",
@@ -390,13 +391,12 @@ def create_app():
         max_age=3600,
     )
 
-    # ── Rate limiting (admins are exempt) ─────────────────────────
+    # ── Rate limiting ──────────────────────────────────────────────
     limiter = Limiter(
         app=app,
         key_func=get_remote_address,
         default_limits=["1000 per day", "200 per hour"],
         storage_uri=os.getenv("REDIS_URL", "memory://"),
-        request_filter=is_current_request_admin,
     )
 
     # ── Security headers ───────────────────────────────────────────
@@ -579,8 +579,7 @@ def create_app():
                 return jsonify({"error": "No file uploaded"}), 400
 
             # Validate file type and size
-            admin_max = 200 if _is_admin() else None
-            is_valid, error_msg = validate_upload_file(file, max_size_mb=admin_max)
+            is_valid, error_msg = validate_upload_file(file)
             if not is_valid:
                 print(f"  File validation failed: {error_msg}")
                 return jsonify({"error": error_msg}), 400
