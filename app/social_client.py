@@ -1285,11 +1285,11 @@ class SocialClient:
             if not geo:
                 continue
             lat = geo.get("lat")
-            lng = geo.get("lng") or geo.get("lon")
-            if lat is not None and lng is not None:
+            lon = geo.get("lon") or geo.get("lng")
+            if lat is not None and lon is not None:
                 geo_points.append({
                     "lat": float(lat),
-                    "lng": float(lng),
+                    "lon": float(lon),
                     "source": "geotag",
                     "platform": post.get("platform", "unknown"),
                     "post_id": post.get("post_id", ""),
@@ -1306,7 +1306,7 @@ class SocialClient:
                         if len(coord_list) == 2:
                             geo_points.append({
                                 "lat": float(coord_list[1]),
-                                "lng": float(coord_list[0]),
+                                "lon": float(coord_list[0]),
                                 "source": "geotag",
                                 "platform": post.get("platform", "unknown"),
                                 "post_id": post.get("post_id", ""),

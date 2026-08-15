@@ -2059,25 +2059,23 @@ def create_app():
     @app.route("/osint-status", methods=["GET"])
     def osint_status():
         """Check OSINT source availability and return platform status."""
-        platform_status = {}
+        configured = []
+        unconfigured = []
 
         for platform, config in SOCIAL_PLATFORMS.items():
-            # Handle both singular env_key and plural env_keys
             env_keys = config.get("env_keys", [])
             if not env_keys:
                 single_key = config.get("env_key", f"{platform.upper()}_API_KEY")
                 env_keys = [single_key]
-            configured = all(bool(os.getenv(k)) for k in env_keys)
-            platform_status[platform] = {
-                "configured": configured,
-                "name": config.get("name", platform),
-            }
+            name = config.get("name", platform)
+            if all(bool(os.getenv(k)) for k in env_keys):
+                configured.append(name)
+            else:
+                unconfigured.append(name)
 
         return jsonify({
-            "platforms": platform_status,
-            "any_configured": any(
-                s["configured"] for s in platform_status.values()
-            ),
+            "configured": configured,
+            "unconfigured": unconfigured,
         })
 
     # ================================================================

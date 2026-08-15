@@ -366,7 +366,13 @@ class OSINTClient:
 
     def _extract_geo(self, posts: list[SocialPost]) -> list[dict[str, Any]]:
         geo_points: list[dict[str, Any]] = []
-        post_dicts = [asdict(p) for p in posts if p.geo_data]
+        post_dicts = []
+        for p in posts:
+            if not p.geo_data:
+                continue
+            d = asdict(p)
+            d["geo"] = d.pop("geo_data", None)
+            post_dicts.append(d)
         extracted = self._social.extract_geotags(post_dicts)
         for gp in extracted:
             if gp.get("lat") is not None and gp.get("lon") is not None:
@@ -458,5 +464,5 @@ class OSINTClient:
             hashtags=d.get("hashtags", []),
             mentions=d.get("mentions", []),
             media_urls=d.get("media_urls", []),
-            geo_data=d.get("geo_data", {}),
+            geo_data=d.get("geo") or d.get("geo_data") or {},
         )
