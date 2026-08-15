@@ -14,6 +14,7 @@ class UserSession:
     picture: str
     created_at: datetime
     last_activity: datetime
+    is_admin: bool = False
 
 
 _MAX_SESSIONS = 10_000
@@ -45,6 +46,8 @@ class SessionManager:
         Returns:
             Session token (256-bit random string)
         """
+        from app.auth.config import ADMIN_EMAILS
+
         # Invalidate any existing session for this email
         if email in self.email_to_token:
             old_token = self.email_to_token[email]
@@ -61,6 +64,7 @@ class SessionManager:
             picture=picture,
             created_at=now,
             last_activity=now,
+            is_admin=email.lower() in ADMIN_EMAILS,
         )
 
         if len(self.sessions) >= _MAX_SESSIONS:

@@ -25,6 +25,12 @@ SESSION_SECRET_KEY = os.getenv("SESSION_SECRET_KEY")
 # Feature Flag
 AUTH_ENABLED = os.getenv("AUTH_ENABLED", "true").lower() == "true"
 
+# Admin Configuration
+_admin_raw = os.getenv("ADMIN_EMAILS", "")
+ADMIN_EMAILS: set[str] = {
+    e.strip().lower() for e in _admin_raw.split(",") if e.strip()
+}
+
 
 def validate_auth_config() -> None:
     """Ensure required auth environment variables are set."""

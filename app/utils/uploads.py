@@ -50,7 +50,7 @@ def safe_storage_path(base_dir: str, session_id: str, suffix: str = "") -> Path:
     return path
 
 
-def validate_upload_file(file) -> Tuple[bool, str]:
+def validate_upload_file(file, *, max_size_mb: int | None = None) -> Tuple[bool, str]:
     """
     Validate uploaded file is an allowed type and within size limits.
 
@@ -70,9 +70,10 @@ def validate_upload_file(file) -> Tuple[bool, str]:
     if file_size == 0:
         return False, "File is empty"
 
-    max_size = MAX_FILE_SIZE_MB * 1024 * 1024
+    effective_limit = max_size_mb or MAX_FILE_SIZE_MB
+    max_size = effective_limit * 1024 * 1024
     if file_size > max_size:
-        return False, f"File size exceeds {MAX_FILE_SIZE_MB}MB limit"
+        return False, f"File size exceeds {effective_limit}MB limit"
 
     if ext == ".pdf":
         header = file.read(4)

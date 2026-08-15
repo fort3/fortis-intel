@@ -35,13 +35,15 @@ from flask_limiter.util import get_remote_address
 # ── App imports ────────────────────────────────────────────────────
 from app.auth import (
     login_required,
+    admin_required,
+    is_current_request_admin,
     get_oauth_client,
     OAuthError,
     session_manager,
     get_audit_logger,
     validate_auth_config,
 )
-from app.auth.config import AUTH_ENABLED, SESSION_SECRET_KEY, SESSION_TIMEOUT_MINUTES
+from app.auth.config import AUTH_ENABLED, ADMIN_EMAILS, SESSION_SECRET_KEY, SESSION_TIMEOUT_MINUTES
 from app.chains import (
     get_rag_chain,
     get_investigation_chain,
@@ -114,6 +116,11 @@ def _get_user_hash() -> str:
     if hasattr(g, "user_session"):
         return hashlib.sha256(g.user_session.email.encode()).hexdigest()[:16]
     return "unknown"
+
+
+def _is_admin() -> bool:
+    """Check if the current request user is an admin."""
+    return getattr(getattr(g, "user_session", None), "is_admin", False)
 
 
 def _save_to_kb(
@@ -282,7 +289,8 @@ def _geo_points_to_text(geo_points: list[dict]) -> str:
 
 
 def _process_single_identifier(identifier, identifier_type, platforms, depth,
-                               osint_client, geo_client, session_id, user_hash):
+                               osint_client, geo_client, session_id, user_hash,
+                               elevated=False):
     """Process a single identifier for batch investigation."""
     try:
         clean_id = sanitize_identifier(identifier, identifier_type)
@@ -309,6 +317,7 @@ def _process_single_identifier(identifier, identifier_type, platforms, depth,
         "geo_data": geo_context,
         "subject_identifier": clean_id,
         "identifier_type": identifier_type,
+        "elevated_authorization": elevated,
     }
 
     analysis = ""
@@ -364,7 +373,7 @@ def create_app():
     # ── Session configuration ──────────────────────────────────────
     app.config.update(
         SECRET_KEY=SESSION_SECRET_KEY,
-        MAX_CONTENT_LENGTH=50 * 1024 * 1024,  # 50 MB upload limit
+        MAX_CONTENT_LENGTH=200 * 1024 * 1024,  # 200 MB (admins); non-admins capped at 50 MB in route
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SECURE=os.getenv("FLASK_ENV") == "production",
         SESSION_COOKIE_SAMESITE="Lax",
@@ -381,12 +390,13 @@ def create_app():
         max_age=3600,
     )
 
-    # ── Rate limiting ──────────────────────────────────────────────
+    # ── Rate limiting (admins are exempt) ─────────────────────────
     limiter = Limiter(
         app=app,
         key_func=get_remote_address,
         default_limits=["1000 per day", "200 per hour"],
         storage_uri=os.getenv("REDIS_URL", "memory://"),
+        request_filter=is_current_request_admin,
     )
 
     # ── Security headers ───────────────────────────────────────────
@@ -551,6 +561,7 @@ def create_app():
             "email": user_session.email,
             "name": session.get("user_name", user_session.email),
             "picture": session.get("user_picture", ""),
+            "is_admin": user_session.is_admin,
         })
 
     # ================================================================
@@ -568,7 +579,8 @@ def create_app():
                 return jsonify({"error": "No file uploaded"}), 400
 
             # Validate file type and size
-            is_valid, error_msg = validate_upload_file(file)
+            admin_max = 200 if _is_admin() else None
+            is_valid, error_msg = validate_upload_file(file, max_size_mb=admin_max)
             if not is_valid:
                 print(f"  File validation failed: {error_msg}")
                 return jsonify({"error": error_msg}), 400
@@ -861,6 +873,7 @@ def create_app():
             "subject_identifier": clean_id,
             "identifier_type": identifier_type,
             "kb_context": kb_context,
+            "elevated_authorization": _is_admin(),
         }
 
         result = gated_invoke(
@@ -1125,6 +1138,7 @@ def create_app():
             "triangulation_result": triangulation_text,
             "metadata_summary": metadata_summary,
             "subject_context": subject_context or "No additional subject context provided.",
+            "elevated_authorization": _is_admin(),
         }
 
         result = gated_invoke(
@@ -1181,8 +1195,9 @@ def create_app():
         if not identifiers or not isinstance(identifiers, list):
             return jsonify({"error": "identifiers list is required"}), 400
 
-        if len(identifiers) > 50:
-            return jsonify({"error": "Maximum 50 identifiers per batch"}), 400
+        batch_limit = 500 if _is_admin() else 50
+        if len(identifiers) > batch_limit:
+            return jsonify({"error": f"Maximum {batch_limit} identifiers per batch"}), 400
 
         if depth not in INVESTIGATION_DEPTHS:
             depth = "quick"
@@ -1219,6 +1234,7 @@ def create_app():
         geo_client = GeoClient()
         platforms = list(SOCIAL_PLATFORMS.keys())
 
+        elevated = _is_admin()
         with ThreadPoolExecutor(max_workers=min(8, len(valid_items))) as executor:
             futures = {
                 executor.submit(
@@ -1231,6 +1247,7 @@ def create_app():
                     geo_client,
                     session_id,
                     user_hash,
+                    elevated,
                 ): item
                 for item in valid_items
             }
@@ -1265,6 +1282,7 @@ def create_app():
                 "aggregate_osint": f"{len(successful)} entities analyzed in batch.",
                 "cross_entity_relationships": "Cross-entity analysis pending (Phase 0).",
                 "geo_aggregate": "Geographic aggregate data pending (Phase 0).",
+                "elevated_authorization": _is_admin(),
             }
 
             try:
@@ -1434,7 +1452,7 @@ def create_app():
 
         if not content or not content.strip():
             return jsonify({"error": "No content provided"}), 400
-        if len(content) > 500_000:
+        if len(content) > 500_000 and not _is_admin():
             return jsonify({"error": "Content too large for export"}), 400
 
         title = re.sub(r"[^\w\s\-]", "", title)[:100] or "Fortis Intelligence Report"
@@ -1481,7 +1499,7 @@ def create_app():
 
         if not content or not content.strip():
             return jsonify({"error": "No content provided"}), 400
-        if len(content) > 500_000:
+        if len(content) > 500_000 and not _is_admin():
             return jsonify({"error": "Content too large for export"}), 400
 
         title = re.sub(r"[^\w\s\-]", "", title)[:100] or "Fortis Intelligence Report"
@@ -2062,6 +2080,108 @@ def create_app():
                 s["configured"] for s in platform_status.values()
             ),
         })
+
+    # ================================================================
+    #  ADMIN ROUTES
+    # ================================================================
+
+    @app.route("/admin/sessions", methods=["GET"])
+    @login_required
+    @admin_required
+    def admin_sessions():
+        """List all active sessions (admin only)."""
+        sessions_list = []
+        for token, user_sess in session_manager.sessions.items():
+            sessions_list.append({
+                "email": user_sess.email,
+                "name": user_sess.name,
+                "is_admin": user_sess.is_admin,
+                "created_at": user_sess.created_at.isoformat(),
+                "last_activity": user_sess.last_activity.isoformat(),
+                "token_prefix": token[:8],
+            })
+        sessions_list.sort(key=lambda s: s["last_activity"], reverse=True)
+        return jsonify({"sessions": sessions_list, "total": len(sessions_list)})
+
+    @app.route("/admin/sessions/<token_prefix>", methods=["DELETE"])
+    @login_required
+    @admin_required
+    def admin_kill_session(token_prefix):
+        """Terminate a session by token prefix (admin only)."""
+        if not token_prefix or len(token_prefix) < 8:
+            return jsonify({"error": "Token prefix must be at least 8 characters"}), 400
+
+        for token in list(session_manager.sessions.keys()):
+            if token.startswith(token_prefix):
+                target = session_manager.sessions[token]
+                if target.email == g.user_session.email:
+                    return jsonify({"error": "Cannot terminate your own session"}), 400
+                session_manager.invalidate_session(token)
+                audit_logger = get_audit_logger()
+                audit_logger._log_event("ADMIN_SESSION_KILL", {
+                    "admin": g.user_session.email,
+                    "target_email": target.email,
+                })
+                return jsonify({"success": True, "killed_email": target.email})
+
+        return jsonify({"error": "Session not found"}), 404
+
+    @app.route("/admin/stats", methods=["GET"])
+    @login_required
+    @admin_required
+    def admin_stats():
+        """System statistics (admin only)."""
+        report_store = get_report_store()
+        reports = report_store.list_reports(limit=0)
+
+        return jsonify({
+            "active_sessions": len(session_manager.sessions),
+            "cached_reports": len(stored_reports),
+            "kb_reports": len(reports),
+            "admin_emails": sorted(ADMIN_EMAILS),
+            "forge_enabled": os.getenv("FORGE_ENABLED", "true").lower() == "true",
+            "auth_enabled": AUTH_ENABLED,
+            "vectorstore_exists": VECTORSTORE_DIR.is_dir() and any(VECTORSTORE_DIR.iterdir()) if VECTORSTORE_DIR.is_dir() else False,
+        })
+
+    @app.route("/admin/config", methods=["GET"])
+    @login_required
+    @admin_required
+    def admin_config():
+        """View non-secret configuration (admin only)."""
+        return jsonify({
+            "auth_enabled": AUTH_ENABLED,
+            "forge_enabled": os.getenv("FORGE_ENABLED", "true").lower() == "true",
+            "forge_healing_enabled": os.getenv("FORGE_HEALING_ENABLED", "true").lower() == "true",
+            "session_timeout_minutes": SESSION_TIMEOUT_MINUTES,
+            "max_upload_mb_regular": 50,
+            "max_upload_mb_admin": 200,
+            "max_batch_regular": 50,
+            "max_batch_admin": 500,
+            "admin_count": len(ADMIN_EMAILS),
+            "redis_configured": bool(os.getenv("REDIS_URL")),
+            "flask_env": os.getenv("FLASK_ENV", "development"),
+        })
+
+    @app.route("/admin/audit", methods=["GET"])
+    @login_required
+    @admin_required
+    def admin_audit():
+        """Read recent audit log entries (admin only)."""
+        limit = min(int(request.args.get("limit", 100)), 500)
+        log_path = LOG_DIR / "audit.log"
+        if not log_path.exists():
+            return jsonify({"entries": [], "total": 0})
+
+        lines = log_path.read_text(encoding="utf-8", errors="replace").strip().split("\n")
+        entries = []
+        for line in lines[-limit:]:
+            try:
+                entries.append(_json.loads(line))
+            except _json.JSONDecodeError:
+                continue
+        entries.reverse()
+        return jsonify({"entries": entries, "total": len(lines)})
 
     @app.route("/health", methods=["GET"])
     def health():
