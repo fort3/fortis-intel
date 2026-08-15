@@ -1080,6 +1080,21 @@ small, .text-sm {
   font-weight: 600;
 }
 
+.qa-question {
+  background: var(--bg-elevated);
+  border-left: 3px solid var(--purple-primary);
+  padding: 10px 14px;
+  margin-bottom: 12px;
+  border-radius: 4px;
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+
+.qa-answer {
+  padding: 0 4px 8px;
+  line-height: 1.7;
+}
+
 /* Sensitivity bar at top of results */
 .results-meta {
   display: flex;

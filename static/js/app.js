@@ -536,6 +536,14 @@ async function uploadReport() {
         sessionId = data.session_id;
         showToast('Report ingested successfully.', 'success');
 
+        // Store for export — backend resolves full content from session_id
+        lastAnalysisData = {
+            session_id: sessionId,
+            analysis: 'Report ingested: ' + (data.char_count || 0) + ' characters',
+            sensitivity_level: 'INTERNAL',
+            identifier: sessionId
+        };
+
         // Show results
         showResults();
         const content = document.getElementById('resultsContent');
@@ -1140,6 +1148,40 @@ async function sendChatMessage() {
                 timestamp: new Date().toISOString(),
                 kb_context: data.kb_context || false
             });
+
+            // Build exportable transcript from full chat history
+            var transcript = chatMessages.map(function (m) {
+                return (m.role === 'user' ? 'Q: ' : 'A: ') + m.text;
+            }).join('\n\n');
+
+            lastAnalysisData = {
+                analysis: transcript,
+                session_id: sessionId || data.session_id || '',
+                sensitivity_level: 'INTERNAL',
+                identifier: 'Q&A Session',
+                identifier_type: 'qa'
+            };
+
+            // Render cumulative Q&A results in the results panel
+            showResults();
+            var resultsContent = document.getElementById('resultsContent');
+            if (resultsContent) {
+                var resultsHtml = '<div class="result-section analysis-content">';
+                resultsHtml += '<h3>Analysis Results</h3>';
+                for (var i = 0; i < chatMessages.length; i++) {
+                    var msg = chatMessages[i];
+                    if (msg.role === 'user') {
+                        resultsHtml += '<div class="qa-question"><strong>Q:</strong> ' + escapeHtml(msg.text) + '</div>';
+                    } else {
+                        resultsHtml += '<div class="qa-answer">' + renderMarkdown(msg.text) + '</div>';
+                        if (i < chatMessages.length - 1) {
+                            resultsHtml += '<hr style="border-color: var(--border); margin: 16px 0;">';
+                        }
+                    }
+                }
+                resultsHtml += '</div>';
+                resultsContent.innerHTML = resultsHtml;
+            }
         } else {
             appendChatMessage('ai', 'No response returned.');
         }

@@ -612,10 +612,43 @@ def create_app():
             except Exception as exc:
                 print(f"  Warning: Could not build vectorstore: {exc}")
 
+            # Save to KB so it appears in the Knowledge Base panel
+            report_id = _save_to_kb(
+                source_route="/upload",
+                report_type="ingestion",
+                analysis_text=text,
+                subject_identifier=file.filename,
+                sensitivity_level="INTERNAL",
+            )
+
+            # MITRE technique extraction
+            mitre_techniques = []
+            try:
+                from app.mitre import extract_mitre_techniques
+                mitre_techniques = extract_mitre_techniques(text[:10000])
+            except Exception:
+                pass
+
+            pages = None
+            chunks = None
+            try:
+                vs_path = os.path.join(str(VECTORSTORE_DIR), session_id)
+                if os.path.isdir(vs_path):
+                    import glob as _glob
+                    chunk_files = _glob.glob(os.path.join(vs_path, "*.pkl"))
+                    if chunk_files:
+                        chunks = len(chunk_files)
+            except Exception:
+                pass
+
             return jsonify({
                 "session_id": session_id,
                 "message": "Document ingested successfully",
                 "char_count": len(text),
+                "report_id": report_id,
+                "mitre_techniques": mitre_techniques,
+                "pages": pages,
+                "chunks": chunks,
             })
 
         except Exception as exc:
@@ -681,8 +714,31 @@ def create_app():
                 "gate_outcome": result.gate_outcome,
             }), 403
 
+        answer = result.content
+
+        _save_to_kb(
+            source_route="/ask",
+            report_type="qa_answer",
+            analysis_text=f"Q: {question}\n\nA: {answer}",
+            subject_identifier=question[:100],
+            sensitivity_level="INTERNAL",
+        )
+
+        # Append Q&A to stored_reports so export can find it
+        if session_id and session_id in stored_reports:
+            prev = stored_reports[session_id].get("text", "")
+            stored_reports[session_id]["text"] = (
+                prev + f"\n\nQ: {question}\n\nA: {answer}"
+            ).strip()
+        elif session_id:
+            stored_reports[session_id] = {
+                "text": f"Q: {question}\n\nA: {answer}",
+                "user_email": g.user_session.email if hasattr(g, "user_session") else "unknown",
+                "created_at": datetime.now(tz=timezone.utc),
+            }
+
         return jsonify({
-            "answer": result.content,
+            "answer": answer,
             "session_id": session_id,
         })
 
