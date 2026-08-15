@@ -759,9 +759,7 @@ async function runGeolocation() {
         }
 
         showLoading();
-        showResults();
 
-        // Upload images via FormData
         var formData = new FormData();
         for (var i = 0; i < imageInput.files.length; i++) {
             formData.append('images', imageInput.files[i]);
@@ -780,12 +778,7 @@ async function runGeolocation() {
             }
 
             var data = await response.json();
-            if (data.map_data) renderMap(data.map_data);
-            if (data.analysis) {
-                var content = document.getElementById('resultsContent');
-                if (content) content.innerHTML = renderMarkdown(data.analysis);
-                content.style.display = '';
-            }
+            renderAnalysis(data);
         } catch (error) {
             showToast('Geolocation failed: ' + error.message, 'error');
         } finally {
@@ -838,7 +831,6 @@ async function runGeolocation() {
     }
 
     showLoading();
-    showResults();
 
     try {
         var response = await fetchApi('/triangulate', {
@@ -852,14 +844,7 @@ async function runGeolocation() {
         }
 
         var data = await response.json();
-        if (data.map_data) renderMap(data.map_data);
-        if (data.analysis) {
-            var content = document.getElementById('resultsContent');
-            if (content) {
-                content.innerHTML = renderMarkdown(data.analysis);
-                content.style.display = '';
-            }
-        }
+        renderAnalysis(data);
     } catch (error) {
         showToast('Triangulation failed: ' + error.message, 'error');
     } finally {
@@ -983,13 +968,35 @@ async function runBatchInvestigation() {
             }
 
             content.innerHTML = html;
-            content.style.display = '';
         }
 
-        // Render map/graph if provided
-        if (data.map_data) renderMap(data.map_data);
-        if (data.graph_data) renderGraph(data.graph_data);
-        if (data.chart_data) renderCharts(data.chart_data);
+        // Use renderAnalysis to handle tabs/map/graph properly
+        // We already set the content HTML above, so pass analysis=null
+        var renderData = {
+            map_data: data.map_data || null,
+            graph_data: data.graph_data || null,
+            chart_data: data.chart_data || null,
+            sensitivity: data.sensitivity_level || null,
+        };
+        // Show tabs and views
+        showResults();
+        if (renderData.map_data) renderMap(renderData.map_data);
+
+        var hasMap = !!renderData.map_data;
+        var hasGraph = !!renderData.graph_data;
+        var hasCharts = !!renderData.chart_data;
+
+        var tabMap = document.getElementById('tabMap');
+        var tabGraph = document.getElementById('tabGraph');
+        var tabCharts = document.getElementById('tabCharts');
+        if (tabMap) tabMap.style.display = hasMap ? '' : 'none';
+        if (tabGraph) tabGraph.style.display = hasGraph ? '' : 'none';
+        if (tabCharts) tabCharts.style.display = hasCharts ? '' : 'none';
+
+        if (renderData.graph_data) renderGraph(renderData.graph_data);
+        if (renderData.chart_data) renderCharts(renderData.chart_data);
+
+        switchResultTab('analysis');
 
     } catch (error) {
         showToast('Batch investigation failed: ' + error.message, 'error');
@@ -1353,73 +1360,171 @@ function removeChatMessage(msgId) {
 /**
  * Clear results panel and show empty state.
  */
+var currentViewMode = 'tab'; // 'tab' or 'split'
+
 function clearResults() {
     var content = document.getElementById('resultsContent');
     var empty = document.getElementById('resultsEmpty');
-    var mapContainer = document.getElementById('mapContainer');
-    var graphContainer = document.getElementById('graphContainer');
     var chartsContainer = document.getElementById('chartsContainer');
     var exportBar = document.getElementById('exportBar');
     var sensitivity = document.getElementById('resultsSensitivity');
+    var resultViews = document.getElementById('resultViews');
+    var resultTabs = document.getElementById('resultTabs');
+    var viewToggle = document.getElementById('viewToggleBtn');
 
-    if (content) { content.innerHTML = ''; content.style.display = 'none'; }
+    if (content) content.innerHTML = '';
     if (empty) empty.style.display = '';
-    if (mapContainer) { mapContainer.classList.remove('visible'); mapContainer.style.display = ''; }
-    if (graphContainer) graphContainer.style.display = 'none';
-    if (chartsContainer) { chartsContainer.innerHTML = ''; chartsContainer.style.display = 'none'; }
+    if (chartsContainer) { chartsContainer.innerHTML = ''; chartsContainer.classList.remove('visible'); }
     if (exportBar) exportBar.classList.remove('visible');
     if (sensitivity) sensitivity.innerHTML = '';
+    if (resultViews) { resultViews.style.display = 'none'; resultViews.classList.remove('split-view', 'tab-view'); }
+    if (resultTabs) resultTabs.style.display = 'none';
+    if (viewToggle) viewToggle.style.display = 'none';
+
+    // Hide all tabs
+    ['tabMap', 'tabGraph', 'tabCharts'].forEach(function (id) {
+        var el = document.getElementById(id);
+        if (el) el.style.display = 'none';
+    });
+
+    // Destroy existing map
+    if (mapInstance) {
+        mapInstance.remove();
+        mapInstance = null;
+    }
+
     lastAnalysisData = null;
 }
 
-/**
- * Show the results panel (hide empty state, show content area).
- */
 function showResults() {
     var empty = document.getElementById('resultsEmpty');
-    var content = document.getElementById('resultsContent');
+    var resultViews = document.getElementById('resultViews');
+    var resultTabs = document.getElementById('resultTabs');
     var exportBar = document.getElementById('exportBar');
 
     if (empty) empty.style.display = 'none';
-    if (content) content.style.display = '';
+    if (resultViews) resultViews.style.display = '';
+    if (resultTabs) resultTabs.style.display = 'flex';
     if (exportBar) exportBar.classList.add('visible');
 }
 
-/**
- * Render a full analysis result.
- * @param {object} data - response from backend with analysis, map_data, graph_data, etc.
- */
+function switchResultTab(tabName) {
+    var tabs = document.querySelectorAll('.result-tab');
+    var panes = document.querySelectorAll('.result-pane');
+    var views = document.getElementById('resultViews');
+
+    if (views) {
+        views.classList.remove('split-view');
+        views.classList.add('tab-view');
+    }
+
+    tabs.forEach(function (t) { t.classList.toggle('active', t.dataset.tab === tabName); });
+    panes.forEach(function (p) {
+        var paneTab = p.id.replace('pane', '').toLowerCase();
+        p.classList.toggle('active', paneTab === tabName);
+    });
+
+    // Leaflet needs invalidateSize after becoming visible
+    if (tabName === 'map' && mapInstance) {
+        setTimeout(function () { mapInstance.invalidateSize(); }, 50);
+    }
+
+    currentViewMode = 'tab';
+}
+
+function enableSplitView() {
+    var views = document.getElementById('resultViews');
+    var paneAnalysis = document.getElementById('paneAnalysis');
+    var paneMap = document.getElementById('paneMap');
+
+    if (!views || !paneAnalysis || !paneMap) return;
+
+    views.classList.remove('tab-view');
+    views.classList.add('split-view');
+    paneAnalysis.classList.add('active');
+    paneMap.classList.add('active');
+
+    // Highlight both tabs
+    var tabs = document.querySelectorAll('.result-tab');
+    tabs.forEach(function (t) {
+        t.classList.toggle('active', t.dataset.tab === 'analysis' || t.dataset.tab === 'map');
+    });
+
+    currentViewMode = 'split';
+
+    if (mapInstance) {
+        setTimeout(function () { mapInstance.invalidateSize(); }, 50);
+    }
+}
+
+function toggleViewMode() {
+    if (currentViewMode === 'split') {
+        switchResultTab('analysis');
+    } else {
+        enableSplitView();
+    }
+    var icon = document.getElementById('viewToggleIcon');
+    if (icon) icon.innerHTML = currentViewMode === 'split' ? '&#x25A3;' : '&#x25A8;';
+}
+
 function renderAnalysis(data) {
     showResults();
     lastAnalysisData = data;
 
     var content = document.getElementById('resultsContent');
+    var hasMap = false;
+    var hasGraph = false;
+    var hasCharts = false;
 
     // Render sensitivity badge
     var sensitivity = document.getElementById('resultsSensitivity');
-    if (sensitivity && data.sensitivity) {
-        var badgeClass = 'badge-' + (data.sensitivity === 'HIGH' ? 'error' :
-            data.sensitivity === 'MEDIUM' ? 'warning' : 'info');
+    var sensLevel = data.sensitivity_level || data.sensitivity;
+    if (sensitivity && sensLevel) {
+        var badgeClass = 'badge-' + (sensLevel === 'RESTRICTED' || sensLevel === 'HIGH' ? 'error' :
+            sensLevel === 'SENSITIVE' || sensLevel === 'MEDIUM' ? 'warning' : 'info');
         sensitivity.innerHTML = '<span class="badge ' + badgeClass + '">' +
-            escapeHtml(data.sensitivity) + '</span>';
+            escapeHtml(sensLevel) + '</span>';
     }
 
     // Render analysis text
     if (content && data.analysis) {
         content.innerHTML = '<div class="result-section analysis-content">' +
             renderMarkdown(data.analysis) + '</div>';
-        content.style.display = '';
     }
 
-    // Render map if present
-    if (data.map_data) renderMap(data.map_data);
+    // Render map if present (only if it has markers or triangulation)
+    if (data.map_data && (data.map_data.markers && data.map_data.markers.length > 0 || data.map_data.triangulation)) {
+        renderMap(data.map_data);
+        hasMap = true;
+    }
 
     // Render entity graph if present
-    if (data.entity_graph) renderGraph(data.entity_graph);
-    else if (data.graph_data) renderGraph(data.graph_data);
+    if (data.entity_graph) { renderGraph(data.entity_graph); hasGraph = true; }
+    else if (data.graph_data) { renderGraph(data.graph_data); hasGraph = true; }
 
     // Render charts if present
-    if (data.chart_data) renderCharts(data.chart_data);
+    if (data.chart_data) { renderCharts(data.chart_data); hasCharts = true; }
+
+    // Show relevant tabs
+    var tabMap = document.getElementById('tabMap');
+    var tabGraph = document.getElementById('tabGraph');
+    var tabCharts = document.getElementById('tabCharts');
+    if (tabMap) tabMap.style.display = hasMap ? '' : 'none';
+    if (tabGraph) tabGraph.style.display = hasGraph ? '' : 'none';
+    if (tabCharts) tabCharts.style.display = hasCharts ? '' : 'none';
+
+    // Show split toggle only when we have both analysis + map
+    var viewToggle = document.getElementById('viewToggleBtn');
+    if (viewToggle) viewToggle.style.display = (data.analysis && hasMap) ? '' : 'none';
+
+    // Default: split view if both analysis and map, otherwise tab view
+    if (data.analysis && hasMap && window.innerWidth > 900) {
+        enableSplitView();
+    } else if (hasMap && !data.analysis) {
+        switchResultTab('map');
+    } else {
+        switchResultTab('analysis');
+    }
 }
 
 /**
@@ -1430,8 +1535,6 @@ function renderMap(mapData) {
     var mapContainer = document.getElementById('mapContainer');
     var mapDiv = document.getElementById('map');
     if (!mapContainer || !mapDiv) return;
-
-    mapContainer.classList.add('visible');
 
     // Clear previous map
     if (mapInstance) {
@@ -1668,7 +1771,7 @@ function renderMap(mapData) {
             btn.innerHTML = '&#x1F4F7;';
             btn.setAttribute('role', 'button');
             btn.setAttribute('aria-label', 'Download Map Snapshot');
-            btn.style.cssText = 'display:flex;align-items:center;justify-content:center;width:30px;height:30px;font-size:16px;background:var(--bg-card,#10101e);color:var(--text-primary,#e8e6f0);text-decoration:none;cursor:pointer;';
+            btn.style.cssText = 'display:flex;align-items:center;justify-content:center;width:30px;height:30px;font-size:16px;background:#ffffff;color:#1e293b;text-decoration:none;cursor:pointer;';
             L.DomEvent.disableClickPropagation(container);
             L.DomEvent.on(btn, 'click', function (e) {
                 L.DomEvent.preventDefault(e);
@@ -1767,8 +1870,6 @@ function renderGraph(graphData) {
         return;
     }
     if (!graphData || !graphData.nodes || graphData.nodes.length === 0) return;
-
-    graphContainer.style.display = '';
 
     // Destroy previous instance
     if (graphInstance) {
@@ -1979,7 +2080,7 @@ function renderCharts(chartData) {
     if (!container) return;
 
     container.innerHTML = '';
-    container.style.display = '';
+    container.classList.add('visible');
 
     if (!chartData) return;
 
@@ -2578,6 +2679,20 @@ document.addEventListener('DOMContentLoaded', function () {
             switchGeoTab(this.dataset.geoTab);
         });
     });
+
+    // ---- Result Tabs ----
+    document.querySelectorAll('.result-tab').forEach(function (tab) {
+        tab.addEventListener('click', function () {
+            switchResultTab(this.dataset.tab);
+            var icon = document.getElementById('viewToggleIcon');
+            if (icon) icon.innerHTML = '&#x25A8;';
+        });
+    });
+
+    var viewToggleBtn = document.getElementById('viewToggleBtn');
+    if (viewToggleBtn) {
+        viewToggleBtn.addEventListener('click', toggleViewMode);
+    }
 
     // ---- Q&A Chat ----
     var chatSendBtn = document.getElementById('chatSend');

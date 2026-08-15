@@ -360,9 +360,10 @@ small, .text-sm {
    ========================================================================== */
 .app-container {
   margin-top: var(--topbar-height);
-  min-height: calc(100vh - var(--topbar-height));
+  height: calc(100vh - var(--topbar-height));
   display: flex;
   flex-direction: column;
+  overflow: hidden;
 }
 
 /* ==========================================================================
@@ -444,7 +445,7 @@ small, .text-sm {
   display: flex;
   flex: 1;
   min-height: 0;
-  height: calc(100vh - var(--topbar-height) - var(--toolcards-height));
+  overflow: hidden;
 }
 
 .input-panel {
@@ -498,13 +499,19 @@ small, .text-sm {
 }
 
 .results-panel-header {
-  padding: 16px 20px 12px;
+  padding: 12px 20px;
   border-bottom: 1px solid var(--border);
   display: flex;
   align-items: center;
   justify-content: space-between;
   flex-shrink: 0;
   background: var(--bg-card);
+}
+
+.results-panel-header-right {
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
 .results-panel-header h3 {
@@ -516,8 +523,135 @@ small, .text-sm {
   color: var(--text-primary);
 }
 
+.view-toggle-btn {
+  background: transparent;
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  width: 30px;
+  height: 30px;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 14px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+}
+
+.view-toggle-btn:hover {
+  border-color: var(--purple-bright);
+  color: var(--purple-bright);
+}
+
+/* Result tabs */
+.result-tabs {
+  display: flex;
+  gap: 0;
+  padding: 0 20px;
+  background: var(--bg-card);
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.result-tab {
+  padding: 10px 18px;
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: var(--text-secondary);
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+  position: relative;
+}
+
+.result-tab:hover {
+  color: var(--text-primary);
+  background: rgba(255,255,255,0.03);
+}
+
+.result-tab.active {
+  color: var(--purple-bright);
+  border-bottom-color: var(--purple-bright);
+}
+
 .results-panel-body {
   flex: 1;
+  overflow: hidden;
+  padding: 0;
+  position: relative;
+}
+
+/* Result views container */
+.result-views {
+  width: 100%;
+  height: 100%;
+  position: relative;
+}
+
+/* Split view (default when map + analysis both present on wide screens) */
+.result-views.split-view {
+  display: flex;
+}
+
+.result-views.split-view .result-pane-analysis {
+  flex: 1;
+  min-width: 0;
+  border-right: 1px solid var(--border);
+}
+
+.result-views.split-view .result-pane-map {
+  flex: 1;
+  min-width: 0;
+}
+
+.result-views.split-view .result-pane-graph,
+.result-views.split-view .result-pane-charts {
+  display: none;
+}
+
+/* Tabbed view (default, or when toggled) */
+.result-views.tab-view .result-pane {
+  display: none;
+  width: 100%;
+  height: 100%;
+}
+
+.result-views.tab-view .result-pane.active {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Pane defaults */
+.result-pane {
+  height: 100%;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.result-pane:not(.active) {
+  display: none;
+}
+
+.result-pane-analysis {
+  overflow-y: auto;
+  padding: 20px;
+}
+
+.result-pane-map {
+  padding: 0;
+}
+
+.result-pane-graph {
+  padding: 0;
+}
+
+.result-pane-charts {
   overflow-y: auto;
   padding: 20px;
 }
@@ -1110,14 +1244,9 @@ small, .text-sm {
    ========================================================================== */
 .map-container {
   width: 100%;
-  height: 480px;
-  border: 1px solid var(--border);
-  border-radius: 8px;
+  height: 100%;
   overflow: hidden;
-  margin-bottom: 16px;
   background: #f0f0f0;
-  display: none;
-  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.15);
 }
 
 .map-container.visible {
@@ -1265,13 +1394,9 @@ small, .text-sm {
 .graph-container {
   position: relative;
   width: 100%;
-  height: 400px;
-  border: 1px solid var(--border);
-  border-radius: 4px;
+  height: 100%;
   overflow: hidden;
-  margin-bottom: 16px;
   background: var(--bg-card);
-  display: none;
 }
 
 .graph-container.visible {
@@ -2210,10 +2335,16 @@ small, .text-sm {
 
 /* Tablet: 768px - 1200px */
 @media (max-width: 1200px) {
+  .app-container {
+    height: auto;
+    min-height: calc(100vh - var(--topbar-height));
+    overflow: visible;
+  }
+
   .panels-container {
     flex-direction: column;
     height: auto;
-    min-height: calc(100vh - var(--topbar-height) - var(--toolcards-height));
+    min-height: 60vh;
   }
 
   .input-panel {
@@ -2222,12 +2353,23 @@ small, .text-sm {
     min-width: 0;
     border-right: none;
     border-bottom: 1px solid var(--border);
-    max-height: 50vh;
+    max-height: 40vh;
   }
 
   .results-panel {
     flex: 1;
     min-height: 50vh;
+  }
+
+  /* Force tab view on smaller screens */
+  .result-views.split-view {
+    flex-direction: column;
+  }
+
+  .result-views.split-view .result-pane-analysis {
+    border-right: none;
+    border-bottom: 1px solid var(--border);
+    max-height: 40vh;
   }
 
   .welcome-capabilities {
@@ -2310,8 +2452,22 @@ small, .text-sm {
     padding: 12px;
   }
 
-  .results-panel-body {
+  .result-tabs {
+    padding: 0 12px;
+    overflow-x: auto;
+  }
+
+  .result-tab {
+    padding: 8px 12px;
+    font-size: 10px;
+  }
+
+  .result-pane-analysis {
     padding: 12px;
+  }
+
+  .view-toggle-btn {
+    display: none !important;
   }
 
   .checkbox-grid {
@@ -2341,11 +2497,6 @@ small, .text-sm {
   .export-btn {
     font-size: 10px;
     padding: 4px 8px;
-  }
-
-  .map-container,
-  .graph-container {
-    height: 280px;
   }
 
   .charts-container.visible {

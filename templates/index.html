@@ -453,7 +453,21 @@
       <div class="results-panel">
         <div class="results-panel-header">
           <h3 id="resultsPanelTitle">Results</h3>
-          <div id="resultsSensitivity"></div>
+          <div class="results-panel-header-right">
+            <div id="resultsSensitivity"></div>
+            <!-- View toggle: split vs tab -->
+            <button class="view-toggle-btn" id="viewToggleBtn" title="Toggle split/tab view" style="display:none;">
+              <span id="viewToggleIcon">&#x25A8;</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Result tabs -->
+        <div class="result-tabs" id="resultTabs" style="display:none;">
+          <button class="result-tab active" data-tab="analysis" id="tabAnalysis">Analysis</button>
+          <button class="result-tab" data-tab="map" id="tabMap" style="display:none;">Map</button>
+          <button class="result-tab" data-tab="graph" id="tabGraph" style="display:none;">Graph</button>
+          <button class="result-tab" data-tab="charts" id="tabCharts" style="display:none;">Charts</button>
         </div>
 
         <div class="results-panel-body" id="resultsPanelBody">
@@ -467,21 +481,34 @@
             <div class="results-empty-hint">Select a tool and submit a query to begin</div>
           </div>
 
-          <!-- Analysis output (rendered markdown) -->
-          <div class="results-content" id="resultsContent" style="display:none;"></div>
+          <!-- Split / tabbed content area -->
+          <div class="result-views" id="resultViews" style="display:none;">
 
-          <!-- Map view -->
-          <div class="map-container" id="mapContainer">
-            <div id="map"></div>
+            <!-- Analysis pane -->
+            <div class="result-pane result-pane-analysis active" id="paneAnalysis">
+              <div class="results-content" id="resultsContent"></div>
+            </div>
+
+            <!-- Map pane -->
+            <div class="result-pane result-pane-map" id="paneMap">
+              <div class="map-container visible" id="mapContainer">
+                <div id="map"></div>
+              </div>
+            </div>
+
+            <!-- Graph pane -->
+            <div class="result-pane result-pane-graph" id="paneGraph">
+              <div class="graph-container visible" id="graphContainer">
+                <div id="graph"></div>
+              </div>
+            </div>
+
+            <!-- Charts pane -->
+            <div class="result-pane result-pane-charts" id="paneCharts">
+              <div class="charts-container" id="chartsContainer"></div>
+            </div>
+
           </div>
-
-          <!-- Entity graph -->
-          <div class="graph-container" id="graphContainer">
-            <div id="graph"></div>
-          </div>
-
-          <!-- Charts -->
-          <div class="charts-container" id="chartsContainer"></div>
         </div>
 
         <!-- Export bar -->
