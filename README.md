@@ -2,18 +2,19 @@
 
 An OSINT-driven intelligence and analysis platform for open-source intelligence gathering, geospatial triangulation, and analyst-grade report generation.
 
-![Screenshot Placeholder](docs/screenshot-placeholder.png)
-
 ## Key Features
 
 - **Multi-Platform OSINT** -- Investigate usernames, emails, domains, and IPs across Twitter/X, Reddit, YouTube, Instagram, Mastodon, Facebook, TikTok, and Telegram
 - **Geospatial Triangulation** -- Triangulate locations from EXIF data, social geotags, IP addresses, check-ins, and text mentions with interactive Leaflet.js maps
 - **AI-Powered Analysis** -- DeepSeek LLM generates investigation reports, pattern-of-life analyses, network mapping, and influence assessments
 - **RAG Knowledge Base** -- Upload PDF and Markdown reports, index them with FAISS vectorstore, and ask natural-language questions
+- **Analytical Scenarios** -- Generate pattern-of-life, network mapping, location prediction, and influence analysis from collected OSINT data
 - **Feed Monitoring** -- Set up keyword, username, and hashtag monitors with Celery background tasks and automatic enrichment
-- **ForgeChain Governance** -- Every LLM output passes through a 3-verifier consensus gate (rule, safety, consistency) before reaching the analyst
-- **Entity Relationship Graphs** -- Cytoscape.js-powered interactive graphs showing connections across investigations
+- **ForgeChain Governance** -- Every LLM request passes through a 3-verifier consensus gate (rule, safety, consistency) before execution
+- **Elevated Authorization** -- Investigation endpoints support elevated authorization for privileged analysts handling sensitive cases
+- **Entity Relationship Graphs** -- Cytoscape.js-powered interactive graphs with click-to-drill-down entity detail popups
 - **Multi-Format Export** -- PDF, Markdown, STIX 2.1, CSV, JSON, and Google Drive export with map snapshots
+- **Docker Ready** -- Dockerfile and docker-compose.yml for containerized deployment with Redis, Celery worker, and Celery beat
 
 ---
 
