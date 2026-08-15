@@ -1065,21 +1065,43 @@ def create_app():
 
         geo_client = GeoClient()
 
-        # Build GeoDataPoint objects from input
         from app.geo_client import GeoDataPoint as GeoDP
         geo_points = []
         for dp in data_points:
             try:
-                geo_points.append(GeoDP(
-                    lat=float(dp.get("lat", 0)),
-                    lon=float(dp.get("lon", 0)),
-                    label=dp.get("label", ""),
-                    source=dp.get("source", "user_input"),
-                    confidence=float(dp.get("confidence", 0.5)),
-                    timestamp=dp.get("timestamp"),
-                    radius_m=float(dp.get("radius_m", 0)),
-                    raw=dp,
-                ))
+                dp_type = dp.get("type", "")
+                value = dp.get("value", "").strip()
+
+                if dp_type == "ip" and value:
+                    resolved = geo_client.ip_geolocate(value)
+                    if resolved:
+                        geo_points.append(resolved)
+                    continue
+
+                if dp_type == "address" and value:
+                    resolved = geo_client.geocode(value)
+                    if resolved:
+                        geo_points.append(resolved)
+                    continue
+
+                if dp_type == "social_post" and value:
+                    resolved = geo_client.resolve_locations([value])
+                    geo_points.extend(resolved)
+                    continue
+
+                lat = dp.get("lat", dp.get("latitude"))
+                lon = dp.get("lon", dp.get("lng", dp.get("longitude")))
+                if lat is not None and lon is not None:
+                    geo_points.append(GeoDP(
+                        lat=float(lat),
+                        lon=float(lon),
+                        label=dp.get("label", value or ""),
+                        source=dp.get("source", "user_input"),
+                        confidence=float(dp.get("confidence", 0.5)),
+                        timestamp=dp.get("timestamp"),
+                        radius_m=float(dp.get("radius_m", 0)) if dp.get("radius_m") else None,
+                        raw=dp,
+                    ))
             except (ValueError, TypeError):
                 continue
 
