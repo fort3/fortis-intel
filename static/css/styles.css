@@ -1124,6 +1124,51 @@ small, .text-sm {
   border-color: var(--border) !important;
 }
 
+/* Marker cluster — purple theme */
+.marker-cluster-small,
+.marker-cluster-medium,
+.marker-cluster-large {
+  background: rgba(126, 34, 206, 0.4) !important;
+}
+
+.marker-cluster-small div,
+.marker-cluster-medium div,
+.marker-cluster-large div {
+  background: rgba(147, 51, 234, 0.7) !important;
+  color: #fff !important;
+  font-family: 'JetBrains Mono', monospace !important;
+}
+
+/* Fullscreen control — dark theme override */
+.leaflet-control-fullscreen a {
+  background: var(--bg-card) !important;
+  color: var(--text-primary) !important;
+  border-color: var(--border) !important;
+}
+
+/* Map download control */
+.map-download-control a {
+  background: var(--bg-card) !important;
+  border-color: var(--border) !important;
+}
+
+.map-download-control a:hover {
+  background: var(--bg-elevated) !important;
+}
+
+/* Map popup dark theme */
+.leaflet-popup-content-wrapper {
+  background: var(--bg-card) !important;
+  color: var(--text-primary) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: 4px !important;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.5) !important;
+}
+
+.leaflet-popup-tip {
+  background: var(--bg-card) !important;
+}
+
 /* ==========================================================================
    16. GRAPH CONTAINER (Cytoscape)
    ========================================================================== */
@@ -1245,7 +1290,8 @@ small, .text-sm {
   transition: opacity var(--transition-med);
 }
 
-.slide-panel-overlay.active {
+.slide-panel-overlay.active,
+.slide-panel-overlay.open {
   opacity: 1;
   pointer-events: auto;
 }
@@ -1268,7 +1314,8 @@ small, .text-sm {
   flex-direction: column;
 }
 
-.slide-panel.active {
+.slide-panel.active,
+.slide-panel.open {
   transform: translateX(0);
 }
 

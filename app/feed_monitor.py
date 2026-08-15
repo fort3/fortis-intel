@@ -1,8 +1,8 @@
-"""Feed monitor stub (Celery task interface) for Fortis Intelligence Hub.
+"""Feed monitor (Celery task interface) for Fortis Intelligence Hub.
 
-Phase 0: All methods are stubs. Monitor state is persisted via
-:mod:`app.redis_store` so that CRUD operations work even without a
-running Celery worker.
+Phase 3: Monitor CRUD operations persist state via :mod:`app.redis_store`
+and automatically schedule Celery polling tasks when monitors are created
+or resumed.
 """
 
 import logging
@@ -23,14 +23,49 @@ log = logging.getLogger(__name__)
 class FeedMonitor:
     """Manage feed monitors and their findings.
 
-    Phase 0: monitors can be created, paused, resumed, and deleted via
-    the Redis-backed store. Actual polling is not yet implemented.
+    Phase 3: monitors can be created, paused, resumed, and deleted via
+    the Redis-backed store. Creating or resuming a monitor automatically
+    schedules the first Celery poll task.
     """
 
     def __init__(self):
         self._monitors = get_monitor_store()
         self._findings = get_finding_store()
-        log.info("FeedMonitor initialised (Phase 0 — stub mode)")
+        log.info("FeedMonitor initialised (Phase 3)")
+
+    # ------------------------------------------------------------------
+    # Task scheduling helper
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _schedule_poll(monitor_id: str, delay_seconds: int = 5) -> bool:
+        """Schedule a poll_monitor Celery task.
+
+        Args:
+            monitor_id: The monitor to poll.
+            delay_seconds: Seconds to wait before executing (default 5).
+
+        Returns:
+            True if the task was submitted successfully.
+        """
+        try:
+            from app.tasks import poll_monitor
+            poll_monitor.apply_async(
+                args=[monitor_id],
+                countdown=delay_seconds,
+            )
+            log.info(
+                "Scheduled poll for monitor %s in %d seconds",
+                monitor_id, delay_seconds,
+            )
+            return True
+        except Exception as exc:
+            log.warning(
+                "Failed to schedule poll for monitor %s: %s "
+                "(Celery worker may not be running)",
+                monitor_id, exc,
+            )
+            return False
 
     # ------------------------------------------------------------------
     # Monitor CRUD
@@ -73,11 +108,16 @@ class FeedMonitor:
         self._monitors.save(monitor)
         log.info("Created monitor %s: type=%s query=%r", monitor_id,
                  monitor.monitor_type, monitor.query)
+
+        # Schedule the first poll task
+        poll_scheduled = self._schedule_poll(monitor_id)
+
         return {
             "monitor_id": monitor_id,
             "status": "active",
             "created_at": now,
-            "message": "Monitor created (polling not yet active in Phase 0)",
+            "poll_scheduled": poll_scheduled,
+            "message": "Monitor created and first poll scheduled",
         }
 
     def pause_monitor(self, monitor_id: str) -> dict[str, Any]:
@@ -110,7 +150,16 @@ class FeedMonitor:
             log.warning("Failed to resume monitor %s — not found", monitor_id)
             return {"success": False, "error": f"Monitor {monitor_id} not found"}
         log.info("Resumed monitor %s", monitor_id)
-        return {"success": True, "monitor_id": monitor_id, "status": "active"}
+
+        # Schedule poll immediately on resume
+        poll_scheduled = self._schedule_poll(monitor_id)
+
+        return {
+            "success": True,
+            "monitor_id": monitor_id,
+            "status": "active",
+            "poll_scheduled": poll_scheduled,
+        }
 
     def delete_monitor(self, monitor_id: str) -> dict[str, Any]:
         """Delete a monitor and all its findings.

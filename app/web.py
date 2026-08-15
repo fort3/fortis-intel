@@ -827,9 +827,13 @@ def create_app():
             source_count=len(findings_dict.get("platforms_queried", [])),
         )
 
-        # Cache in-memory for follow-up queries
+        # Cache in-memory for follow-up queries and export
         stored_reports[session_id] = {
             "text": analysis,
+            "entities": entities_data,
+            "sensitivity_level": sensitivity,
+            "identifier": clean_id,
+            "chart_data": charts,
             "user_email": g.user_session.email if hasattr(g, "user_session") else "unknown",
             "created_at": datetime.now(tz=timezone.utc),
         }
@@ -844,6 +848,7 @@ def create_app():
             "sensitivity_level": sensitivity,
             "identifier": clean_id,
             "identifier_type": identifier_type,
+            "entities": entities_data,
             "entity_count": len(entities_data),
             "source_count": len(findings_dict.get("platforms_queried", [])),
         }
@@ -1315,12 +1320,41 @@ def create_app():
     #  EXPORT ROUTES
     # ================================================================
 
+    def _resolve_export_data(data: dict) -> dict:
+        """Merge export request data with stored report data.
+
+        When the frontend sends only a session_id, look up the cached
+        analysis text, entities, and sensitivity from stored_reports so
+        export routes have everything they need.
+        """
+        sid = data.get("session_id", "")
+        if sid and validate_session_id(sid) and sid in stored_reports:
+            cached = stored_reports[sid]
+            if not data.get("content"):
+                data["content"] = cached.get("text", "")
+            if not data.get("entities"):
+                data["entities"] = cached.get("entities", [])
+            if not data.get("sensitivity_level"):
+                data["sensitivity_level"] = cached.get("sensitivity_level", "INTERNAL")
+            if not data.get("title"):
+                identifier = cached.get("identifier", "")
+                if identifier:
+                    data["title"] = f"Fortis Report — {identifier}"
+            if not data.get("chart_data"):
+                data["chart_data"] = cached.get("chart_data")
+            if not data.get("investigation"):
+                data["investigation"] = {
+                    "identifier": cached.get("identifier", ""),
+                    "sensitivity_level": cached.get("sensitivity_level", "INTERNAL"),
+                }
+        return data
+
     @app.route("/export/pdf", methods=["POST"])
     @login_required
     @limiter.limit("30 per hour")
     def export_pdf():
         """Generate a styled PDF from analysis text, charts, and map snapshot."""
-        data = request.get_json(silent=True) or {}
+        data = _resolve_export_data(request.get_json(silent=True) or {})
         content = data.get("content", "")
         title = data.get("title", "Fortis Intelligence Report")
         export_session_id = data.get("session_id", "")
@@ -1369,7 +1403,7 @@ def create_app():
     @limiter.limit("30 per hour")
     def export_markdown():
         """Generate a Markdown export of analysis text."""
-        data = request.get_json(silent=True) or {}
+        data = _resolve_export_data(request.get_json(silent=True) or {})
         content = data.get("content", "")
         title = data.get("title", "Fortis Intelligence Report")
         export_session_id = data.get("session_id", "")
@@ -1398,7 +1432,7 @@ def create_app():
     @limiter.limit("30 per hour")
     def export_stix():
         """Export OSINT entities in STIX 2.1 format."""
-        data = request.get_json(silent=True) or {}
+        data = _resolve_export_data(request.get_json(silent=True) or {})
         entities = data.get("entities")
         investigation = data.get("investigation")
 
@@ -1425,7 +1459,7 @@ def create_app():
     @limiter.limit("30 per hour")
     def export_csv():
         """Export OSINT entities in CSV format."""
-        data = request.get_json(silent=True) or {}
+        data = _resolve_export_data(request.get_json(silent=True) or {})
         entities = data.get("entities")
 
         if not entities or not isinstance(entities, list):
@@ -1447,7 +1481,7 @@ def create_app():
     @limiter.limit("30 per hour")
     def export_json_route():
         """Export OSINT entities in structured JSON format."""
-        data = request.get_json(silent=True) or {}
+        data = _resolve_export_data(request.get_json(silent=True) or {})
         entities = data.get("entities")
         investigation = data.get("investigation")
 
@@ -1490,7 +1524,7 @@ def create_app():
         if format_type not in ("pdf", "markdown", "stix", "csv", "json"):
             return jsonify({"error": "Invalid format. Use: pdf, markdown, stix, csv, json"}), 400
 
-        data = request.get_json(silent=True) or {}
+        data = _resolve_export_data(request.get_json(silent=True) or {})
         sensitivity = data.get("sensitivity_level", "INTERNAL")
         sens_tag = sensitivity.replace(" ", "_")
 

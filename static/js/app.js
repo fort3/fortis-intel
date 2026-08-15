@@ -19,6 +19,7 @@ let graphInstance = null;
 let watchRefreshTimer = null;
 let watchPanelOpen = false;
 let kbPanelOpen = false;
+let lastAnalysisData = null;
 
 /* ====================================================================
    UTILITY FUNCTIONS
@@ -1220,8 +1221,9 @@ function clearResults() {
     if (mapContainer) mapContainer.style.display = 'none';
     if (graphContainer) graphContainer.style.display = 'none';
     if (chartsContainer) { chartsContainer.innerHTML = ''; chartsContainer.style.display = 'none'; }
-    if (exportBar) exportBar.style.display = 'none';
+    if (exportBar) exportBar.classList.remove('visible');
     if (sensitivity) sensitivity.innerHTML = '';
+    lastAnalysisData = null;
 }
 
 /**
@@ -1234,7 +1236,7 @@ function showResults() {
 
     if (empty) empty.style.display = 'none';
     if (content) content.style.display = '';
-    if (exportBar) exportBar.style.display = '';
+    if (exportBar) exportBar.classList.add('visible');
 }
 
 /**
@@ -1243,6 +1245,7 @@ function showResults() {
  */
 function renderAnalysis(data) {
     showResults();
+    lastAnalysisData = data;
 
     var content = document.getElementById('resultsContent');
 
@@ -1297,7 +1300,9 @@ function renderMap(mapData) {
     mapInstance = L.map('map', {
         center: center,
         zoom: zoom,
-        zoomControl: true
+        zoomControl: true,
+        fullscreenControl: true,
+        fullscreenControlOptions: { position: 'topright' }
     });
 
     // CartoDB Dark Matter tiles
@@ -1307,8 +1312,27 @@ function renderMap(mapData) {
         maxZoom: 19
     }).addTo(mapInstance);
 
-    // Layer groups for control
-    var markerLayer = L.layerGroup().addTo(mapInstance);
+    // Layer groups for control — use markerClusterGroup for clustering
+    var markerLayer = (typeof L.markerClusterGroup !== 'undefined')
+        ? L.markerClusterGroup({
+            maxClusterRadius: 50,
+            spiderfyOnMaxZoom: true,
+            showCoverageOnHover: false,
+            zoomToBoundsOnClick: true,
+            iconCreateFunction: function (cluster) {
+                var count = cluster.getChildCount();
+                var size = 'small';
+                if (count >= 100) size = 'large';
+                else if (count >= 10) size = 'medium';
+                return L.divIcon({
+                    html: '<div>' + count + '</div>',
+                    className: 'marker-cluster marker-cluster-' + size,
+                    iconSize: L.point(40, 40)
+                });
+            }
+        })
+        : L.layerGroup();
+    markerLayer.addTo(mapInstance);
     var overlayLayers = { 'Markers': markerLayer };
     var bounds = [];
 
@@ -1453,10 +1477,101 @@ function renderMap(mapData) {
         mapInstance.fitBounds(bounds, { padding: [40, 40], maxZoom: 14 });
     }
 
+    // Add "Download Map" custom control
+    var DownloadMapControl = L.Control.extend({
+        options: { position: 'topright' },
+        onAdd: function () {
+            var container = L.DomUtil.create('div', 'leaflet-bar leaflet-control map-download-control');
+            var btn = L.DomUtil.create('a', '', container);
+            btn.href = '#';
+            btn.title = 'Download Map Snapshot';
+            btn.innerHTML = '&#x1F4F7;';
+            btn.setAttribute('role', 'button');
+            btn.setAttribute('aria-label', 'Download Map Snapshot');
+            btn.style.cssText = 'display:flex;align-items:center;justify-content:center;width:30px;height:30px;font-size:16px;background:var(--bg-card,#10101e);color:var(--text-primary,#e8e6f0);text-decoration:none;cursor:pointer;';
+            L.DomEvent.disableClickPropagation(container);
+            L.DomEvent.on(btn, 'click', function (e) {
+                L.DomEvent.preventDefault(e);
+                exportMapSnapshot();
+            });
+            return container;
+        }
+    });
+    mapInstance.addControl(new DownloadMapControl());
+
     // Force resize (fix for hidden container)
     setTimeout(function () {
         if (mapInstance) mapInstance.invalidateSize();
     }, 200);
+}
+
+/**
+ * Export the current map view as a PNG snapshot using html2canvas.
+ * Falls back to posting map bounds to /export/map-snapshot if html2canvas is unavailable.
+ */
+function exportMapSnapshot() {
+    if (!mapInstance) {
+        showToast('No map to export.', 'warning');
+        return;
+    }
+
+    var mapContainer = mapInstance.getContainer();
+
+    if (typeof html2canvas !== 'undefined') {
+        showToast('Capturing map snapshot...', 'info');
+
+        html2canvas(mapContainer, {
+            useCORS: true,
+            allowTaint: true,
+            backgroundColor: '#08081a',
+            scale: 2
+        }).then(function (canvas) {
+            // Convert canvas to downloadable PNG
+            var link = document.createElement('a');
+            link.download = 'fortis_map_' + Date.now() + '.png';
+            link.href = canvas.toDataURL('image/png');
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            showToast('Map snapshot downloaded.', 'success');
+        }).catch(function (err) {
+            console.error('[Map Snapshot] html2canvas failed:', err);
+            showToast('Map snapshot failed: ' + err.message, 'error');
+        });
+    } else {
+        // Fallback: post current bounds to backend
+        var bounds = mapInstance.getBounds();
+        var center = mapInstance.getCenter();
+
+        fetchApi('/export/map-snapshot', {
+            method: 'POST',
+            body: JSON.stringify({
+                center: { lat: center.lat, lng: center.lng },
+                zoom: mapInstance.getZoom(),
+                bounds: {
+                    north: bounds.getNorth(),
+                    south: bounds.getSouth(),
+                    east: bounds.getEast(),
+                    west: bounds.getWest()
+                }
+            })
+        }).then(function (response) {
+            if (!response.ok) throw new Error('Server snapshot failed');
+            return response.blob();
+        }).then(function (blob) {
+            var url = URL.createObjectURL(blob);
+            var a = document.createElement('a');
+            a.href = url;
+            a.download = 'fortis_map_' + Date.now() + '.png';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            showToast('Map snapshot downloaded.', 'success');
+        }).catch(function (err) {
+            showToast('Map snapshot failed: ' + err.message, 'error');
+        });
+    }
 }
 
 /**
@@ -1999,12 +2114,39 @@ async function exportResults(format) {
     showLoading();
 
     try {
+        var exportPayload = {
+            session_id: sessionId || '',
+            tool: currentTool
+        };
+
+        if (lastAnalysisData) {
+            if (lastAnalysisData.analysis) {
+                exportPayload.content = lastAnalysisData.analysis;
+            }
+            if (lastAnalysisData.entities) {
+                exportPayload.entities = lastAnalysisData.entities;
+            }
+            if (lastAnalysisData.sensitivity_level) {
+                exportPayload.sensitivity_level = lastAnalysisData.sensitivity_level;
+            }
+            if (lastAnalysisData.identifier) {
+                exportPayload.title = 'Fortis Report — ' + lastAnalysisData.identifier;
+            }
+            if (lastAnalysisData.charts) {
+                exportPayload.chart_data = lastAnalysisData.charts;
+            }
+            if (lastAnalysisData.identifier || lastAnalysisData.identifier_type) {
+                exportPayload.investigation = {
+                    identifier: lastAnalysisData.identifier || '',
+                    identifier_type: lastAnalysisData.identifier_type || '',
+                    sensitivity_level: lastAnalysisData.sensitivity_level || 'INTERNAL'
+                };
+            }
+        }
+
         var response = await fetchApi('/export/' + format, {
             method: 'POST',
-            body: JSON.stringify({
-                session_id: sessionId || '',
-                tool: currentTool
-            })
+            body: JSON.stringify(exportPayload)
         });
 
         if (!response.ok) {
@@ -2084,12 +2226,22 @@ async function exportDrive(format) {
     showLoading();
 
     try {
+        var exportPayload = {
+            session_id: sessionId || '',
+            tool: currentTool
+        };
+
+        if (lastAnalysisData) {
+            if (lastAnalysisData.analysis) exportPayload.content = lastAnalysisData.analysis;
+            if (lastAnalysisData.entities) exportPayload.entities = lastAnalysisData.entities;
+            if (lastAnalysisData.sensitivity_level) exportPayload.sensitivity_level = lastAnalysisData.sensitivity_level;
+            if (lastAnalysisData.identifier) exportPayload.title = 'Fortis Report — ' + lastAnalysisData.identifier;
+            if (lastAnalysisData.charts) exportPayload.chart_data = lastAnalysisData.charts;
+        }
+
         var response = await fetchApi('/export/drive/' + format, {
             method: 'POST',
-            body: JSON.stringify({
-                session_id: sessionId || '',
-                tool: currentTool
-            })
+            body: JSON.stringify(exportPayload)
         });
 
         var data = await response.json();

@@ -36,6 +36,7 @@ celery_app.conf.update(
     # Task routing
     task_routes={
         "app.forge.*": {"queue": "fortis_monitor"},
+        "app.tasks.*": {"queue": "fortis_monitor"},
     },
 
     # Task time limits (5 minutes soft, 10 minutes hard)
@@ -52,10 +53,18 @@ celery_app.conf.update(
     # Acknowledgment settings
     task_acks_late=True,  # Acknowledge task after completion
     task_reject_on_worker_lost=True,  # Reject task if worker dies
+
+    # Celery Beat periodic tasks
+    beat_schedule={
+        "poll-all-monitors-every-5m": {
+            "task": "app.tasks.poll_all_monitors",
+            "schedule": 300.0,
+        },
+    },
 )
 
-# Auto-discover tasks in app.forge module
-celery_app.autodiscover_tasks(["app.forge"])
+# Auto-discover tasks in app.forge and app.tasks modules
+celery_app.autodiscover_tasks(["app.forge", "app.tasks"])
 
 
 if __name__ == "__main__":
