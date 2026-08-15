@@ -86,17 +86,29 @@ def _run_llm_verifiers(
             ): "consistency",
         }
 
-        for future in as_completed(futures, timeout=FORGE_LLM_VERIFIER_TIMEOUT + 5):
-            try:
-                vote = future.result(timeout=FORGE_LLM_VERIFIER_TIMEOUT)
-                votes.append(vote)
-            except Exception as e:
-                verifier_name = futures[future]
-                votes.append(VerifierVote(
-                    verifier_id=f"llm_{verifier_name}_verifier",
-                    approved=True,
-                    reason=f"Verifier unavailable (fail-open): {str(e)[:200]}",
-                    confidence=0.1,
-                ))
+        try:
+            for future in as_completed(futures, timeout=FORGE_LLM_VERIFIER_TIMEOUT + 5):
+                try:
+                    vote = future.result(timeout=FORGE_LLM_VERIFIER_TIMEOUT)
+                    votes.append(vote)
+                except Exception as e:
+                    verifier_name = futures[future]
+                    votes.append(VerifierVote(
+                        verifier_id=f"llm_{verifier_name}_verifier",
+                        approved=True,
+                        reason=f"Verifier unavailable (fail-open): {str(e)[:200]}",
+                        confidence=0.1,
+                    ))
+        except TimeoutError:
+            collected = {futures[f] for f in futures if f.done()}
+            for future, name in futures.items():
+                if not future.done():
+                    future.cancel()
+                    votes.append(VerifierVote(
+                        verifier_id=f"llm_{name}_verifier",
+                        approved=True,
+                        reason=f"Verifier timed out after {FORGE_LLM_VERIFIER_TIMEOUT}s (fail-open)",
+                        confidence=0.1,
+                    ))
 
     return votes
