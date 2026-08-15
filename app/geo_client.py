@@ -115,9 +115,12 @@ _SOURCE_ICONS: dict[str, str] = {
 class GeoClient:
     """Geolocation utilities: geocoding, triangulation, and map rendering.
 
-    Phase 0: ``geocode``, ``reverse_geocode``, ``ip_geolocate``,
-    ``triangulate``, and ``resolve_locations`` are stubs.
-    ``build_map_data`` is fully functional.
+    Phase 1: All methods are functional.  Geocoding uses Nominatim
+    (with optional Google fallback), IP geolocation uses MaxMind
+    GeoLite2 (with ip-api.com fallback), triangulation supports
+    weighted-centroid and DBSCAN clustering, and location resolution
+    extracts GPE/LOC entities via spaCy NLP before geocoding.
+    ``build_map_data`` produces Leaflet.js-compatible JSON.
     """
 
     def __init__(self):
@@ -154,7 +157,7 @@ class GeoClient:
         log.info("GeoClient initialised (Phase 1)")
 
     # ------------------------------------------------------------------
-    # Stubs (Phase 1)
+    # Geocoding & geolocation
     # ------------------------------------------------------------------
 
     def geocode(self, location_text: str) -> GeoDataPoint | None:
@@ -211,33 +214,133 @@ class GeoClient:
     def reverse_geocode(self, lat: float, lon: float) -> dict[str, Any]:
         """Convert coordinates to a human-readable address.
 
+        Uses Nominatim reverse geocoding.
+
         Args:
             lat: Latitude.
             lon: Longitude.
 
         Returns:
-            Dict with address components (empty in Phase 0).
+            Dict with ``address``, ``city``, ``country``, and ``raw`` keys.
+            Returns an empty dict on failure.
         """
-        log.warning(
-            "GeoClient.reverse_geocode() is a Phase 0 stub — "
-            "returning empty dict for (%s, %s)",
-            lat, lon,
-        )
-        return {}
+        if self._nominatim is None:
+            log.warning("Nominatim geocoder is not available for reverse geocoding")
+            return {}
+
+        try:
+            location = self._nominatim.reverse(
+                (lat, lon), exactly_one=True, timeout=10, language="en",
+            )
+            if location is None:
+                log.info("Reverse geocode returned no result for (%s, %s)", lat, lon)
+                return {}
+
+            raw = location.raw if hasattr(location, "raw") else {}
+            address_parts = raw.get("address", {})
+
+            city = (
+                address_parts.get("city")
+                or address_parts.get("town")
+                or address_parts.get("village")
+                or address_parts.get("municipality")
+                or ""
+            )
+            country = address_parts.get("country", "")
+
+            return {
+                "address": location.address or "",
+                "city": city,
+                "country": country,
+                "raw": raw,
+            }
+        except Exception as exc:
+            log.error("Reverse geocode failed for (%s, %s): %s", lat, lon, exc)
+            return {}
 
     def ip_geolocate(self, ip_address: str) -> GeoDataPoint | None:
         """Geolocate an IP address.
+
+        Uses MaxMind GeoLite2 database if available, otherwise falls back
+        to the free ip-api.com JSON endpoint.
 
         Args:
             ip_address: IPv4 or IPv6 address.
 
         Returns:
-            A :class:`GeoDataPoint` or ``None``. Stub in Phase 0.
+            A :class:`GeoDataPoint` or ``None`` on failure.
         """
-        log.warning(
-            "GeoClient.ip_geolocate() is a Phase 0 stub — returning None for %r",
-            ip_address,
-        )
+        if not ip_address or not ip_address.strip():
+            return None
+
+        # --- Try MaxMind GeoIP2 database ---
+        if self._geoip_reader is not None:
+            try:
+                response = self._geoip_reader.city(ip_address)
+                lat = response.location.latitude
+                lon = response.location.longitude
+                if lat is not None and lon is not None:
+                    city_name = (
+                        response.city.name or ""
+                    ) if response.city else ""
+                    country_name = (
+                        response.country.name or ""
+                    ) if response.country else ""
+                    label = ", ".join(filter(None, [city_name, country_name])) or ip_address
+                    accuracy = response.location.accuracy_radius
+                    return GeoDataPoint(
+                        lat=lat,
+                        lon=lon,
+                        label=label,
+                        source="ip_geolocation",
+                        confidence=0.6,
+                        radius_m=float(accuracy * 1000) if accuracy else None,
+                        raw={
+                            "ip": ip_address,
+                            "provider": "maxmind",
+                            "city": city_name,
+                            "country": country_name,
+                            "accuracy_radius_km": accuracy,
+                        },
+                    )
+            except Exception as exc:
+                log.warning("MaxMind lookup failed for %r: %s", ip_address, exc)
+
+        # --- Fallback to ip-api.com ---
+        try:
+            resp = requests.get(
+                f"http://ip-api.com/json/{ip_address}",
+                timeout=10,
+                params={"fields": "status,message,lat,lon,city,country,regionName,isp,query"},
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            if data.get("status") == "success":
+                lat = data.get("lat", 0.0)
+                lon = data.get("lon", 0.0)
+                city = data.get("city", "")
+                country = data.get("country", "")
+                label = ", ".join(filter(None, [city, country])) or ip_address
+                return GeoDataPoint(
+                    lat=float(lat),
+                    lon=float(lon),
+                    label=label,
+                    source="ip_geolocation",
+                    confidence=0.5,
+                    raw={
+                        "ip": ip_address,
+                        "provider": "ip-api",
+                        **data,
+                    },
+                )
+            else:
+                log.warning(
+                    "ip-api.com returned failure for %r: %s",
+                    ip_address, data.get("message", "unknown"),
+                )
+        except Exception as exc:
+            log.error("ip-api.com request failed for %r: %s", ip_address, exc)
+
         return None
 
     def triangulate(
@@ -246,18 +349,118 @@ class GeoClient:
     ) -> TriangulationResult:
         """Triangulate a probable location from multiple data points.
 
+        Computes a weighted centroid (weighted by confidence). If more than
+        five points are provided and scikit-learn is available, DBSCAN
+        clustering is applied to identify spatial clusters and outliers.
+
         Args:
             data_points: Geo data points with varying confidence levels.
 
         Returns:
-            A :class:`TriangulationResult` (empty in Phase 0).
+            A :class:`TriangulationResult` with centroid, radius, and
+            optional cluster information.
         """
-        log.warning(
-            "GeoClient.triangulate() is a Phase 0 stub — returning empty "
-            "TriangulationResult for %d points",
-            len(data_points),
-        )
-        return TriangulationResult(point_count=len(data_points))
+        if not data_points:
+            return TriangulationResult()
+
+        try:
+            # --- Weighted centroid ---
+            weights = np.array(
+                [max(p.confidence, 0.01) for p in data_points], dtype=float,
+            )
+            lats = np.array([p.lat for p in data_points], dtype=float)
+            lons = np.array([p.lon for p in data_points], dtype=float)
+
+            total_weight = weights.sum()
+            center_lat = float(np.dot(weights, lats) / total_weight)
+            center_lon = float(np.dot(weights, lons) / total_weight)
+
+            # --- Confidence radius (max distance from centroid to any point) ---
+            max_dist_km = 0.0
+            for pt in data_points:
+                d = self._haversine_km(center_lat, center_lon, pt.lat, pt.lon)
+                if d > max_dist_km:
+                    max_dist_km = d
+
+            radius_m = max_dist_km * 1000.0
+            avg_confidence = float(weights.mean())
+
+            method = "weighted_centroid"
+            cluster_points: list[GeoDataPoint] = list(data_points)
+            outliers: list[GeoDataPoint] = []
+
+            # --- DBSCAN clustering for >5 points ---
+            if len(data_points) > 5 and HAS_SKLEARN:
+                try:
+                    coords = np.column_stack([lats, lons])
+                    # eps=0.01 roughly corresponds to ~1 km at mid-latitudes
+                    db = DBSCAN(eps=0.01, min_samples=2, metric="euclidean")
+                    labels = db.fit_predict(coords)
+
+                    method = "dbscan"
+                    cluster_points = []
+                    outliers = []
+
+                    for pt, label in zip(data_points, labels):
+                        if label == -1:
+                            outliers.append(pt)
+                        else:
+                            cluster_points.append(pt)
+
+                    # Recompute centroid from largest cluster
+                    unique_labels = set(labels) - {-1}
+                    if unique_labels:
+                        # Find the largest cluster
+                        best_label = max(
+                            unique_labels,
+                            key=lambda lb: int(np.sum(labels == lb)),
+                        )
+                        mask = labels == best_label
+                        cluster_weights = weights[mask]
+                        cluster_lats = lats[mask]
+                        cluster_lons = lons[mask]
+                        cw_total = cluster_weights.sum()
+                        center_lat = float(np.dot(cluster_weights, cluster_lats) / cw_total)
+                        center_lon = float(np.dot(cluster_weights, cluster_lons) / cw_total)
+
+                        # Recompute radius from cluster points
+                        max_dist_km = 0.0
+                        for i in range(len(cluster_lats)):
+                            d = self._haversine_km(
+                                center_lat, center_lon,
+                                float(cluster_lats[i]), float(cluster_lons[i]),
+                            )
+                            if d > max_dist_km:
+                                max_dist_km = d
+                        radius_m = max_dist_km * 1000.0
+                        avg_confidence = float(cluster_weights.mean())
+
+                except Exception as exc:
+                    log.warning("DBSCAN clustering failed, using weighted centroid: %s", exc)
+
+            # --- Bounding box ---
+            bounding_box = {
+                "south": float(lats.min()),
+                "north": float(lats.max()),
+                "west": float(lons.min()),
+                "east": float(lons.max()),
+            }
+
+            return TriangulationResult(
+                center_lat=center_lat,
+                center_lon=center_lon,
+                radius_m=radius_m,
+                confidence=avg_confidence,
+                point_count=len(data_points),
+                method=method,
+                cluster_points=cluster_points,
+                outliers=outliers,
+                bounding_box=bounding_box,
+            )
+
+        except Exception as exc:
+            log.error("Triangulation failed for %d points: %s", len(data_points), exc)
+            return TriangulationResult(point_count=len(data_points))
 
     def resolve_locations(
         self,
@@ -265,18 +468,67 @@ class GeoClient:
     ) -> list[GeoDataPoint]:
         """Batch-resolve free-text location mentions to coordinates.
 
+        Uses :class:`~app.metadata_extractor.MetadataExtractor` NLP to
+        extract GPE and LOC entities from each text, deduplicates them,
+        and geocodes each unique location string.
+
         Args:
-            location_mentions: List of location strings to resolve.
+            location_mentions: List of text strings that may contain
+                location references.
 
         Returns:
-            List of :class:`GeoDataPoint` (empty in Phase 0).
+            List of :class:`GeoDataPoint` for every successfully geocoded
+            location. Returns an empty list on failure.
         """
-        log.warning(
-            "GeoClient.resolve_locations() is a Phase 0 stub — "
-            "returning empty list for %d mentions",
-            len(location_mentions),
+        if not location_mentions:
+            return []
+
+        # --- Extract location entities via NLP ---
+        unique_locations: set[str] = set()
+        try:
+            from app.metadata_extractor import MetadataExtractor
+            extractor = MetadataExtractor()
+
+            for text in location_mentions:
+                if not text or not text.strip():
+                    continue
+                try:
+                    entities = extractor.extract_entities_nlp(text)
+                    for ent in entities:
+                        ent_type = ent.get("type", "")
+                        ent_value = ent.get("value", "").strip()
+                        if ent_type in ("GPE", "LOC") and ent_value:
+                            unique_locations.add(ent_value)
+                except Exception as exc:
+                    log.warning("NLP entity extraction failed for text: %s", exc)
+        except ImportError:
+            log.warning(
+                "MetadataExtractor not available — treating each input "
+                "string as a literal location name"
+            )
+            for text in location_mentions:
+                if text and text.strip():
+                    unique_locations.add(text.strip())
+
+        if not unique_locations:
+            log.info("No location entities found in %d text(s)", len(location_mentions))
+            return []
+
+        # --- Geocode each unique location ---
+        results: list[GeoDataPoint] = []
+        for loc_name in sorted(unique_locations):
+            try:
+                point = self.geocode(loc_name)
+                if point is not None:
+                    results.append(point)
+            except Exception as exc:
+                log.warning("Failed to geocode resolved location %r: %s", loc_name, exc)
+
+        log.info(
+            "Resolved %d locations from %d text(s) (%d unique entities)",
+            len(results), len(location_mentions), len(unique_locations),
         )
-        return []
+        return results
 
     # ------------------------------------------------------------------
     # Functional: map data builder
@@ -444,3 +696,18 @@ class GeoClient:
         if span < 50:
             return 5
         return 3
+
+    @staticmethod
+    def _haversine_km(lat1: float, lon1: float, lat2: float, lon2: float) -> float:
+        """Compute the great-circle distance between two points in km."""
+        R = 6371.0  # Earth radius in kilometres
+        d_lat = math.radians(lat2 - lat1)
+        d_lon = math.radians(lon2 - lon1)
+        a = (
+            math.sin(d_lat / 2) ** 2
+            + math.cos(math.radians(lat1))
+            * math.cos(math.radians(lat2))
+            * math.sin(d_lon / 2) ** 2
+        )
+        c = 2 * math.atan2(math.sqrt(a), math.sqrt(1 - a))
+        return R * c

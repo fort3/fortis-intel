@@ -1,9 +1,9 @@
 """Multi-platform social media client for Fortis Intelligence Hub.
 
 Phase 1: Real API integrations for Twitter/X, Reddit, Instagram, YouTube,
-and Mastodon.  Telegram remains a Phase-2 stub.  Every platform call is
-wrapped in try/except so the client degrades gracefully when credentials
-are missing or a library is not installed.
+Mastodon, Facebook, and TikTok.  Telegram remains a Phase-2 stub.  Every
+platform call is wrapped in try/except so the client degrades gracefully
+when credentials are missing or a library is not installed.
 """
 
 import logging
@@ -881,6 +881,245 @@ class SocialClient:
             return []
 
     # ==================================================================
+    # FACEBOOK  (Graph API via requests)
+    # ==================================================================
+
+    def _facebook_search_username(self, username: str) -> list[dict[str, Any]]:
+        if not self._facebook_token:
+            return []
+        try:
+            url = f"https://graph.facebook.com/v19.0/{username}"
+            resp = requests.get(
+                url,
+                params={
+                    "fields": "id,name,about,link,followers_count,fan_count,category",
+                    "access_token": self._facebook_token,
+                },
+                timeout=15,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            return [self._normalise_profile(
+                platform="facebook",
+                user_id=str(data.get("id", "")),
+                username=username,
+                display_name=data.get("name", ""),
+                bio=data.get("about", ""),
+                url=data.get("link", f"https://www.facebook.com/{username}"),
+                followers=data.get("followers_count", 0) or data.get("fan_count", 0),
+                following=0,
+                post_count=0,
+                created_at=None,
+                verified=False,
+                profile_image_url="",
+            )]
+        except Exception as exc:
+            log.error("Facebook search_username(%r) failed: %s", username, exc)
+            return []
+
+    def _facebook_search_content(
+        self, query: str, limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        if not self._facebook_token:
+            return []
+        try:
+            url = "https://graph.facebook.com/v19.0/search"
+            resp = requests.get(
+                url,
+                params={
+                    "q": query,
+                    "type": "post",
+                    "access_token": self._facebook_token,
+                    "limit": min(limit, 100),
+                },
+                timeout=15,
+            )
+            resp.raise_for_status()
+            items = resp.json().get("data", [])
+            posts: list[dict[str, Any]] = []
+            for item in items:
+                message = item.get("message", "")
+                hashtags, mentions = _extract_tags(message)
+                posts.append(self._normalise_post(
+                    platform="facebook",
+                    post_id=str(item.get("id", "")),
+                    author_username=item.get("from", {}).get("name", ""),
+                    content=message,
+                    url=item.get("permalink_url", ""),
+                    timestamp=item.get("created_time"),
+                    likes=item.get("likes", {}).get("summary", {}).get("total_count", 0) if isinstance(item.get("likes"), dict) else 0,
+                    shares=item.get("shares", {}).get("count", 0) if isinstance(item.get("shares"), dict) else 0,
+                    replies=item.get("comments", {}).get("summary", {}).get("total_count", 0) if isinstance(item.get("comments"), dict) else 0,
+                    hashtags=hashtags,
+                    mentions=mentions,
+                ))
+            return posts
+        except Exception as exc:
+            log.error("Facebook search_content(%r) failed: %s", query, exc)
+            return []
+
+    def _facebook_get_user_posts(
+        self, user_id: str, limit: int, since: str | None,
+    ) -> list[dict[str, Any]]:
+        if not self._facebook_token:
+            return []
+        try:
+            url = f"https://graph.facebook.com/v19.0/{user_id}/posts"
+            params: dict[str, Any] = {
+                "fields": "id,message,created_time,permalink_url,shares,likes.summary(true),comments.summary(true)",
+                "access_token": self._facebook_token,
+                "limit": min(limit, 100),
+            }
+            if since:
+                params["since"] = since
+            resp = requests.get(url, params=params, timeout=15)
+            resp.raise_for_status()
+            items = resp.json().get("data", [])
+            posts: list[dict[str, Any]] = []
+            for item in items:
+                message = item.get("message", "")
+                hashtags, mentions = _extract_tags(message)
+                posts.append(self._normalise_post(
+                    platform="facebook",
+                    post_id=str(item.get("id", "")),
+                    author_username=user_id,
+                    content=message,
+                    url=item.get("permalink_url", ""),
+                    timestamp=item.get("created_time"),
+                    likes=item.get("likes", {}).get("summary", {}).get("total_count", 0) if isinstance(item.get("likes"), dict) else 0,
+                    shares=item.get("shares", {}).get("count", 0) if isinstance(item.get("shares"), dict) else 0,
+                    replies=item.get("comments", {}).get("summary", {}).get("total_count", 0) if isinstance(item.get("comments"), dict) else 0,
+                    hashtags=hashtags,
+                    mentions=mentions,
+                ))
+            return posts
+        except Exception as exc:
+            log.error("Facebook get_user_posts(%r) failed: %s", user_id, exc)
+            return []
+
+    # ==================================================================
+    # TIKTOK  (Research API via requests)
+    # ==================================================================
+
+    def _tiktok_search_username(self, username: str) -> list[dict[str, Any]]:
+        if not self._tiktok_api_key:
+            return []
+        try:
+            url = "https://open.tiktokapis.com/v2/research/user/info/"
+            headers = {
+                "Authorization": f"Bearer {self._tiktok_api_key}",
+                "Content-Type": "application/json",
+            }
+            payload = {"username": username}
+            resp = requests.post(url, json=payload, headers=headers, timeout=15)
+            resp.raise_for_status()
+            data = resp.json().get("data", {})
+            return [self._normalise_profile(
+                platform="tiktok",
+                user_id=str(data.get("user_id", "")),
+                username=data.get("username", username),
+                display_name=data.get("display_name", ""),
+                bio=data.get("bio_description", ""),
+                url=f"https://www.tiktok.com/@{data.get('username', username)}",
+                followers=data.get("follower_count", 0),
+                following=data.get("following_count", 0),
+                post_count=data.get("video_count", 0),
+                created_at=None,
+                verified=data.get("is_verified", False),
+                profile_image_url=data.get("avatar_url", ""),
+            )]
+        except Exception as exc:
+            log.error("TikTok search_username(%r) failed: %s", username, exc)
+            return []
+
+    def _tiktok_search_content(
+        self, query: str, limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        if not self._tiktok_api_key:
+            return []
+        try:
+            url = "https://open.tiktokapis.com/v2/research/video/query/"
+            headers = {
+                "Authorization": f"Bearer {self._tiktok_api_key}",
+                "Content-Type": "application/json",
+            }
+            payload = {
+                "query": {"and": [{"operation": "IN", "field_name": "keyword", "field_values": [query]}]},
+                "max_count": min(limit, 50),
+            }
+            resp = requests.post(url, json=payload, headers=headers, timeout=15)
+            resp.raise_for_status()
+            videos = resp.json().get("data", {}).get("videos", [])
+            posts: list[dict[str, Any]] = []
+            for video in videos:
+                desc = video.get("video_description", "")
+                hashtags, mentions = _extract_tags(desc)
+                video_id = str(video.get("id", ""))
+                posts.append(self._normalise_post(
+                    platform="tiktok",
+                    post_id=video_id,
+                    author_username=video.get("username", ""),
+                    content=desc,
+                    url=f"https://www.tiktok.com/@{video.get('username', '')}/video/{video_id}",
+                    timestamp=_iso(datetime.fromtimestamp(video["create_time"], tz=timezone.utc))
+                    if video.get("create_time") else None,
+                    likes=video.get("like_count", 0),
+                    shares=video.get("share_count", 0),
+                    replies=video.get("comment_count", 0),
+                    hashtags=hashtags or video.get("hashtag_names", []),
+                    mentions=mentions,
+                ))
+            return posts
+        except Exception as exc:
+            log.error("TikTok search_content(%r) failed: %s", query, exc)
+            return []
+
+    def _tiktok_get_user_posts(
+        self, user_id: str, limit: int, since: str | None,
+    ) -> list[dict[str, Any]]:
+        """Fetch recent videos by a TikTok user via the Research API."""
+        if not self._tiktok_api_key:
+            return []
+        try:
+            url = "https://open.tiktokapis.com/v2/research/video/query/"
+            headers = {
+                "Authorization": f"Bearer {self._tiktok_api_key}",
+                "Content-Type": "application/json",
+            }
+            payload: dict[str, Any] = {
+                "query": {"and": [{"operation": "EQ", "field_name": "username", "field_values": [user_id]}]},
+                "max_count": min(limit, 50),
+            }
+            if since:
+                payload["start_date"] = since[:10]  # YYYY-MM-DD
+            resp = requests.post(url, json=payload, headers=headers, timeout=15)
+            resp.raise_for_status()
+            videos = resp.json().get("data", {}).get("videos", [])
+            posts: list[dict[str, Any]] = []
+            for video in videos:
+                desc = video.get("video_description", "")
+                hashtags, mentions = _extract_tags(desc)
+                video_id = str(video.get("id", ""))
+                posts.append(self._normalise_post(
+                    platform="tiktok",
+                    post_id=video_id,
+                    author_username=video.get("username", user_id),
+                    content=desc,
+                    url=f"https://www.tiktok.com/@{video.get('username', user_id)}/video/{video_id}",
+                    timestamp=_iso(datetime.fromtimestamp(video["create_time"], tz=timezone.utc))
+                    if video.get("create_time") else None,
+                    likes=video.get("like_count", 0),
+                    shares=video.get("share_count", 0),
+                    replies=video.get("comment_count", 0),
+                    hashtags=hashtags or video.get("hashtag_names", []),
+                    mentions=mentions,
+                ))
+            return posts
+        except Exception as exc:
+            log.error("TikTok get_user_posts(%r) failed: %s", user_id, exc)
+            return []
+
+    # ==================================================================
     # TELEGRAM  (Phase 2 stub)
     # ==================================================================
 
@@ -919,6 +1158,10 @@ class SocialClient:
                 results.extend(self._instagram_search_username(username))
             elif platform == "mastodon":
                 results.extend(self._mastodon_search_username(username))
+            elif platform == "facebook":
+                results.extend(self._facebook_search_username(username))
+            elif platform == "tiktok":
+                results.extend(self._tiktok_search_username(username))
             elif platform == "telegram":
                 results.extend(self._telegram_stub("search_username", username))
             elif platform == "youtube":
@@ -956,6 +1199,10 @@ class SocialClient:
                 results.extend(self._youtube_search_content(query))
             elif platform == "mastodon":
                 results.extend(self._mastodon_search_content(query))
+            elif platform == "facebook":
+                results.extend(self._facebook_search_content(query))
+            elif platform == "tiktok":
+                results.extend(self._tiktok_search_content(query))
             elif platform == "telegram":
                 results.extend(self._telegram_stub("search_content", query))
             elif platform == "instagram":
@@ -1010,6 +1257,10 @@ class SocialClient:
             return self._youtube_get_user_posts(user_id, limit, since)
         if platform == "mastodon":
             return self._mastodon_get_user_posts(user_id, limit, since)
+        if platform == "facebook":
+            return self._facebook_get_user_posts(user_id, limit, since)
+        if platform == "tiktok":
+            return self._tiktok_get_user_posts(user_id, limit, since)
         if platform == "telegram":
             return self._telegram_stub("get_user_posts", user_id)
         self._stub_warn("get_user_posts", platform)

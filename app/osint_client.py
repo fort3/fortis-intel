@@ -197,6 +197,19 @@ class OSINTClient:
         findings.timeline = self._build_timeline(findings)
         findings.sensitivity_level = self._assess_sensitivity(findings)
 
+        findings.source_count = sum(1 for p in resolved_platforms
+                                    if any(pr.platform == p for pr in findings.profiles)
+                                    or any(po.platform == p for po in findings.posts))
+
+        try:
+            from app.intel_graph import build_investigation_graph, graph_to_cytoscape_json
+            entities_data = [asdict(e) for e in findings.entities]
+            if entities_data:
+                g = build_investigation_graph(entities_data)
+                findings.entity_graph = graph_to_cytoscape_json(g)
+        except Exception as exc:
+            log.error("Entity graph construction failed: %s", exc)
+
         return findings
 
     def enrich_entities(
