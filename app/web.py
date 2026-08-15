@@ -842,12 +842,34 @@ def create_app():
         except Exception as exc:
             print(f"[WARN] Relationship persistence failed (non-fatal): {exc}")
 
-        # Build map data
+        # Build map data in the shape the frontend renderMap() expects
         map_data = {}
         try:
             if geo_data:
-                map_result = geo_client.build_map_data(geo_data)
-                map_data = asdict(map_result)
+                markers = []
+                for gp in geo_data:
+                    lat = gp.get("lat")
+                    lon = gp.get("lon") or gp.get("lng")
+                    if lat is None or lon is None:
+                        continue
+                    markers.append({
+                        "lat": float(lat),
+                        "lng": float(lon),
+                        "label": gp.get("label") or gp.get("name", ""),
+                        "source_type": gp.get("source", "osint"),
+                        "confidence": gp.get("confidence", 0.5),
+                    })
+                if markers:
+                    lats = [m["lat"] for m in markers]
+                    lngs = [m["lng"] for m in markers]
+                    map_data = {
+                        "markers": markers,
+                        "center": [sum(lats) / len(lats), sum(lngs) / len(lngs)],
+                        "zoom": GeoClient._auto_zoom(
+                            [min(lats), min(lngs)],
+                            [max(lats), max(lngs)],
+                        ) if len(markers) > 1 else 10,
+                    }
         except Exception as exc:
             print(f"[WARN] Map data construction failed (non-fatal): {exc}")
 
@@ -1126,11 +1148,48 @@ def create_app():
                 f"Point count: {tri_dict.get('point_count')}"
             )
 
-        # Build map data
+        # Build map data in the shape the frontend renderMap() expects
         map_data = {}
         try:
-            map_result = geo_client.build_map_data(geo_points, triangulation)
-            map_data = asdict(map_result)
+            markers = []
+            for gp in geo_points:
+                markers.append({
+                    "lat": gp.lat,
+                    "lng": gp.lon,
+                    "label": gp.label or "",
+                    "source_type": gp.source or "user_input",
+                    "confidence": gp.confidence,
+                    "description": gp.raw.get("city", "") if isinstance(gp.raw, dict) else "",
+                })
+
+            lats = [gp.lat for gp in geo_points]
+            lons = [gp.lon for gp in geo_points]
+            center = [sum(lats) / len(lats), sum(lons) / len(lons)] if lats else [20, 0]
+
+            map_data = {
+                "markers": markers,
+                "center": center,
+                "zoom": geo_client._auto_zoom(
+                    [min(lats), min(lons)],
+                    [max(lats), max(lons)],
+                ) if len(lats) > 1 else 10,
+            }
+
+            if triangulation and triangulation.center_lat and triangulation.center_lon:
+                source_pts = [
+                    {"lat": gp.lat, "lng": gp.lon}
+                    for gp in (triangulation.cluster_points or geo_points)
+                ]
+                map_data["triangulation"] = {
+                    "center": {
+                        "lat": triangulation.center_lat,
+                        "lng": triangulation.center_lon,
+                    },
+                    "confidence_radius": triangulation.radius_m or 500,
+                    "source_points": source_pts,
+                    "method": triangulation.method,
+                    "confidence": triangulation.confidence,
+                }
         except Exception as exc:
             print(f"[WARN] Map data construction failed (non-fatal): {exc}")
 

@@ -1364,7 +1364,7 @@ function clearResults() {
 
     if (content) { content.innerHTML = ''; content.style.display = 'none'; }
     if (empty) empty.style.display = '';
-    if (mapContainer) mapContainer.style.display = 'none';
+    if (mapContainer) { mapContainer.classList.remove('visible'); mapContainer.style.display = ''; }
     if (graphContainer) graphContainer.style.display = 'none';
     if (chartsContainer) { chartsContainer.innerHTML = ''; chartsContainer.style.display = 'none'; }
     if (exportBar) exportBar.classList.remove('visible');
@@ -1431,7 +1431,7 @@ function renderMap(mapData) {
     var mapDiv = document.getElementById('map');
     if (!mapContainer || !mapDiv) return;
 
-    mapContainer.style.display = '';
+    mapContainer.classList.add('visible');
 
     // Clear previous map
     if (mapInstance) {
