@@ -1,0 +1,579 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Fortis Intelligence Hub</title>
+
+  <!-- Leaflet.js 1.9.4 -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+        crossorigin="anonymous" />
+
+  <!-- App Styles -->
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+
+  <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='img/favicon.ico') }}">
+</head>
+<body>
+  <div class="bg-scanline-overlay"></div>
+
+  <!-- ====================================================================
+       GLOBAL LOADING BAR
+       ==================================================================== -->
+  <div class="global-loading" id="globalLoading">
+    <div class="global-loading-bar"></div>
+  </div>
+
+  <!-- ====================================================================
+       TOP BAR
+       ==================================================================== -->
+  <header class="topbar">
+    <a href="/" class="topbar-logo">
+      <span class="logo-accent">Fortis</span> Intelligence Hub
+    </a>
+
+    <div class="topbar-right">
+      <!-- OSINT Status -->
+      <div class="osint-status" id="osintStatus">
+        <span class="osint-status-dot" id="osintStatusDot"></span>
+        <span id="osintStatusText">OSINT Online</span>
+      </div>
+
+      <!-- User info -->
+      <div class="topbar-user" id="userInfo">
+        <img id="userAvatar" src="" alt="" />
+        <span id="userName"></span>
+      </div>
+
+      <!-- KB button -->
+      <button class="topbar-btn" id="btnKnowledgeBase" title="Knowledge Base">
+        &#x1F4DA; KB
+      </button>
+
+      <!-- Watch button -->
+      <button class="topbar-btn" id="btnWatch" title="Feed Monitor">
+        &#x1F514; Watch
+      </button>
+
+      <!-- Logout -->
+      <button class="topbar-btn topbar-btn-logout" id="btnLogout" title="Sign Out">
+        &#x23FB;
+      </button>
+    </div>
+  </header>
+
+  <!-- ====================================================================
+       TOOL CARDS STRIP
+       ==================================================================== -->
+  <div class="app-container">
+    <div class="toolcards-strip" id="toolcardsStrip">
+      <div class="tool-card active" data-tool="ingest" title="Upload and ingest PDF/MD reports">
+        <span class="tool-card-icon">&#x1F4C4;</span>
+        <span class="tool-card-label">Report Ingestion</span>
+      </div>
+      <div class="tool-card" data-tool="investigate" title="Investigate a subject across platforms">
+        <span class="tool-card-icon">&#x1F50D;</span>
+        <span class="tool-card-label">Investigation</span>
+      </div>
+      <div class="tool-card" data-tool="geo" title="Geolocation analysis">
+        <span class="tool-card-icon">&#x1F30D;</span>
+        <span class="tool-card-label">Geolocation</span>
+      </div>
+      <div class="tool-card" data-tool="batch" title="Batch investigate multiple identifiers">
+        <span class="tool-card-icon">&#x1F4CB;</span>
+        <span class="tool-card-label">Batch Investigation</span>
+      </div>
+      <div class="tool-card" data-tool="monitor" title="Set up continuous feed monitoring">
+        <span class="tool-card-icon">&#x1F4E1;</span>
+        <span class="tool-card-label">Feed Monitor</span>
+      </div>
+      <div class="tool-card" data-tool="qa" title="Ask questions against your knowledge base">
+        <span class="tool-card-icon">&#x1F4AC;</span>
+        <span class="tool-card-label">Q&amp;A (RAG)</span>
+      </div>
+    </div>
+
+    <!-- ==================================================================
+         SPLIT PANELS
+         ================================================================== -->
+    <div class="panels-container">
+
+      <!-- INPUT PANEL (left ~35%) -->
+      <div class="input-panel">
+        <div class="input-panel-header">
+          <h3 id="inputPanelTitle">Report Ingestion</h3>
+        </div>
+
+        <div class="input-panel-body">
+
+          <!-- ============================================================
+               TOOL FORM: Report Ingestion
+               ============================================================ -->
+          <div class="tool-form active" id="form-ingest">
+            <div class="form-group">
+              <label class="form-label">Upload Reports (PDF / Markdown)</label>
+              <div class="upload-zone" id="ingestDropZone">
+                <input type="file" id="ingestFiles" multiple accept=".pdf,.md,.txt" />
+                <div class="upload-zone-icon">&#x1F4C2;</div>
+                <div class="upload-zone-text">Drag files here or click to browse</div>
+                <div class="upload-zone-hint">PDF, Markdown, or plain text &mdash; up to 50 MB each</div>
+              </div>
+              <div class="upload-file-list" id="ingestFileList"></div>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Tags (optional)</label>
+              <input type="text" class="form-input" id="ingestTags" placeholder="e.g. threat-intel, q3-review" />
+              <div class="form-hint">Comma-separated tags for organization</div>
+            </div>
+          </div>
+
+          <!-- ============================================================
+               TOOL FORM: Investigation
+               ============================================================ -->
+          <div class="tool-form" id="form-investigate">
+            <div class="form-group">
+              <label class="form-label">Subject Identifier</label>
+              <input type="text" class="form-input" id="investSubject" placeholder="Username, email, phone, domain, IP..." />
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Identifier Type</label>
+              <select class="form-select" id="investIdType">
+                <option value="auto">Auto-detect</option>
+                <option value="username">Username</option>
+                <option value="email">Email</option>
+                <option value="phone">Phone</option>
+                <option value="domain">Domain</option>
+                <option value="name">Name</option>
+                <option value="ip">IP Address</option>
+                <option value="keyword">Keyword</option>
+              </select>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Platforms</label>
+              <div class="checkbox-grid" id="investPlatforms">
+                <label class="checkbox-item">
+                  <input type="checkbox" name="platform" value="twitter" checked />
+                  Twitter / X
+                </label>
+                <label class="checkbox-item checked">
+                  <input type="checkbox" name="platform" value="reddit" checked />
+                  Reddit
+                </label>
+                <label class="checkbox-item">
+                  <input type="checkbox" name="platform" value="telegram" />
+                  Telegram
+                </label>
+                <label class="checkbox-item">
+                  <input type="checkbox" name="platform" value="instagram" />
+                  Instagram
+                </label>
+                <label class="checkbox-item">
+                  <input type="checkbox" name="platform" value="youtube" />
+                  YouTube
+                </label>
+                <label class="checkbox-item">
+                  <input type="checkbox" name="platform" value="mastodon" />
+                  Mastodon
+                </label>
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Investigation Depth</label>
+              <select class="form-select" id="investDepth">
+                <option value="quick">Quick &mdash; API only</option>
+                <option value="standard" selected>Standard &mdash; API + Web</option>
+                <option value="deep">Deep &mdash; All sources</option>
+              </select>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Investigation Purpose</label>
+              <textarea class="form-textarea" id="investPurpose" placeholder="Describe the purpose and scope of this investigation..." rows="3"></textarea>
+            </div>
+          </div>
+
+          <!-- ============================================================
+               TOOL FORM: Geolocation
+               ============================================================ -->
+          <div class="tool-form" id="form-geo">
+            <div class="tabs" id="geoTabs">
+              <button class="tab active" data-geo-tab="images">Images</button>
+              <button class="tab" data-geo-tab="social">Social Posts</button>
+              <button class="tab" data-geo-tab="ip">IP Addresses</button>
+              <button class="tab" data-geo-tab="manual">Manual</button>
+            </div>
+
+            <!-- Geo: Images tab -->
+            <div class="tab-content active" id="geoTab-images">
+              <div class="form-group">
+                <label class="form-label">Upload Images for EXIF / Visual Analysis</label>
+                <div class="upload-zone" id="geoImageDropZone">
+                  <input type="file" id="geoImages" multiple accept="image/*" />
+                  <div class="upload-zone-icon">&#x1F5BC;</div>
+                  <div class="upload-zone-text">Drop images here or click to browse</div>
+                  <div class="upload-zone-hint">JPEG, PNG, TIFF &mdash; EXIF data will be extracted</div>
+                </div>
+                <div class="upload-file-list" id="geoImageFileList"></div>
+              </div>
+            </div>
+
+            <!-- Geo: Social Posts tab -->
+            <div class="tab-content" id="geoTab-social">
+              <div class="form-group">
+                <label class="form-label">Social Post URLs or Content</label>
+                <textarea class="form-textarea mono" id="geoSocialInput" placeholder="Paste URLs or post content (one per line)..." rows="6"></textarea>
+                <div class="form-hint">Supports Twitter, Instagram, Reddit post URLs or raw text with location mentions</div>
+              </div>
+            </div>
+
+            <!-- Geo: IP Addresses tab -->
+            <div class="tab-content" id="geoTab-ip">
+              <div class="form-group">
+                <label class="form-label">IP Addresses</label>
+                <textarea class="form-textarea mono" id="geoIpInput" placeholder="Enter IP addresses (one per line)..." rows="6"></textarea>
+                <div class="form-hint">IPv4 or IPv6 addresses for geolocation lookup</div>
+              </div>
+            </div>
+
+            <!-- Geo: Manual tab -->
+            <div class="tab-content" id="geoTab-manual">
+              <div class="form-group">
+                <label class="form-label">Coordinates or Address</label>
+                <textarea class="form-textarea mono" id="geoManualInput" placeholder="40.7128, -74.0060&#10;51.5074, -0.1278&#10;1600 Pennsylvania Ave, Washington DC" rows="6"></textarea>
+                <div class="form-hint">Lat/Lng pairs or addresses (one per line)</div>
+              </div>
+            </div>
+          </div>
+
+          <!-- ============================================================
+               TOOL FORM: Batch Investigation
+               ============================================================ -->
+          <div class="tool-form" id="form-batch">
+            <div class="form-group">
+              <label class="form-label">Identifiers</label>
+              <textarea class="form-textarea mono" id="batchIdentifiers" placeholder="Enter identifiers (one per line)..." rows="6"></textarea>
+              <div class="form-hint">Up to 100 identifiers. One per line.</div>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Or Upload CSV / XLSX</label>
+              <div class="upload-zone" id="batchDropZone">
+                <input type="file" id="batchFile" accept=".csv,.xlsx,.xls" />
+                <div class="upload-zone-icon">&#x1F4CA;</div>
+                <div class="upload-zone-text">Drop CSV/XLSX or click to browse</div>
+                <div class="upload-zone-hint">First column should contain identifiers</div>
+              </div>
+              <div class="upload-file-list" id="batchFileList"></div>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Identifier Type</label>
+              <select class="form-select" id="batchIdType">
+                <option value="auto">Auto-detect</option>
+                <option value="username">Username</option>
+                <option value="email">Email</option>
+                <option value="phone">Phone</option>
+                <option value="domain">Domain</option>
+                <option value="ip">IP Address</option>
+              </select>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Platforms</label>
+              <div class="checkbox-grid" id="batchPlatforms">
+                <label class="checkbox-item">
+                  <input type="checkbox" name="batchPlatform" value="twitter" checked />
+                  Twitter / X
+                </label>
+                <label class="checkbox-item">
+                  <input type="checkbox" name="batchPlatform" value="reddit" checked />
+                  Reddit
+                </label>
+                <label class="checkbox-item">
+                  <input type="checkbox" name="batchPlatform" value="telegram" />
+                  Telegram
+                </label>
+                <label class="checkbox-item">
+                  <input type="checkbox" name="batchPlatform" value="instagram" />
+                  Instagram
+                </label>
+                <label class="checkbox-item">
+                  <input type="checkbox" name="batchPlatform" value="youtube" />
+                  YouTube
+                </label>
+                <label class="checkbox-item">
+                  <input type="checkbox" name="batchPlatform" value="mastodon" />
+                  Mastodon
+                </label>
+              </div>
+            </div>
+          </div>
+
+          <!-- ============================================================
+               TOOL FORM: Feed Monitor
+               ============================================================ -->
+          <div class="tool-form" id="form-monitor">
+            <div class="form-group">
+              <label class="form-label">Monitor Type</label>
+              <select class="form-select" id="monitorType">
+                <option value="keyword">Keyword</option>
+                <option value="username">Username</option>
+                <option value="hashtag">Hashtag</option>
+                <option value="location_radius">Location Radius</option>
+              </select>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Query</label>
+              <input type="text" class="form-input" id="monitorQuery" placeholder="Enter search term or identifier..." />
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Platforms</label>
+              <div class="checkbox-grid" id="monitorPlatforms">
+                <label class="checkbox-item">
+                  <input type="checkbox" name="monitorPlatform" value="twitter" checked />
+                  Twitter / X
+                </label>
+                <label class="checkbox-item">
+                  <input type="checkbox" name="monitorPlatform" value="reddit" checked />
+                  Reddit
+                </label>
+                <label class="checkbox-item">
+                  <input type="checkbox" name="monitorPlatform" value="telegram" />
+                  Telegram
+                </label>
+                <label class="checkbox-item">
+                  <input type="checkbox" name="monitorPlatform" value="mastodon" />
+                  Mastodon
+                </label>
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Check Interval</label>
+              <select class="form-select" id="monitorInterval">
+                <option value="5">Every 5 minutes</option>
+                <option value="15" selected>Every 15 minutes</option>
+                <option value="30">Every 30 minutes</option>
+                <option value="60">Every hour</option>
+                <option value="240">Every 4 hours</option>
+              </select>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Alert Threshold</label>
+              <select class="form-select" id="monitorThreshold">
+                <option value="all">All findings</option>
+                <option value="high_confidence" selected>High confidence only</option>
+                <option value="geo_match">Geo matches only</option>
+              </select>
+            </div>
+          </div>
+
+          <!-- ============================================================
+               TOOL FORM: Q&A (RAG)
+               ============================================================ -->
+          <div class="tool-form" id="form-qa">
+            <div class="chat-container">
+              <div class="chat-messages" id="chatMessages">
+                <div class="chat-message ai">
+                  <div class="chat-avatar">F</div>
+                  <div class="chat-bubble">
+                    Ask me anything about your uploaded documents and investigation reports. I have access to your full knowledge base.
+                  </div>
+                </div>
+              </div>
+              <div class="chat-input-bar">
+                <input type="text" class="form-input" id="chatInput" placeholder="Ask a question..." />
+                <button class="btn btn-primary" id="chatSend">&#x27A4;</button>
+              </div>
+            </div>
+          </div>
+
+        </div><!-- /.input-panel-body -->
+
+        <!-- Submit footer for non-chat tools -->
+        <div class="input-panel-footer" id="inputPanelFooter">
+          <button class="btn btn-primary btn-block" id="btnSubmit">
+            &#x25B6; Execute
+          </button>
+        </div>
+      </div><!-- /.input-panel -->
+
+      <!-- RESULTS PANEL (right ~65%) -->
+      <div class="results-panel">
+        <div class="results-panel-header">
+          <h3 id="resultsPanelTitle">Results</h3>
+          <div id="resultsSensitivity"></div>
+        </div>
+
+        <div class="results-panel-body" id="resultsPanelBody">
+          <!-- Loading scanline -->
+          <div class="loading-scanline" id="resultsScanline"></div>
+
+          <!-- Empty state -->
+          <div class="results-empty" id="resultsEmpty">
+            <div class="results-empty-icon">&#x1F6F0;</div>
+            <div class="results-empty-text">No Analysis Running</div>
+            <div class="results-empty-hint">Select a tool and submit a query to begin</div>
+          </div>
+
+          <!-- Analysis output (rendered markdown) -->
+          <div class="results-content" id="resultsContent" style="display:none;"></div>
+
+          <!-- Map view -->
+          <div class="map-container" id="mapContainer">
+            <div id="map"></div>
+          </div>
+
+          <!-- Entity graph -->
+          <div class="graph-container" id="graphContainer">
+            <div id="graph"></div>
+          </div>
+
+          <!-- Charts -->
+          <div class="charts-container" id="chartsContainer"></div>
+        </div>
+
+        <!-- Export bar -->
+        <div class="export-bar" id="exportBar">
+          <span class="export-bar-label">Export:</span>
+          <button class="export-btn" data-format="pdf" title="Export as PDF">&#x1F4C4; PDF</button>
+          <button class="export-btn" data-format="markdown" title="Export as Markdown">&#x1F4DD; MD</button>
+          <button class="export-btn" data-format="stix" title="Export as STIX 2.1">&#x1F6E1; STIX</button>
+          <button class="export-btn" data-format="csv" title="Export as CSV">&#x1F4CA; CSV</button>
+          <button class="export-btn" data-format="json" title="Export as JSON">&#x007B;&#x007D; JSON</button>
+          <button class="export-btn" data-format="drive" title="Save to Google Drive">&#x2601; Drive</button>
+        </div>
+      </div><!-- /.results-panel -->
+
+    </div><!-- /.panels-container -->
+  </div><!-- /.app-container -->
+
+  <!-- ====================================================================
+       SLIDE-IN PANEL: Watch (Feed Monitor)
+       ==================================================================== -->
+  <div class="slide-panel-overlay" id="watchOverlay"></div>
+  <div class="slide-panel" id="watchPanel">
+    <div class="slide-panel-header">
+      <h2>&#x1F514; Feed Monitor</h2>
+      <button class="slide-panel-close" id="watchClose">&times;</button>
+    </div>
+    <div class="slide-panel-body" id="watchBody">
+      <div class="results-empty" style="min-height:200px;">
+        <div class="results-empty-icon">&#x1F4E1;</div>
+        <div class="results-empty-text">No Active Monitors</div>
+        <div class="results-empty-hint">Create a feed monitor to start watching</div>
+      </div>
+
+      <!-- Monitor findings populate here dynamically -->
+      <div id="watchFindings" style="display:none;"></div>
+    </div>
+    <div class="slide-panel-footer">
+      <button class="btn btn-ghost btn-block" id="btnClearFindings">Clear All Findings</button>
+    </div>
+  </div>
+
+  <!-- ====================================================================
+       SLIDE-IN PANEL: Knowledge Base
+       ==================================================================== -->
+  <div class="slide-panel-overlay" id="kbOverlay"></div>
+  <div class="slide-panel" id="kbPanel">
+    <div class="slide-panel-header">
+      <h2>&#x1F4DA; Knowledge Base</h2>
+      <button class="slide-panel-close" id="kbClose">&times;</button>
+    </div>
+    <div class="slide-panel-body" id="kbBody">
+      <!-- KB search -->
+      <div class="kb-search form-group">
+        <input type="text" class="form-input" id="kbSearch" placeholder="Search reports..." />
+      </div>
+
+      <!-- KB stats -->
+      <div class="kb-stats" id="kbStats">
+        <div class="kb-stat">
+          <div class="kb-stat-value" id="kbStatDocs">0</div>
+          <div class="kb-stat-label">Documents</div>
+        </div>
+        <div class="kb-stat">
+          <div class="kb-stat-value" id="kbStatChunks">0</div>
+          <div class="kb-stat-label">Chunks</div>
+        </div>
+      </div>
+
+      <!-- KB report list -->
+      <div class="section-header">Reports</div>
+      <div class="kb-report-list" id="kbReportList">
+        <!-- Populated dynamically -->
+      </div>
+    </div>
+    <div class="slide-panel-footer">
+      <div class="btn-group">
+        <button class="btn btn-secondary btn-sm" id="btnKbRebuild">&#x21BB; Rebuild Index</button>
+        <button class="btn btn-ghost btn-sm" id="btnKbStats">&#x1F4CA; Stats</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ====================================================================
+       LOGIN MODAL
+       ==================================================================== -->
+  <div class="modal-overlay" id="loginModal">
+    <div class="modal">
+      <div class="modal-logo">
+        <span style="color: var(--purple-neon);">Fortis</span> Intelligence Hub
+      </div>
+      <div class="modal-subtitle">OSINT-Driven Intelligence &amp; Analysis Platform</div>
+
+      <a href="/oauth/login" class="google-signin-btn" id="googleSignIn">
+        <svg viewBox="0 0 24 24" width="20" height="20">
+          <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92a5.06 5.06 0 01-2.2 3.32v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.1z"/>
+          <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+          <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
+          <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+        </svg>
+        Sign in with Google
+      </a>
+
+      <div class="modal-footer">
+        Authorized personnel only. All sessions are logged.
+      </div>
+    </div>
+  </div>
+
+  <!-- ====================================================================
+       TOAST CONTAINER
+       ==================================================================== -->
+  <div class="toast-container" id="toastContainer"></div>
+
+  <!-- ====================================================================
+       EXTERNAL LIBRARIES
+       ==================================================================== -->
+  <!-- Leaflet.js -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+          integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+          crossorigin="anonymous"></script>
+
+  <!-- Leaflet.heat -->
+  <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
+
+  <!-- Chart.js 4.x -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+
+  <!-- Cytoscape.js 3.x -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.28.1/cytoscape.min.js"></script>
+
+  <!-- marked.js (Markdown rendering) -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+
+  <!-- App JS -->
+  <script src="{{ url_for('static', filename='js/app.js') }}"></script>
+
+</body>
+</html>

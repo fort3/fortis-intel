@@ -1,0 +1,208 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1920 1080" preserveAspectRatio="xMidYMid slice">
+  <defs>
+    <!-- Glow filter -->
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="6" result="blur"/>
+      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+    </filter>
+    <filter id="glowStrong" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="18" result="blur"/>
+      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+    </filter>
+    <filter id="glowSoft" x="-100%" y="-100%" width="300%" height="300%">
+      <feGaussianBlur stdDeviation="40" result="blur"/>
+      <feComposite in="SourceGraphic" in2="blur" operator="over"/>
+    </filter>
+
+    <!-- Radial gradient for center core -->
+    <radialGradient id="coreGlow" cx="50%" cy="50%" r="50%">
+      <stop offset="0%" stop-color="#d946ef" stop-opacity="0.9"/>
+      <stop offset="30%" stop-color="#a855f7" stop-opacity="0.5"/>
+      <stop offset="60%" stop-color="#7c3aed" stop-opacity="0.2"/>
+      <stop offset="100%" stop-color="#7c3aed" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- Sphere gradient 1 -->
+    <radialGradient id="sphere1" cx="35%" cy="30%" r="60%">
+      <stop offset="0%" stop-color="#c084fc" stop-opacity="0.8"/>
+      <stop offset="50%" stop-color="#7c3aed" stop-opacity="0.5"/>
+      <stop offset="100%" stop-color="#4c1d95" stop-opacity="0.3"/>
+    </radialGradient>
+
+    <!-- Sphere gradient 2 -->
+    <radialGradient id="sphere2" cx="40%" cy="35%" r="55%">
+      <stop offset="0%" stop-color="#e879f9" stop-opacity="0.7"/>
+      <stop offset="50%" stop-color="#a855f7" stop-opacity="0.4"/>
+      <stop offset="100%" stop-color="#6d28d9" stop-opacity="0.2"/>
+    </radialGradient>
+
+    <!-- Outer ambient glow -->
+    <radialGradient id="ambientGlow" cx="35%" cy="45%" r="45%">
+      <stop offset="0%" stop-color="#7c3aed" stop-opacity="0.15"/>
+      <stop offset="100%" stop-color="#7c3aed" stop-opacity="0"/>
+    </radialGradient>
+
+    <!-- Arc ring gradient -->
+    <linearGradient id="arcGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#8b5cf6" stop-opacity="0.6"/>
+      <stop offset="100%" stop-color="#6d28d9" stop-opacity="0.25"/>
+    </linearGradient>
+
+    <!-- Wave gradient -->
+    <linearGradient id="waveGrad" x1="0%" y1="0%" x2="100%" y2="0%">
+      <stop offset="0%" stop-color="#a855f7" stop-opacity="0"/>
+      <stop offset="20%" stop-color="#a855f7" stop-opacity="0.5"/>
+      <stop offset="50%" stop-color="#c084fc" stop-opacity="0.7"/>
+      <stop offset="80%" stop-color="#7dd3fc" stop-opacity="0.4"/>
+      <stop offset="100%" stop-color="#7dd3fc" stop-opacity="0"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Ambient background glow -->
+  <rect width="1920" height="1080" fill="url(#ambientGlow)"/>
+
+  <!-- === CONCENTRIC ARC SEGMENTS (left-center HUD rings) === -->
+  <g transform="translate(520, 480)" opacity="0.9">
+    <!-- Outer ring arcs -->
+    <path d="M 0,-280 A 280,280 0 0,1 242,140" fill="none" stroke="#6d28d9" stroke-width="18" stroke-linecap="round" opacity="0.35"/>
+    <path d="M -198,-198 A 280,280 0 0,1 0,-280" fill="none" stroke="#7c3aed" stroke-width="14" stroke-linecap="round" opacity="0.45"/>
+    <path d="M 242,140 A 280,280 0 0,1 -80,268" fill="none" stroke="#6d28d9" stroke-width="10" stroke-linecap="round" opacity="0.3"/>
+    <path d="M -268,-80 A 280,280 0 0,1 -198,-198" fill="none" stroke="#8b5cf6" stroke-width="8" stroke-linecap="round" opacity="0.25"/>
+
+    <!-- Middle ring arcs -->
+    <path d="M -160,-160 A 226,226 0 0,1 160,-160" fill="none" stroke="#8b5cf6" stroke-width="12" stroke-linecap="round" opacity="0.5" filter="url(#glow)"/>
+    <path d="M 196,113 A 226,226 0 0,1 -60,218" fill="none" stroke="#7c3aed" stroke-width="10" stroke-linecap="round" opacity="0.4"/>
+    <path d="M -218,-60 A 226,226 0 0,1 -160,-160" fill="none" stroke="#a855f7" stroke-width="6" stroke-linecap="round" opacity="0.35"/>
+
+    <!-- Inner ring arcs -->
+    <path d="M 0,-170 A 170,170 0 0,1 147,85" fill="none" stroke="#a855f7" stroke-width="8" stroke-linecap="round" opacity="0.55" filter="url(#glow)"/>
+    <path d="M -120,-120 A 170,170 0 0,1 0,-170" fill="none" stroke="#c084fc" stroke-width="6" stroke-linecap="round" opacity="0.5"/>
+    <path d="M 147,85 A 170,170 0 0,1 -147,85" fill="none" stroke="#8b5cf6" stroke-width="5" stroke-linecap="round" opacity="0.4"/>
+
+    <!-- Innermost ring -->
+    <circle cx="0" cy="0" r="110" fill="none" stroke="#a855f7" stroke-width="2" opacity="0.4"/>
+    <path d="M 0,-110 A 110,110 0 0,1 95,55" fill="none" stroke="#c084fc" stroke-width="5" stroke-linecap="round" opacity="0.6" filter="url(#glow)"/>
+
+    <!-- Tick marks on rings -->
+    <g opacity="0.3" stroke="#c084fc" stroke-width="2">
+      <line x1="0" y1="-226" x2="0" y2="-240"/>
+      <line x1="113" y1="-196" x2="120" y2="-208"/>
+      <line x1="196" y1="-113" x2="208" y2="-120"/>
+      <line x1="226" y1="0" x2="240" y2="0"/>
+      <line x1="-113" y1="-196" x2="-120" y2="-208"/>
+      <line x1="-226" y1="0" x2="-240" y2="0"/>
+      <line x1="0" y1="226" x2="0" y2="240"/>
+    </g>
+
+    <!-- Center core glow -->
+    <circle cx="0" cy="0" r="80" fill="url(#coreGlow)" filter="url(#glowStrong)"/>
+    <circle cx="0" cy="0" r="30" fill="#d946ef" opacity="0.25" filter="url(#glowSoft)"/>
+    <circle cx="0" cy="0" r="8" fill="#e879f9" opacity="0.7" filter="url(#glow)"/>
+
+    <!-- Small dots on rings -->
+    <circle cx="0" cy="-226" r="4" fill="#c084fc" opacity="0.8" filter="url(#glow)"/>
+    <circle cx="160" cy="-160" r="3" fill="#a855f7" opacity="0.7" filter="url(#glow)"/>
+    <circle cx="-160" cy="-160" r="3.5" fill="#d946ef" opacity="0.6" filter="url(#glow)"/>
+    <circle cx="196" cy="113" r="3" fill="#8b5cf6" opacity="0.7"/>
+    <circle cx="-218" cy="-60" r="2.5" fill="#c084fc" opacity="0.6"/>
+    <circle cx="147" cy="85" r="4" fill="#a855f7" opacity="0.8" filter="url(#glow)"/>
+    <circle cx="-147" cy="85" r="3" fill="#c084fc" opacity="0.5"/>
+  </g>
+
+  <!-- === FLOWING WAVE LINES === -->
+  <g opacity="0.6">
+    <path d="M 400,490 C 600,430 800,530 1000,470 C 1200,410 1400,510 1600,460 C 1700,440 1800,470 1920,450"
+          fill="none" stroke="url(#waveGrad)" stroke-width="1.5" opacity="0.7"/>
+    <path d="M 400,500 C 600,440 800,540 1000,480 C 1200,420 1400,520 1600,470 C 1700,450 1800,480 1920,460"
+          fill="none" stroke="url(#waveGrad)" stroke-width="1.2" opacity="0.6"/>
+    <path d="M 400,510 C 600,450 800,550 1000,490 C 1200,430 1400,530 1600,480 C 1700,460 1800,490 1920,470"
+          fill="none" stroke="url(#waveGrad)" stroke-width="1" opacity="0.55"/>
+    <path d="M 400,520 C 600,460 800,560 1000,500 C 1200,440 1400,540 1600,490 C 1700,470 1800,500 1920,480"
+          fill="none" stroke="url(#waveGrad)" stroke-width="0.8" opacity="0.5"/>
+    <path d="M 400,530 C 600,470 800,570 1000,510 C 1200,450 1400,550 1600,500 C 1700,480 1800,510 1920,490"
+          fill="none" stroke="url(#waveGrad)" stroke-width="0.8" opacity="0.45"/>
+    <path d="M 400,540 C 600,480 800,580 1000,520 C 1200,460 1400,560 1600,510 C 1700,490 1800,520 1920,500"
+          fill="none" stroke="url(#waveGrad)" stroke-width="0.6" opacity="0.4"/>
+    <path d="M 400,550 C 600,490 800,590 1000,530 C 1200,470 1400,570 1600,520 C 1700,500 1800,530 1920,510"
+          fill="none" stroke="url(#waveGrad)" stroke-width="0.6" opacity="0.35"/>
+    <path d="M 400,560 C 600,500 800,600 1000,540 C 1200,480 1400,580 1600,530 C 1700,510 1800,540 1920,520"
+          fill="none" stroke="url(#waveGrad)" stroke-width="0.5" opacity="0.3"/>
+  </g>
+
+  <!-- === GRADIENT SPHERES === -->
+  <circle cx="1100" cy="470" r="45" fill="url(#sphere1)" filter="url(#glow)"/>
+  <circle cx="1100" cy="470" r="45" fill="none" stroke="#a855f7" stroke-width="1" opacity="0.4"/>
+  <!-- highlight streak on sphere -->
+  <ellipse cx="1090" cy="455" rx="18" ry="4" fill="#e0e7ff" opacity="0.15" transform="rotate(-20 1090 455)"/>
+
+  <circle cx="1480" cy="510" r="22" fill="url(#sphere2)" opacity="0.7"/>
+  <circle cx="1480" cy="510" r="22" fill="none" stroke="#c084fc" stroke-width="0.8" opacity="0.3"/>
+
+  <circle cx="1600" cy="430" r="30" fill="#4c1d95" opacity="0.25"/>
+  <circle cx="1600" cy="430" r="30" fill="none" stroke="#7c3aed" stroke-width="0.8" opacity="0.2"/>
+
+  <!-- Small sphere -->
+  <circle cx="850" cy="420" r="8" fill="#a855f7" opacity="0.5" filter="url(#glow)"/>
+  <circle cx="1300" cy="540" r="5" fill="#c084fc" opacity="0.4" filter="url(#glow)"/>
+
+  <!-- === SCATTERED GLOW PARTICLES === -->
+  <g filter="url(#glow)">
+    <circle cx="680" cy="380" r="2.5" fill="#d946ef" opacity="0.8"/>
+    <circle cx="750" cy="550" r="2" fill="#c084fc" opacity="0.7"/>
+    <circle cx="900" cy="350" r="1.5" fill="#e879f9" opacity="0.6"/>
+    <circle cx="950" cy="580" r="2" fill="#a855f7" opacity="0.7"/>
+    <circle cx="1050" cy="400" r="1.8" fill="#d946ef" opacity="0.65"/>
+    <circle cx="1150" cy="560" r="2.2" fill="#c084fc" opacity="0.7"/>
+    <circle cx="1250" cy="420" r="1.5" fill="#e879f9" opacity="0.55"/>
+    <circle cx="1350" cy="480" r="2" fill="#a855f7" opacity="0.6"/>
+    <circle cx="1450" cy="440" r="1.8" fill="#d946ef" opacity="0.5"/>
+    <circle cx="1550" cy="490" r="2.5" fill="#c084fc" opacity="0.7"/>
+    <circle cx="1650" cy="460" r="1.5" fill="#e879f9" opacity="0.5"/>
+    <circle cx="1750" cy="500" r="2" fill="#a855f7" opacity="0.55"/>
+    <circle cx="350" cy="450" r="2" fill="#8b5cf6" opacity="0.4"/>
+    <circle cx="300" cy="350" r="1.5" fill="#a855f7" opacity="0.35"/>
+    <circle cx="200" cy="520" r="1.8" fill="#c084fc" opacity="0.3"/>
+    <circle cx="1800" cy="400" r="2.5" fill="#d946ef" opacity="0.5"/>
+    <circle cx="1700" cy="550" r="1.5" fill="#c084fc" opacity="0.4"/>
+  </g>
+
+  <!-- Larger soft particles -->
+  <circle cx="780" cy="480" r="5" fill="#d946ef" opacity="0.15" filter="url(#glowStrong)"/>
+  <circle cx="1200" cy="450" r="6" fill="#a855f7" opacity="0.12" filter="url(#glowStrong)"/>
+  <circle cx="1550" cy="470" r="4" fill="#e879f9" opacity="0.18" filter="url(#glowStrong)"/>
+
+  <!-- === CHEVRON ARROWS === -->
+  <g stroke="#c084fc" stroke-width="1.5" fill="none" opacity="0.5" stroke-linecap="round" stroke-linejoin="round">
+    <!-- Chevron group 1 -->
+    <polyline points="870,460 878,468 870,476"/>
+    <polyline points="882,460 890,468 882,476"/>
+
+    <!-- Chevron group 2 -->
+    <polyline points="1320,500 1328,508 1320,516"/>
+    <polyline points="1332,500 1340,508 1332,516"/>
+
+    <!-- Chevron group 3 -->
+    <polyline points="1620,480 1628,488 1620,496"/>
+    <polyline points="1632,480 1640,488 1632,496"/>
+  </g>
+
+  <!-- === CORNER ACCENT LINES === -->
+  <g stroke="#6d28d9" stroke-width="1" opacity="0.2">
+    <!-- Top right corner decoration -->
+    <line x1="1750" y1="80" x2="1850" y2="80"/>
+    <line x1="1850" y1="80" x2="1850" y2="180"/>
+    <line x1="1760" y1="90" x2="1840" y2="90"/>
+
+    <!-- Bottom left corner decoration -->
+    <line x1="70" y1="950" x2="170" y2="950"/>
+    <line x1="70" y1="950" x2="70" y2="1000"/>
+    <line x1="80" y1="960" x2="160" y2="960"/>
+  </g>
+
+  <!-- Top-right small dots cluster -->
+  <g opacity="0.3">
+    <circle cx="1820" cy="120" r="2" fill="#8b5cf6"/>
+    <circle cx="1840" cy="140" r="1.5" fill="#a855f7"/>
+    <circle cx="1800" cy="150" r="1" fill="#c084fc"/>
+  </g>
+</svg>

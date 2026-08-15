@@ -1,0 +1,1099 @@
+"""Multi-platform social media client for Fortis Intelligence Hub.
+
+Phase 1: Real API integrations for Twitter/X, Reddit, Instagram, YouTube,
+and Mastodon.  Telegram remains a Phase-2 stub.  Every platform call is
+wrapped in try/except so the client degrades gracefully when credentials
+are missing or a library is not installed.
+"""
+
+import logging
+import os
+import re
+from datetime import datetime, timezone
+from typing import Any
+
+import requests
+
+from app.constants import SOCIAL_PLATFORMS
+
+log = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Optional library availability flags
+# ---------------------------------------------------------------------------
+
+HAS_TWEEPY = False
+try:
+    import tweepy  # noqa: F401
+    HAS_TWEEPY = True
+except ImportError:
+    pass
+
+HAS_PRAW = False
+try:
+    import praw  # noqa: F401
+    HAS_PRAW = True
+except ImportError:
+    pass
+
+HAS_TELETHON = False
+try:
+    from telethon import TelegramClient as _TC  # noqa: F401
+    HAS_TELETHON = True
+except ImportError:
+    pass
+
+HAS_INSTALOADER = False
+try:
+    import instaloader  # noqa: F401
+    HAS_INSTALOADER = True
+except ImportError:
+    pass
+
+HAS_YOUTUBE = False
+try:
+    from googleapiclient.discovery import build as _yt_build  # noqa: F401
+    HAS_YOUTUBE = True
+except ImportError:
+    pass
+
+HAS_MASTODON = False
+try:
+    # Mastodon uses plain requests; flag is gated on env vars instead.
+    _mastodon_url = os.getenv("MASTODON_INSTANCE_URL")
+    _mastodon_tok = os.getenv("MASTODON_ACCESS_TOKEN")
+    if _mastodon_url and _mastodon_tok:
+        HAS_MASTODON = True
+except Exception:
+    pass
+
+HAS_FACEBOOK = bool(os.getenv("FACEBOOK_ACCESS_TOKEN"))
+
+HAS_TIKTOK = bool(os.getenv("TIKTOK_API_KEY"))
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+_HASHTAG_RE = re.compile(r"#(\w+)")
+_MENTION_RE = re.compile(r"@(\w+)")
+
+
+def _iso(dt: datetime | str | None) -> str | None:
+    """Normalise a datetime or string to ISO-8601 or return None."""
+    if dt is None:
+        return None
+    if isinstance(dt, datetime):
+        return dt.isoformat()
+    return str(dt)
+
+
+def _extract_tags(text: str | None) -> tuple[list[str], list[str]]:
+    """Return (hashtags, mentions) extracted from *text*."""
+    if not text:
+        return [], []
+    return _HASHTAG_RE.findall(text), _MENTION_RE.findall(text)
+
+
+# ---------------------------------------------------------------------------
+# Client
+# ---------------------------------------------------------------------------
+
+class SocialClient:
+    """Unified interface for querying multiple social media platforms.
+
+    Phase 1: dispatches to real platform APIs when credentials and
+    libraries are available; falls back to a logged warning otherwise.
+    """
+
+    LIBRARY_FLAGS: dict[str, bool] = {
+        "twitter": HAS_TWEEPY,
+        "reddit": HAS_PRAW,
+        "telegram": HAS_TELETHON,
+        "instagram": HAS_INSTALOADER,
+        "youtube": HAS_YOUTUBE,
+        "mastodon": HAS_MASTODON,
+        "facebook": HAS_FACEBOOK,
+        "tiktok": HAS_TIKTOK,
+    }
+
+    # ------------------------------------------------------------------
+    # Initialisation
+    # ------------------------------------------------------------------
+
+    def __init__(self) -> None:
+        log.info("SocialClient initialising (Phase 1)")
+        self._twitter_client: Any | None = None
+        self._reddit_client: Any | None = None
+        self._instaloader: Any | None = None
+        self._youtube_client: Any | None = None
+        self._mastodon_base_url: str | None = None
+        self._mastodon_token: str | None = None
+        self._facebook_token: str | None = None
+        self._tiktok_api_key: str | None = None
+
+        self._init_twitter()
+        self._init_reddit()
+        self._init_instagram()
+        self._init_youtube()
+        self._init_mastodon()
+        self._init_facebook()
+        self._init_tiktok()
+
+        available = [k for k, v in self.LIBRARY_FLAGS.items() if v]
+        ready = [k for k in available if self._platform_ready(k)]
+        if ready:
+            log.info("Social platforms ready: %s", ", ".join(ready))
+        else:
+            log.info("No social platform clients could be initialised")
+
+    # -- lazy client builders ------------------------------------------
+
+    def _init_twitter(self) -> None:
+        if not HAS_TWEEPY:
+            return
+        bearer = os.getenv("TWITTER_BEARER_TOKEN")
+        if not bearer:
+            log.debug("TWITTER_BEARER_TOKEN not set; Twitter disabled")
+            return
+        try:
+            self._twitter_client = tweepy.Client(
+                bearer_token=bearer,
+                wait_on_rate_limit=True,
+            )
+            log.info("Twitter/X client initialised")
+        except Exception as exc:
+            log.warning("Failed to initialise Twitter client: %s", exc)
+
+    def _init_reddit(self) -> None:
+        if not HAS_PRAW:
+            return
+        client_id = os.getenv("REDDIT_CLIENT_ID")
+        client_secret = os.getenv("REDDIT_CLIENT_SECRET")
+        user_agent = os.getenv("REDDIT_USER_AGENT", "FortisIntelHub/1.0")
+        if not (client_id and client_secret):
+            log.debug("REDDIT_CLIENT_ID / REDDIT_CLIENT_SECRET not set; Reddit disabled")
+            return
+        try:
+            self._reddit_client = praw.Reddit(
+                client_id=client_id,
+                client_secret=client_secret,
+                user_agent=user_agent,
+            )
+            log.info("Reddit client initialised")
+        except Exception as exc:
+            log.warning("Failed to initialise Reddit client: %s", exc)
+
+    def _init_instagram(self) -> None:
+        if not HAS_INSTALOADER:
+            return
+        try:
+            self._instaloader = instaloader.Instaloader(
+                download_pictures=False,
+                download_videos=False,
+                download_video_thumbnails=False,
+                download_geotags=True,
+                download_comments=False,
+                save_metadata=False,
+                compress_json=False,
+            )
+            log.info("Instaloader initialised (public-profile mode)")
+        except Exception as exc:
+            log.warning("Failed to initialise Instaloader: %s", exc)
+
+    def _init_youtube(self) -> None:
+        if not HAS_YOUTUBE:
+            return
+        api_key = os.getenv("YOUTUBE_API_KEY")
+        if not api_key:
+            log.debug("YOUTUBE_API_KEY not set; YouTube disabled")
+            return
+        try:
+            from googleapiclient.discovery import build
+            self._youtube_client = build("youtube", "v3", developerKey=api_key)
+            log.info("YouTube Data API client initialised")
+        except Exception as exc:
+            log.warning("Failed to initialise YouTube client: %s", exc)
+
+    def _init_mastodon(self) -> None:
+        base_url = os.getenv("MASTODON_INSTANCE_URL", "").rstrip("/")
+        token = os.getenv("MASTODON_ACCESS_TOKEN")
+        if not (base_url and token):
+            log.debug("MASTODON_INSTANCE_URL / MASTODON_ACCESS_TOKEN not set; Mastodon disabled")
+            return
+        self._mastodon_base_url = base_url
+        self._mastodon_token = token
+        log.info("Mastodon client initialised (%s)", base_url)
+
+    def _init_facebook(self) -> None:
+        token = os.getenv("FACEBOOK_ACCESS_TOKEN")
+        if not token:
+            log.debug("FACEBOOK_ACCESS_TOKEN not set; Facebook disabled")
+            return
+        self._facebook_token = token
+        log.info("Facebook Graph API client initialised")
+
+    def _init_tiktok(self) -> None:
+        api_key = os.getenv("TIKTOK_API_KEY")
+        if not api_key:
+            log.debug("TIKTOK_API_KEY not set; TikTok disabled")
+            return
+        self._tiktok_api_key = api_key
+        log.info("TikTok Research API client initialised")
+
+    def _platform_ready(self, platform: str) -> bool:
+        """Return True if the platform's API client was successfully built."""
+        return {
+            "twitter": self._twitter_client is not None,
+            "reddit": self._reddit_client is not None,
+            "instagram": self._instaloader is not None,
+            "youtube": self._youtube_client is not None,
+            "mastodon": self._mastodon_base_url is not None,
+            "facebook": self._facebook_token is not None,
+            "tiktok": self._tiktok_api_key is not None,
+            "telegram": False,  # Phase 2
+        }.get(platform, False)
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _resolve_platforms(platforms: list[str] | None) -> list[str]:
+        """Return the list of platforms to query, defaulting to all known."""
+        if platforms:
+            return [p for p in platforms if p in SOCIAL_PLATFORMS]
+        return list(SOCIAL_PLATFORMS.keys())
+
+    def _stub_warn(self, method: str, platform: str) -> None:
+        log.warning(
+            "SocialClient.%s() -- platform %r is not yet implemented or not configured",
+            method,
+            platform,
+        )
+
+    # ------------------------------------------------------------------
+    # Profile normalisation
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _normalise_profile(
+        *,
+        platform: str,
+        user_id: str,
+        username: str,
+        display_name: str = "",
+        bio: str = "",
+        url: str = "",
+        followers: int = 0,
+        following: int = 0,
+        post_count: int = 0,
+        created_at: str | None = None,
+        verified: bool = False,
+        profile_image_url: str = "",
+    ) -> dict[str, Any]:
+        return {
+            "platform": platform,
+            "user_id": str(user_id),
+            "username": username,
+            "display_name": display_name,
+            "bio": bio,
+            "url": url,
+            "followers": followers,
+            "following": following,
+            "post_count": post_count,
+            "created_at": created_at,
+            "verified": verified,
+            "profile_image_url": profile_image_url,
+        }
+
+    @staticmethod
+    def _normalise_post(
+        *,
+        platform: str,
+        post_id: str,
+        author_username: str = "",
+        content: str = "",
+        url: str = "",
+        timestamp: str | None = None,
+        likes: int = 0,
+        shares: int = 0,
+        replies: int = 0,
+        hashtags: list[str] | None = None,
+        mentions: list[str] | None = None,
+        media_urls: list[str] | None = None,
+        geo: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return {
+            "platform": platform,
+            "post_id": str(post_id),
+            "author_username": author_username,
+            "content": content,
+            "url": url,
+            "timestamp": timestamp,
+            "likes": likes,
+            "shares": shares,
+            "replies": replies,
+            "hashtags": hashtags or [],
+            "mentions": mentions or [],
+            "media_urls": media_urls or [],
+            "geo": geo,
+        }
+
+    # ==================================================================
+    # TWITTER / X  (tweepy, API v2)
+    # ==================================================================
+
+    def _twitter_search_username(self, username: str) -> list[dict[str, Any]]:
+        if not self._twitter_client:
+            return []
+        try:
+            user_fields = [
+                "id", "name", "username", "description", "public_metrics",
+                "created_at", "profile_image_url", "verified",
+            ]
+            resp = self._twitter_client.get_user(
+                username=username,
+                user_fields=user_fields,
+            )
+            if resp.data is None:
+                return []
+            u = resp.data
+            pm = u.public_metrics or {}
+            return [self._normalise_profile(
+                platform="twitter",
+                user_id=str(u.id),
+                username=u.username,
+                display_name=u.name or "",
+                bio=getattr(u, "description", "") or "",
+                url=f"https://x.com/{u.username}",
+                followers=pm.get("followers_count", 0),
+                following=pm.get("following_count", 0),
+                post_count=pm.get("tweet_count", 0),
+                created_at=_iso(getattr(u, "created_at", None)),
+                verified=getattr(u, "verified", False) or False,
+                profile_image_url=getattr(u, "profile_image_url", "") or "",
+            )]
+        except Exception as exc:
+            log.error("Twitter search_username(%r) failed: %s", username, exc)
+            return []
+
+    def _twitter_get_user_posts(
+        self, user_id: str, limit: int, since: str | None,
+    ) -> list[dict[str, Any]]:
+        if not self._twitter_client:
+            return []
+        try:
+            tweet_fields = [
+                "id", "text", "author_id", "created_at", "public_metrics",
+                "entities", "geo",
+            ]
+            kwargs: dict[str, Any] = {
+                "id": user_id,
+                "max_results": min(limit, 100),
+                "tweet_fields": tweet_fields,
+            }
+            if since:
+                kwargs["start_time"] = since
+            resp = self._twitter_client.get_users_tweets(**kwargs)
+            if resp.data is None:
+                return []
+            posts: list[dict[str, Any]] = []
+            for tw in resp.data:
+                pm = tw.public_metrics or {}
+                hashtags, mentions = _extract_tags(tw.text)
+                geo = None
+                if tw.geo:
+                    geo = {"raw": tw.geo}
+                posts.append(self._normalise_post(
+                    platform="twitter",
+                    post_id=str(tw.id),
+                    author_username="",  # not in tweet payload without expansion
+                    content=tw.text or "",
+                    url=f"https://x.com/i/status/{tw.id}",
+                    timestamp=_iso(getattr(tw, "created_at", None)),
+                    likes=pm.get("like_count", 0),
+                    shares=pm.get("retweet_count", 0),
+                    replies=pm.get("reply_count", 0),
+                    hashtags=hashtags,
+                    mentions=mentions,
+                    geo=geo,
+                ))
+            return posts
+        except Exception as exc:
+            log.error("Twitter get_user_posts(%r) failed: %s", user_id, exc)
+            return []
+
+    def _twitter_search_content(
+        self, query: str, limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        if not self._twitter_client:
+            return []
+        try:
+            tweet_fields = [
+                "id", "text", "author_id", "created_at", "public_metrics",
+                "entities", "geo",
+            ]
+            resp = self._twitter_client.search_recent_tweets(
+                query=query,
+                max_results=min(limit, 100),
+                tweet_fields=tweet_fields,
+            )
+            if resp.data is None:
+                return []
+            posts: list[dict[str, Any]] = []
+            for tw in resp.data:
+                pm = tw.public_metrics or {}
+                hashtags, mentions = _extract_tags(tw.text)
+                geo = None
+                if tw.geo:
+                    geo = {"raw": tw.geo}
+                posts.append(self._normalise_post(
+                    platform="twitter",
+                    post_id=str(tw.id),
+                    author_username="",
+                    content=tw.text or "",
+                    url=f"https://x.com/i/status/{tw.id}",
+                    timestamp=_iso(getattr(tw, "created_at", None)),
+                    likes=pm.get("like_count", 0),
+                    shares=pm.get("retweet_count", 0),
+                    replies=pm.get("reply_count", 0),
+                    hashtags=hashtags,
+                    mentions=mentions,
+                    geo=geo,
+                ))
+            return posts
+        except Exception as exc:
+            log.error("Twitter search_content(%r) failed: %s", query, exc)
+            return []
+
+    # ==================================================================
+    # REDDIT  (praw)
+    # ==================================================================
+
+    def _reddit_search_username(self, username: str) -> list[dict[str, Any]]:
+        if not self._reddit_client:
+            return []
+        try:
+            redditor = self._reddit_client.redditor(username)
+            # Force fetch to verify user exists
+            _ = redditor.id
+            return [self._normalise_profile(
+                platform="reddit",
+                user_id=str(redditor.id),
+                username=redditor.name,
+                display_name=getattr(redditor, "subreddit", {}).get("title", "") if isinstance(getattr(redditor, "subreddit", None), dict) else "",
+                bio=getattr(redditor, "subreddit", {}).get("public_description", "") if isinstance(getattr(redditor, "subreddit", None), dict) else "",
+                url=f"https://www.reddit.com/user/{redditor.name}",
+                followers=0,  # not reliably exposed
+                following=0,
+                post_count=getattr(redditor, "link_karma", 0) + getattr(redditor, "comment_karma", 0),
+                created_at=_iso(datetime.fromtimestamp(redditor.created_utc, tz=timezone.utc)),
+                verified=getattr(redditor, "has_verified_email", False) or False,
+                profile_image_url=getattr(redditor, "icon_img", "") or "",
+            )]
+        except Exception as exc:
+            log.error("Reddit search_username(%r) failed: %s", username, exc)
+            return []
+
+    def _reddit_get_user_posts(
+        self, user_id: str, limit: int, since: str | None,
+    ) -> list[dict[str, Any]]:
+        """Fetch submissions and comments.  *user_id* is treated as username."""
+        if not self._reddit_client:
+            return []
+        try:
+            redditor = self._reddit_client.redditor(user_id)
+            posts: list[dict[str, Any]] = []
+            half = max(limit // 2, 1)
+
+            # Submissions
+            for sub in redditor.submissions.new(limit=half):
+                ts = _iso(datetime.fromtimestamp(sub.created_utc, tz=timezone.utc))
+                if since and ts and ts < since:
+                    continue
+                hashtags, mentions = _extract_tags(sub.selftext or sub.title)
+                posts.append(self._normalise_post(
+                    platform="reddit",
+                    post_id=str(sub.id),
+                    author_username=str(sub.author) if sub.author else "[deleted]",
+                    content=sub.selftext or sub.title or "",
+                    url=f"https://www.reddit.com{sub.permalink}",
+                    timestamp=ts,
+                    likes=sub.score,
+                    shares=0,
+                    replies=sub.num_comments,
+                    hashtags=hashtags,
+                    mentions=mentions,
+                    media_urls=[sub.url] if sub.url and sub.url != sub.permalink else [],
+                ))
+
+            # Comments
+            for comment in redditor.comments.new(limit=half):
+                ts = _iso(datetime.fromtimestamp(comment.created_utc, tz=timezone.utc))
+                if since and ts and ts < since:
+                    continue
+                hashtags, mentions = _extract_tags(comment.body)
+                posts.append(self._normalise_post(
+                    platform="reddit",
+                    post_id=str(comment.id),
+                    author_username=str(comment.author) if comment.author else "[deleted]",
+                    content=comment.body or "",
+                    url=f"https://www.reddit.com{comment.permalink}",
+                    timestamp=ts,
+                    likes=comment.score,
+                    shares=0,
+                    replies=0,
+                    hashtags=hashtags,
+                    mentions=mentions,
+                ))
+
+            return posts
+        except Exception as exc:
+            log.error("Reddit get_user_posts(%r) failed: %s", user_id, exc)
+            return []
+
+    def _reddit_search_content(
+        self, query: str, limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        if not self._reddit_client:
+            return []
+        try:
+            posts: list[dict[str, Any]] = []
+            for sub in self._reddit_client.subreddit("all").search(query, limit=limit):
+                hashtags, mentions = _extract_tags(sub.selftext or sub.title)
+                posts.append(self._normalise_post(
+                    platform="reddit",
+                    post_id=str(sub.id),
+                    author_username=str(sub.author) if sub.author else "[deleted]",
+                    content=sub.selftext or sub.title or "",
+                    url=f"https://www.reddit.com{sub.permalink}",
+                    timestamp=_iso(datetime.fromtimestamp(sub.created_utc, tz=timezone.utc)),
+                    likes=sub.score,
+                    shares=0,
+                    replies=sub.num_comments,
+                    hashtags=hashtags,
+                    mentions=mentions,
+                    media_urls=[sub.url] if sub.url and sub.url != sub.permalink else [],
+                ))
+            return posts
+        except Exception as exc:
+            log.error("Reddit search_content(%r) failed: %s", query, exc)
+            return []
+
+    # ==================================================================
+    # INSTAGRAM  (instaloader, public profiles only)
+    # ==================================================================
+
+    def _instagram_search_username(self, username: str) -> list[dict[str, Any]]:
+        if not self._instaloader:
+            return []
+        try:
+            profile = instaloader.Profile.from_username(
+                self._instaloader.context, username,
+            )
+            return [self._normalise_profile(
+                platform="instagram",
+                user_id=str(profile.userid),
+                username=profile.username,
+                display_name=profile.full_name or "",
+                bio=profile.biography or "",
+                url=f"https://www.instagram.com/{profile.username}/",
+                followers=profile.followers,
+                following=profile.followees,
+                post_count=profile.mediacount,
+                created_at=None,  # not exposed publicly
+                verified=profile.is_verified,
+                profile_image_url=profile.profile_pic_url or "",
+            )]
+        except Exception as exc:
+            log.error("Instagram search_username(%r) failed: %s", username, exc)
+            return []
+
+    def _instagram_get_user_posts(
+        self, user_id: str, limit: int, since: str | None,
+    ) -> list[dict[str, Any]]:
+        """Fetch recent posts.  *user_id* is treated as username for public lookup."""
+        if not self._instaloader:
+            return []
+        try:
+            profile = instaloader.Profile.from_username(
+                self._instaloader.context, user_id,
+            )
+            posts: list[dict[str, Any]] = []
+            # Cap at 20 to avoid rate limits on public scraping
+            cap = min(limit, 20)
+            for i, post in enumerate(profile.get_posts()):
+                if i >= cap:
+                    break
+                ts = _iso(post.date_utc.replace(tzinfo=timezone.utc) if post.date_utc else None)
+                if since and ts and ts < since:
+                    continue
+                caption = post.caption or ""
+                hashtags_list = list(post.caption_hashtags) if post.caption_hashtags else []
+                mentions_list = list(post.caption_mentions) if post.caption_mentions else []
+                geo = None
+                if post.location:
+                    loc = post.location
+                    geo = {
+                        "name": getattr(loc, "name", None),
+                        "lat": getattr(loc, "lat", None),
+                        "lng": getattr(loc, "lng", None),
+                    }
+                media: list[str] = []
+                if post.url:
+                    media.append(post.url)
+                posts.append(self._normalise_post(
+                    platform="instagram",
+                    post_id=str(post.shortcode),
+                    author_username=profile.username,
+                    content=caption,
+                    url=f"https://www.instagram.com/p/{post.shortcode}/",
+                    timestamp=ts,
+                    likes=post.likes,
+                    shares=0,
+                    replies=post.comments,
+                    hashtags=hashtags_list,
+                    mentions=mentions_list,
+                    media_urls=media,
+                    geo=geo,
+                ))
+            return posts
+        except Exception as exc:
+            log.error("Instagram get_user_posts(%r) failed: %s", user_id, exc)
+            return []
+
+    # ==================================================================
+    # YOUTUBE  (google-api-python-client)
+    # ==================================================================
+
+    def _youtube_search_content(
+        self, query: str, limit: int = 25,
+    ) -> list[dict[str, Any]]:
+        if not self._youtube_client:
+            return []
+        try:
+            req = self._youtube_client.search().list(
+                q=query,
+                type="video",
+                part="snippet",
+                maxResults=min(limit, 50),
+            )
+            resp = req.execute()
+            posts: list[dict[str, Any]] = []
+            for item in resp.get("items", []):
+                snippet = item.get("snippet", {})
+                video_id = item.get("id", {}).get("videoId", "")
+                title = snippet.get("title", "")
+                desc = snippet.get("description", "")
+                hashtags, mentions = _extract_tags(f"{title} {desc}")
+                posts.append(self._normalise_post(
+                    platform="youtube",
+                    post_id=video_id,
+                    author_username=snippet.get("channelTitle", ""),
+                    content=title,
+                    url=f"https://www.youtube.com/watch?v={video_id}",
+                    timestamp=snippet.get("publishedAt"),
+                    likes=0,  # requires separate videos().list call
+                    shares=0,
+                    replies=0,
+                    hashtags=hashtags,
+                    mentions=mentions,
+                    media_urls=[snippet["thumbnails"]["high"]["url"]]
+                    if "thumbnails" in snippet and "high" in snippet["thumbnails"]
+                    else [],
+                ))
+            return posts
+        except Exception as exc:
+            log.error("YouTube search_content(%r) failed: %s", query, exc)
+            return []
+
+    def _youtube_get_user_posts(
+        self, channel_id: str, limit: int, since: str | None,
+    ) -> list[dict[str, Any]]:
+        """List recent videos for a channel.  *channel_id* should be a YouTube channel ID."""
+        if not self._youtube_client:
+            return []
+        try:
+            kwargs: dict[str, Any] = {
+                "channelId": channel_id,
+                "type": "video",
+                "part": "snippet",
+                "order": "date",
+                "maxResults": min(limit, 50),
+            }
+            if since:
+                kwargs["publishedAfter"] = since
+            req = self._youtube_client.search().list(**kwargs)
+            resp = req.execute()
+            posts: list[dict[str, Any]] = []
+            for item in resp.get("items", []):
+                snippet = item.get("snippet", {})
+                video_id = item.get("id", {}).get("videoId", "")
+                title = snippet.get("title", "")
+                desc = snippet.get("description", "")
+                hashtags, mentions = _extract_tags(f"{title} {desc}")
+                posts.append(self._normalise_post(
+                    platform="youtube",
+                    post_id=video_id,
+                    author_username=snippet.get("channelTitle", ""),
+                    content=title,
+                    url=f"https://www.youtube.com/watch?v={video_id}",
+                    timestamp=snippet.get("publishedAt"),
+                    likes=0,
+                    shares=0,
+                    replies=0,
+                    hashtags=hashtags,
+                    mentions=mentions,
+                    media_urls=[snippet["thumbnails"]["high"]["url"]]
+                    if "thumbnails" in snippet and "high" in snippet["thumbnails"]
+                    else [],
+                ))
+            return posts
+        except Exception as exc:
+            log.error("YouTube get_user_posts(%r) failed: %s", channel_id, exc)
+            return []
+
+    # ==================================================================
+    # MASTODON  (requests-based, no special library)
+    # ==================================================================
+
+    def _mastodon_headers(self) -> dict[str, str]:
+        return {"Authorization": f"Bearer {self._mastodon_token}"}
+
+    def _mastodon_search_username(self, username: str) -> list[dict[str, Any]]:
+        if not self._mastodon_base_url:
+            return []
+        try:
+            url = f"{self._mastodon_base_url}/api/v2/search"
+            resp = requests.get(
+                url,
+                params={"q": username, "type": "accounts", "limit": 5},
+                headers=self._mastodon_headers(),
+                timeout=15,
+            )
+            resp.raise_for_status()
+            accounts = resp.json().get("accounts", [])
+            results: list[dict[str, Any]] = []
+            for acct in accounts:
+                results.append(self._normalise_profile(
+                    platform="mastodon",
+                    user_id=str(acct.get("id", "")),
+                    username=acct.get("acct", ""),
+                    display_name=acct.get("display_name", ""),
+                    bio=acct.get("note", ""),
+                    url=acct.get("url", ""),
+                    followers=acct.get("followers_count", 0),
+                    following=acct.get("following_count", 0),
+                    post_count=acct.get("statuses_count", 0),
+                    created_at=acct.get("created_at"),
+                    verified=bool(acct.get("locked", False)),
+                    profile_image_url=acct.get("avatar", ""),
+                ))
+            return results
+        except Exception as exc:
+            log.error("Mastodon search_username(%r) failed: %s", username, exc)
+            return []
+
+    def _mastodon_get_user_posts(
+        self, user_id: str, limit: int, since: str | None,
+    ) -> list[dict[str, Any]]:
+        if not self._mastodon_base_url:
+            return []
+        try:
+            url = f"{self._mastodon_base_url}/api/v1/accounts/{user_id}/statuses"
+            params: dict[str, Any] = {"limit": min(limit, 40)}
+            if since:
+                params["since_id"] = since  # Mastodon uses snowflake-like IDs, caller may pass id
+            resp = requests.get(
+                url,
+                params=params,
+                headers=self._mastodon_headers(),
+                timeout=15,
+            )
+            resp.raise_for_status()
+            statuses = resp.json()
+            posts: list[dict[str, Any]] = []
+            for st in statuses:
+                content = st.get("content", "")
+                hashtags_raw = [t.get("name", "") for t in st.get("tags", [])]
+                mentions_raw = [m.get("acct", "") for m in st.get("mentions", [])]
+                media_urls = [m.get("url", "") for m in st.get("media_attachments", []) if m.get("url")]
+                posts.append(self._normalise_post(
+                    platform="mastodon",
+                    post_id=str(st.get("id", "")),
+                    author_username=st.get("account", {}).get("acct", ""),
+                    content=content,
+                    url=st.get("url", ""),
+                    timestamp=st.get("created_at"),
+                    likes=st.get("favourites_count", 0),
+                    shares=st.get("reblogs_count", 0),
+                    replies=st.get("replies_count", 0),
+                    hashtags=hashtags_raw,
+                    mentions=mentions_raw,
+                    media_urls=media_urls,
+                ))
+            return posts
+        except Exception as exc:
+            log.error("Mastodon get_user_posts(%r) failed: %s", user_id, exc)
+            return []
+
+    def _mastodon_search_content(
+        self, query: str, limit: int = 40,
+    ) -> list[dict[str, Any]]:
+        if not self._mastodon_base_url:
+            return []
+        try:
+            url = f"{self._mastodon_base_url}/api/v2/search"
+            resp = requests.get(
+                url,
+                params={"q": query, "type": "statuses", "limit": min(limit, 40)},
+                headers=self._mastodon_headers(),
+                timeout=15,
+            )
+            resp.raise_for_status()
+            statuses = resp.json().get("statuses", [])
+            posts: list[dict[str, Any]] = []
+            for st in statuses:
+                content = st.get("content", "")
+                hashtags_raw = [t.get("name", "") for t in st.get("tags", [])]
+                mentions_raw = [m.get("acct", "") for m in st.get("mentions", [])]
+                media_urls = [m.get("url", "") for m in st.get("media_attachments", []) if m.get("url")]
+                posts.append(self._normalise_post(
+                    platform="mastodon",
+                    post_id=str(st.get("id", "")),
+                    author_username=st.get("account", {}).get("acct", ""),
+                    content=content,
+                    url=st.get("url", ""),
+                    timestamp=st.get("created_at"),
+                    likes=st.get("favourites_count", 0),
+                    shares=st.get("reblogs_count", 0),
+                    replies=st.get("replies_count", 0),
+                    hashtags=hashtags_raw,
+                    mentions=mentions_raw,
+                    media_urls=media_urls,
+                ))
+            return posts
+        except Exception as exc:
+            log.error("Mastodon search_content(%r) failed: %s", query, exc)
+            return []
+
+    # ==================================================================
+    # TELEGRAM  (Phase 2 stub)
+    # ==================================================================
+
+    def _telegram_stub(self, method: str, *args: Any) -> list[dict[str, Any]]:
+        log.warning(
+            "Telegram %s() is a Phase 2 stub (Telethon requires async + phone auth)",
+            method,
+        )
+        return []
+
+    # ------------------------------------------------------------------
+    # Public API
+    # ------------------------------------------------------------------
+
+    def search_username(
+        self,
+        username: str,
+        platforms: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Search for a username across social platforms.
+
+        Args:
+            username: The username to search for.
+            platforms: Optional subset of platform keys to query.
+
+        Returns:
+            List of normalised profile dicts.
+        """
+        results: list[dict[str, Any]] = []
+        for platform in self._resolve_platforms(platforms):
+            if platform == "twitter":
+                results.extend(self._twitter_search_username(username))
+            elif platform == "reddit":
+                results.extend(self._reddit_search_username(username))
+            elif platform == "instagram":
+                results.extend(self._instagram_search_username(username))
+            elif platform == "mastodon":
+                results.extend(self._mastodon_search_username(username))
+            elif platform == "telegram":
+                results.extend(self._telegram_stub("search_username", username))
+            elif platform == "youtube":
+                # YouTube search is content-centric; username lookup not supported
+                log.debug("YouTube does not support username search; skipping")
+            else:
+                self._stub_warn("search_username", platform)
+        return results
+
+    def search_content(
+        self,
+        query: str,
+        platforms: list[str] | None = None,
+        date_from: str | None = None,
+        date_to: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Search for content/posts matching *query* across platforms.
+
+        Args:
+            query: Free-text search query.
+            platforms: Optional subset of platform keys.
+            date_from: ISO-8601 start date (used where the API supports it).
+            date_to: ISO-8601 end date.
+
+        Returns:
+            List of normalised post dicts.
+        """
+        results: list[dict[str, Any]] = []
+        for platform in self._resolve_platforms(platforms):
+            if platform == "twitter":
+                results.extend(self._twitter_search_content(query))
+            elif platform == "reddit":
+                results.extend(self._reddit_search_content(query))
+            elif platform == "youtube":
+                results.extend(self._youtube_search_content(query))
+            elif platform == "mastodon":
+                results.extend(self._mastodon_search_content(query))
+            elif platform == "telegram":
+                results.extend(self._telegram_stub("search_content", query))
+            elif platform == "instagram":
+                # Instagram public scraping doesn't support content search
+                log.debug("Instagram content search not available via public API; skipping")
+            else:
+                self._stub_warn("search_content", platform)
+        return results
+
+    def get_user_profile(
+        self,
+        platform: str,
+        user_id: str,
+    ) -> dict[str, Any]:
+        """Fetch a single user profile from *platform*.
+
+        Args:
+            platform: Platform key (e.g. ``twitter``).
+            user_id: Platform-specific user identifier.
+
+        Returns:
+            Profile dict, or empty dict if unavailable.
+        """
+        profiles = self.search_username(user_id, platforms=[platform])
+        return profiles[0] if profiles else {}
+
+    def get_user_posts(
+        self,
+        platform: str,
+        user_id: str,
+        limit: int = 100,
+        since: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Fetch recent posts by a user on *platform*.
+
+        Args:
+            platform: Platform key.
+            user_id: Platform-specific user identifier.
+            limit: Maximum number of posts to return.
+            since: ISO-8601 timestamp -- only return posts after this date.
+
+        Returns:
+            List of normalised post dicts.
+        """
+        if platform == "twitter":
+            return self._twitter_get_user_posts(user_id, limit, since)
+        if platform == "reddit":
+            return self._reddit_get_user_posts(user_id, limit, since)
+        if platform == "instagram":
+            return self._instagram_get_user_posts(user_id, limit, since)
+        if platform == "youtube":
+            return self._youtube_get_user_posts(user_id, limit, since)
+        if platform == "mastodon":
+            return self._mastodon_get_user_posts(user_id, limit, since)
+        if platform == "telegram":
+            return self._telegram_stub("get_user_posts", user_id)
+        self._stub_warn("get_user_posts", platform)
+        return []
+
+    def extract_geotags(
+        self,
+        posts: list[dict[str, Any]],
+    ) -> list[dict[str, Any]]:
+        """Extract geolocation tags from a batch of posts.
+
+        Args:
+            posts: List of post dicts (as returned by other methods).
+
+        Returns:
+            List of geo-point dicts with keys: lat, lng, source, platform,
+            post_id, name, confidence.
+        """
+        geo_points: list[dict[str, Any]] = []
+        for post in posts:
+            geo = post.get("geo")
+            if not geo:
+                continue
+            lat = geo.get("lat")
+            lng = geo.get("lng") or geo.get("lon")
+            if lat is not None and lng is not None:
+                geo_points.append({
+                    "lat": float(lat),
+                    "lng": float(lng),
+                    "source": "geotag",
+                    "platform": post.get("platform", "unknown"),
+                    "post_id": post.get("post_id", ""),
+                    "name": geo.get("name", ""),
+                    "confidence": 0.85,
+                })
+            elif "raw" in geo:
+                # Twitter geo object -- may contain place info
+                raw = geo["raw"]
+                if isinstance(raw, dict):
+                    coords = raw.get("coordinates")
+                    if coords and isinstance(coords, dict):
+                        coord_list = coords.get("coordinates", [])
+                        if len(coord_list) == 2:
+                            geo_points.append({
+                                "lat": float(coord_list[1]),
+                                "lng": float(coord_list[0]),
+                                "source": "geotag",
+                                "platform": post.get("platform", "unknown"),
+                                "post_id": post.get("post_id", ""),
+                                "name": raw.get("place_id", ""),
+                                "confidence": 0.80,
+                            })
+        return geo_points
+
+    def poll(
+        self,
+        monitor_config: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        """Execute a single poll cycle for a feed monitor.
+
+        Args:
+            monitor_config: Dict describing what to monitor.  Must contain
+                at least ``query`` and ``platforms``.  Optionally includes
+                ``date_from``, ``date_to``, and ``monitor_type``.
+
+        Returns:
+            List of new finding dicts.
+        """
+        query = monitor_config.get("query")
+        if not query:
+            log.warning("poll() called without a query in monitor_config")
+            return []
+
+        platforms = monitor_config.get("platforms")
+        date_from = monitor_config.get("date_from")
+        date_to = monitor_config.get("date_to")
+        monitor_type = monitor_config.get("monitor_type", "keyword")
+
+        if monitor_type == "username":
+            return self.search_username(query, platforms=platforms)
+
+        return self.search_content(
+            query,
+            platforms=platforms,
+            date_from=date_from,
+            date_to=date_to,
+        )

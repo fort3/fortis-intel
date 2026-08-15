@@ -1,0 +1,2377 @@
+/**
+ * Fortis Intelligence Hub - Main Application JavaScript
+ * OSINT Analysis Platform with black/purple punk theme
+ *
+ * Manages: Authentication, tool switching, file upload, API calls,
+ * results rendering (markdown, map, graph, charts), Watch panel,
+ * Knowledge Base panel, and export functionality.
+ */
+
+/* ====================================================================
+   STATE
+   ==================================================================== */
+
+let sessionId = null;
+let currentTool = 'ingest';
+let chatMessages = [];
+let mapInstance = null;
+let graphInstance = null;
+let watchRefreshTimer = null;
+let watchPanelOpen = false;
+let kbPanelOpen = false;
+
+/* ====================================================================
+   UTILITY FUNCTIONS
+   ==================================================================== */
+
+/**
+ * Escape HTML special characters to prevent XSS.
+ * @param {string} text
+ * @returns {string}
+ */
+function escapeHtml(text) {
+    if (text == null) return '';
+    const div = document.createElement('div');
+    div.textContent = String(text);
+    return div.innerHTML;
+}
+
+/**
+ * Show global loading scanline animation.
+ */
+function showLoading() {
+    const el = document.getElementById('globalLoading');
+    if (el) el.classList.add('active');
+    const scanline = document.getElementById('resultsScanline');
+    if (scanline) scanline.classList.add('active');
+}
+
+/**
+ * Hide global loading scanline animation.
+ */
+function hideLoading() {
+    const el = document.getElementById('globalLoading');
+    if (el) el.classList.remove('active');
+    const scanline = document.getElementById('resultsScanline');
+    if (scanline) scanline.classList.remove('active');
+}
+
+/**
+ * Display a toast notification.
+ * @param {string} message
+ * @param {'success'|'error'|'info'|'warning'} type
+ */
+function showToast(message, type) {
+    type = type || 'info';
+    const container = document.getElementById('toastContainer');
+    if (!container) return;
+
+    const toast = document.createElement('div');
+    toast.className = 'toast toast-' + type;
+    toast.textContent = message;
+    container.appendChild(toast);
+
+    // Trigger animation
+    requestAnimationFrame(function () {
+        toast.classList.add('show');
+    });
+
+    setTimeout(function () {
+        toast.classList.remove('show');
+        setTimeout(function () {
+            if (toast.parentNode) toast.parentNode.removeChild(toast);
+        }, 300);
+    }, 4000);
+}
+
+/**
+ * API fetch wrapper with error handling and auth checks.
+ * @param {string} url
+ * @param {object} options - fetch options
+ * @returns {Promise<Response>}
+ */
+async function fetchApi(url, options) {
+    options = options || {};
+    if (!options.headers) options.headers = {};
+
+    // Default to JSON content type for non-FormData requests
+    if (!(options.body instanceof FormData) && !options.headers['Content-Type']) {
+        options.headers['Content-Type'] = 'application/json';
+    }
+
+    try {
+        const response = await fetch(url, options);
+
+        if (response.status === 401) {
+            handleLogout();
+            throw new Error('Session expired. Please sign in again.');
+        }
+
+        return response;
+    } catch (error) {
+        if (error.message !== 'Session expired. Please sign in again.') {
+            console.error('[API]', url, error);
+        }
+        throw error;
+    }
+}
+
+/**
+ * Format a timestamp string into a human-readable date.
+ * @param {string} ts - ISO 8601 timestamp
+ * @returns {string}
+ */
+function formatTimestamp(ts) {
+    if (!ts) return '';
+    const d = new Date(ts);
+    if (isNaN(d.getTime())) return ts;
+
+    const now = new Date();
+    const diffMs = now - d;
+    const diffSec = Math.floor(diffMs / 1000);
+
+    if (diffSec < 60) return diffSec + 's ago';
+    if (diffSec < 3600) return Math.floor(diffSec / 60) + 'm ago';
+    if (diffSec < 86400) return Math.floor(diffSec / 3600) + 'h ago';
+    if (diffSec < 604800) return Math.floor(diffSec / 86400) + 'd ago';
+
+    return d.toLocaleDateString('en-US', {
+        month: 'short', day: 'numeric', year: 'numeric',
+        hour: '2-digit', minute: '2-digit'
+    });
+}
+
+/**
+ * Auto-detect identifier type from user input.
+ * @param {string} input
+ * @returns {string} - 'email'|'username'|'domain'|'ip'|'phone'|'name'|'keyword'
+ */
+function autoDetectIdentifierType(input) {
+    if (!input) return 'keyword';
+    input = input.trim();
+
+    // Email
+    if (/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(input)) return 'email';
+
+    // IP address (v4)
+    if (/^(\d{1,3}\.){3}\d{1,3}$/.test(input)) return 'ip';
+
+    // IP address (v6)
+    if (/^([0-9a-fA-F]{1,4}:){2,7}[0-9a-fA-F]{1,4}$/.test(input)) return 'ip';
+
+    // Phone number
+    if (/^\+?\d[\d\s\-()]{7,}$/.test(input)) return 'phone';
+
+    // Domain
+    if (/^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z]{2,})+$/.test(input)) return 'domain';
+
+    // Username (starts with @)
+    if (/^@/.test(input)) return 'username';
+
+    // Username-like (no spaces, has special chars)
+    if (/^[a-zA-Z0-9_.\-]{3,30}$/.test(input) && !/\s/.test(input)) return 'username';
+
+    // Multi-word likely a name
+    if (/^[A-Z][a-z]+ [A-Z][a-z]+/.test(input)) return 'name';
+
+    return 'keyword';
+}
+
+/**
+ * Render markdown text using the marked library.
+ * Falls back to basic formatting if marked is not loaded.
+ * @param {string} text
+ * @returns {string} HTML
+ */
+function renderMarkdown(text) {
+    if (!text) return '';
+    if (typeof marked !== 'undefined' && marked.parse) {
+        try {
+            return marked.parse(text);
+        } catch (e) {
+            console.warn('[Markdown] Parsing failed, falling back:', e);
+        }
+    }
+    // Basic fallback
+    return escapeHtml(text)
+        .replace(/\n\n/g, '<br><br>')
+        .replace(/\n/g, '<br>')
+        .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+        .replace(/\*([^*]+)\*/g, '<em>$1</em>')
+        .replace(/`([^`]+)`/g, '<code>$1</code>');
+}
+
+/* ====================================================================
+   AUTHENTICATION
+   ==================================================================== */
+
+/**
+ * Check authentication status on page load.
+ */
+async function checkAuth() {
+    try {
+        const response = await fetch('/me');
+        if (response.ok) {
+            const user = await response.json();
+            showApp(user);
+        } else {
+            showLoginModal();
+        }
+    } catch (error) {
+        console.error('[Auth] Check failed:', error);
+        showLoginModal();
+    }
+}
+
+/**
+ * Redirect to OAuth login.
+ */
+function handleLogin() {
+    window.location.href = '/oauth/login';
+}
+
+/**
+ * Log out: POST /logout, reset state, show login modal.
+ */
+async function handleLogout() {
+    try {
+        await fetch('/logout', { method: 'POST' });
+    } catch (e) {
+        console.error('[Auth] Logout error:', e);
+    }
+
+    sessionId = null;
+    currentTool = 'ingest';
+    chatMessages = [];
+    mapInstance = null;
+    graphInstance = null;
+    stopWatchRefresh();
+
+    showLoginModal();
+}
+
+/**
+ * Show the login modal and hide the main app.
+ */
+function showLoginModal() {
+    const modal = document.getElementById('loginModal');
+    if (modal) modal.style.display = 'flex';
+
+    // Hide main app container
+    const appContainer = document.querySelector('.app-container');
+    if (appContainer) appContainer.style.display = 'none';
+
+    const topbar = document.querySelector('.topbar');
+    if (topbar) topbar.style.display = 'none';
+}
+
+/**
+ * Show the main app, populate user info, hide login modal.
+ * @param {object} user - user data from /me
+ */
+function showApp(user) {
+    const modal = document.getElementById('loginModal');
+    if (modal) modal.style.display = 'none';
+
+    const appContainer = document.querySelector('.app-container');
+    if (appContainer) appContainer.style.display = '';
+
+    const topbar = document.querySelector('.topbar');
+    if (topbar) topbar.style.display = '';
+
+    // Set user info
+    const avatar = document.getElementById('userAvatar');
+    const name = document.getElementById('userName');
+    if (user.picture && avatar) {
+        avatar.src = user.picture;
+        avatar.style.display = 'block';
+    } else if (avatar) {
+        avatar.style.display = 'none';
+    }
+    if (name) name.textContent = user.name || user.email || '';
+}
+
+/* ====================================================================
+   OSINT STATUS
+   ==================================================================== */
+
+/**
+ * Fetch OSINT platform configuration status from backend.
+ */
+async function fetchOsintStatus() {
+    try {
+        const response = await fetch('/osint-status');
+        if (!response.ok) return;
+
+        const data = await response.json();
+        const dot = document.getElementById('osintStatusDot');
+        const text = document.getElementById('osintStatusText');
+
+        if (!dot || !text) return;
+
+        const configured = data.configured || [];
+        const unconfigured = data.unconfigured || [];
+
+        if (configured.length > 0) {
+            dot.classList.add('online');
+            dot.classList.remove('offline');
+            text.textContent = 'OSINT Online (' + configured.length + ')';
+            text.title = 'Configured: ' + configured.join(', ') +
+                (unconfigured.length > 0 ? '\nUnconfigured: ' + unconfigured.join(', ') : '');
+        } else {
+            dot.classList.add('offline');
+            dot.classList.remove('online');
+            text.textContent = 'No OSINT Sources';
+            text.title = 'No platforms configured. Check your environment variables.';
+        }
+    } catch (e) {
+        console.warn('[OSINT] Status check failed:', e);
+    }
+}
+
+/* ====================================================================
+   TOOL CARD SWITCHING
+   ==================================================================== */
+
+/**
+ * Names and titles mapping for each tool.
+ */
+const TOOL_TITLES = {
+    ingest: 'Report Ingestion',
+    investigate: 'Investigation',
+    geo: 'Geolocation',
+    batch: 'Batch Investigation',
+    monitor: 'Feed Monitor',
+    qa: 'Q&A (RAG)'
+};
+
+/**
+ * Select a tool card, show its form, hide others.
+ * @param {string} toolName
+ */
+function selectTool(toolName) {
+    currentTool = toolName;
+
+    // Update card active state
+    document.querySelectorAll('.tool-card').forEach(function (card) {
+        if (card.dataset.tool === toolName) {
+            card.classList.add('active');
+        } else {
+            card.classList.remove('active');
+        }
+    });
+
+    // Show matching form, hide others
+    document.querySelectorAll('.tool-form').forEach(function (form) {
+        if (form.id === 'form-' + toolName) {
+            form.classList.add('active');
+        } else {
+            form.classList.remove('active');
+        }
+    });
+
+    // Update panel title
+    const title = document.getElementById('inputPanelTitle');
+    if (title) title.textContent = TOOL_TITLES[toolName] || toolName;
+
+    // Show/hide submit footer (Q&A has its own send button)
+    const footer = document.getElementById('inputPanelFooter');
+    if (footer) {
+        footer.style.display = (toolName === 'qa') ? 'none' : '';
+    }
+
+    // Update submit button label
+    const submitBtn = document.getElementById('btnSubmit');
+    if (submitBtn) {
+        const labels = {
+            ingest: 'Upload & Ingest',
+            investigate: 'Start Investigation',
+            geo: 'Triangulate',
+            batch: 'Run Batch',
+            monitor: 'Create Monitor',
+            qa: 'Send'
+        };
+        submitBtn.innerHTML = '&#x25B6; ' + (labels[toolName] || 'Execute');
+    }
+
+    // Clear results when switching tools
+    clearResults();
+}
+
+/* ====================================================================
+   FILE UPLOAD (Report Ingestion)
+   ==================================================================== */
+
+/**
+ * Initialize drag-and-drop on an upload zone.
+ * @param {string} zoneId - ID of the drop zone element
+ * @param {string} inputId - ID of the file input element
+ * @param {string} listId - ID of the file list display element
+ * @param {string[]} acceptedTypes - MIME type prefixes or extensions
+ */
+function initDropZone(zoneId, inputId, listId, acceptedTypes) {
+    const zone = document.getElementById(zoneId);
+    const input = document.getElementById(inputId);
+    const list = document.getElementById(listId);
+
+    if (!zone || !input) return;
+
+    // Click to browse
+    zone.addEventListener('click', function (e) {
+        if (e.target === input) return; // Don't recurse
+        input.click();
+    });
+
+    // Drag events
+    zone.addEventListener('dragover', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        zone.classList.add('dragover');
+    });
+
+    zone.addEventListener('dragleave', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        zone.classList.remove('dragover');
+    });
+
+    zone.addEventListener('drop', function (e) {
+        e.preventDefault();
+        e.stopPropagation();
+        zone.classList.remove('dragover');
+
+        if (e.dataTransfer.files.length > 0) {
+            input.files = e.dataTransfer.files;
+            updateFileList(input, list);
+        }
+    });
+
+    // File input change
+    input.addEventListener('change', function () {
+        updateFileList(input, list);
+    });
+}
+
+/**
+ * Update the file list display below a drop zone.
+ * @param {HTMLInputElement} input
+ * @param {HTMLElement} list
+ */
+function updateFileList(input, list) {
+    if (!list) return;
+    list.innerHTML = '';
+
+    Array.from(input.files).forEach(function (file) {
+        const item = document.createElement('div');
+        item.className = 'upload-file-item';
+        item.innerHTML = '<span class="upload-file-name">' + escapeHtml(file.name) + '</span>' +
+            '<span class="upload-file-size">' + formatFileSize(file.size) + '</span>';
+        list.appendChild(item);
+    });
+}
+
+/**
+ * Format bytes into human-readable file size.
+ * @param {number} bytes
+ * @returns {string}
+ */
+function formatFileSize(bytes) {
+    if (bytes === 0) return '0 B';
+    var units = ['B', 'KB', 'MB', 'GB'];
+    var i = Math.floor(Math.log(bytes) / Math.log(1024));
+    return (bytes / Math.pow(1024, i)).toFixed(1) + ' ' + units[i];
+}
+
+/**
+ * Upload files for report ingestion.
+ */
+async function uploadReport() {
+    const input = document.getElementById('ingestFiles');
+    if (!input || !input.files.length) {
+        showToast('Please select a file to upload.', 'warning');
+        return;
+    }
+
+    // Validate file types
+    const allowedExtensions = ['.pdf', '.md', '.txt'];
+    for (var i = 0; i < input.files.length; i++) {
+        var file = input.files[i];
+        var ext = '.' + file.name.split('.').pop().toLowerCase();
+        if (allowedExtensions.indexOf(ext) === -1) {
+            showToast('Invalid file type: ' + file.name + '. Only PDF, MD, and TXT are allowed.', 'error');
+            return;
+        }
+    }
+
+    showLoading();
+    showToast('Uploading and processing report...', 'info');
+
+    try {
+        const formData = new FormData();
+        for (var j = 0; j < input.files.length; j++) {
+            formData.append('file', input.files[j]);
+        }
+
+        // Add tags if provided
+        const tagsInput = document.getElementById('ingestTags');
+        if (tagsInput && tagsInput.value.trim()) {
+            formData.append('tags', tagsInput.value.trim());
+        }
+
+        const response = await fetchApi('/upload', {
+            method: 'POST',
+            body: formData,
+            headers: {} // Let browser set multipart boundary
+        });
+
+        const data = await response.json();
+
+        if (data.error) {
+            showToast('Upload error: ' + data.error, 'error');
+            hideLoading();
+            return;
+        }
+
+        sessionId = data.session_id;
+        showToast('Report ingested successfully.', 'success');
+
+        // Show results
+        showResults();
+        const content = document.getElementById('resultsContent');
+        if (content) {
+            var html = '<div class="result-section">';
+            html += '<h3>Report Ingested</h3>';
+            html += '<p>Session ID: <code>' + escapeHtml(sessionId) + '</code></p>';
+            if (data.pages) html += '<p>Pages processed: ' + escapeHtml(String(data.pages)) + '</p>';
+            if (data.chunks) html += '<p>Chunks created: ' + escapeHtml(String(data.chunks)) + '</p>';
+            if (data.mitre_techniques && data.mitre_techniques.length > 0) {
+                html += '<p>MITRE techniques detected: ' + data.mitre_techniques.length + '</p>';
+                html += '<div class="tag-list">';
+                data.mitre_techniques.forEach(function (t) {
+                    html += '<span class="tag">' + escapeHtml(t) + '</span>';
+                });
+                html += '</div>';
+            }
+            if (data.osint_available) {
+                html += '<div class="osint-enrich-prompt">';
+                html += '<p>OSINT enrichment is available for this report.</p>';
+                html += '<button class="btn btn-secondary" id="btnEnrichOsint">Enrich with OSINT</button>';
+                html += '</div>';
+            }
+            html += '</div>';
+            content.innerHTML = html;
+
+            // Bind OSINT enrich button
+            var enrichBtn = document.getElementById('btnEnrichOsint');
+            if (enrichBtn) {
+                enrichBtn.addEventListener('click', function () {
+                    enrichWithOsint();
+                });
+            }
+        }
+    } catch (error) {
+        showToast('Upload failed: ' + error.message, 'error');
+    } finally {
+        hideLoading();
+    }
+}
+
+/**
+ * Enrich uploaded report with OSINT data.
+ */
+async function enrichWithOsint() {
+    if (!sessionId) {
+        showToast('No report uploaded yet.', 'warning');
+        return;
+    }
+
+    showLoading();
+    try {
+        const response = await fetchApi('/enrich', {
+            method: 'POST',
+            body: JSON.stringify({ session_id: sessionId })
+        });
+
+        const data = await response.json();
+        if (data.error) {
+            showToast('Enrichment error: ' + data.error, 'error');
+        } else {
+            showToast('Report enriched with OSINT data.', 'success');
+            if (data.analysis) {
+                renderAnalysis(data);
+            }
+        }
+    } catch (error) {
+        showToast('Enrichment failed: ' + error.message, 'error');
+    } finally {
+        hideLoading();
+    }
+}
+
+/* ====================================================================
+   INVESTIGATION
+   ==================================================================== */
+
+/**
+ * Run an investigation against selected platforms.
+ */
+async function runInvestigation() {
+    const subject = document.getElementById('investSubject');
+    const idTypeSelect = document.getElementById('investIdType');
+    const depthSelect = document.getElementById('investDepth');
+    const purposeTextarea = document.getElementById('investPurpose');
+
+    if (!subject || !subject.value.trim()) {
+        showToast('Please enter a subject identifier.', 'warning');
+        return;
+    }
+
+    // Gather selected platforms
+    var platforms = [];
+    document.querySelectorAll('#investPlatforms input[type="checkbox"]:checked').forEach(function (cb) {
+        platforms.push(cb.value);
+    });
+
+    if (platforms.length === 0) {
+        showToast('Please select at least one platform.', 'warning');
+        return;
+    }
+
+    // Determine identifier type
+    var idType = idTypeSelect ? idTypeSelect.value : 'auto';
+    if (idType === 'auto') {
+        idType = autoDetectIdentifierType(subject.value.trim());
+    }
+
+    showLoading();
+    showResults();
+    var content = document.getElementById('resultsContent');
+    if (content) {
+        content.innerHTML = '<div class="result-section"><p>Investigating <strong>' +
+            escapeHtml(subject.value.trim()) + '</strong> across ' + platforms.length + ' platforms...</p></div>';
+    }
+
+    try {
+        const response = await fetchApi('/investigate', {
+            method: 'POST',
+            body: JSON.stringify({
+                identifier: subject.value.trim(),
+                identifier_type: idType,
+                platforms: platforms,
+                depth: depthSelect ? depthSelect.value : 'standard',
+                investigation_purpose: purposeTextarea ? purposeTextarea.value.trim() : ''
+            })
+        });
+
+        if (!response.ok) {
+            const errData = await response.json();
+            throw new Error(errData.error || 'Investigation failed');
+        }
+
+        const data = await response.json();
+
+        if (data.error) {
+            showToast('Investigation error: ' + data.error, 'error');
+            hideLoading();
+            return;
+        }
+
+        // Store session if returned
+        if (data.session_id) sessionId = data.session_id;
+
+        renderAnalysis(data);
+
+    } catch (error) {
+        showToast('Investigation failed: ' + error.message, 'error');
+        if (content) {
+            content.innerHTML = '<div class="result-section result-error"><p>Error: ' +
+                escapeHtml(error.message) + '</p></div>';
+        }
+    } finally {
+        hideLoading();
+    }
+}
+
+/* ====================================================================
+   GEOLOCATION
+   ==================================================================== */
+
+/**
+ * Get the currently active geolocation tab.
+ * @returns {string}
+ */
+function getActiveGeoTab() {
+    var activeTab = document.querySelector('#geoTabs .tab.active');
+    return activeTab ? activeTab.dataset.geoTab : 'images';
+}
+
+/**
+ * Switch geolocation tabs.
+ * @param {string} tabName
+ */
+function switchGeoTab(tabName) {
+    // Update tab buttons
+    document.querySelectorAll('#geoTabs .tab').forEach(function (tab) {
+        if (tab.dataset.geoTab === tabName) {
+            tab.classList.add('active');
+        } else {
+            tab.classList.remove('active');
+        }
+    });
+
+    // Show/hide tab content
+    var tabIds = ['images', 'social', 'ip', 'manual'];
+    tabIds.forEach(function (id) {
+        var panel = document.getElementById('geoTab-' + id);
+        if (panel) {
+            if (id === tabName) {
+                panel.classList.add('active');
+            } else {
+                panel.classList.remove('active');
+            }
+        }
+    });
+}
+
+/**
+ * Run geolocation triangulation based on active tab.
+ */
+async function runGeolocation() {
+    var activeTab = getActiveGeoTab();
+    var dataPoints = [];
+
+    if (activeTab === 'images') {
+        var imageInput = document.getElementById('geoImages');
+        if (!imageInput || !imageInput.files.length) {
+            showToast('Please select images for geolocation analysis.', 'warning');
+            return;
+        }
+
+        showLoading();
+        showResults();
+
+        // Upload images via FormData
+        var formData = new FormData();
+        for (var i = 0; i < imageInput.files.length; i++) {
+            formData.append('images', imageInput.files[i]);
+        }
+
+        try {
+            var response = await fetchApi('/triangulate', {
+                method: 'POST',
+                body: formData,
+                headers: {}
+            });
+
+            if (!response.ok) {
+                var errData = await response.json();
+                throw new Error(errData.error || 'Geolocation failed');
+            }
+
+            var data = await response.json();
+            if (data.map_data) renderMap(data.map_data);
+            if (data.analysis) {
+                var content = document.getElementById('resultsContent');
+                if (content) content.innerHTML = renderMarkdown(data.analysis);
+                content.style.display = '';
+            }
+        } catch (error) {
+            showToast('Geolocation failed: ' + error.message, 'error');
+        } finally {
+            hideLoading();
+        }
+        return;
+    }
+
+    // For text-based tabs: gather data points
+    if (activeTab === 'social') {
+        var socialInput = document.getElementById('geoSocialInput');
+        if (socialInput && socialInput.value.trim()) {
+            socialInput.value.trim().split('\n').forEach(function (line) {
+                line = line.trim();
+                if (line) dataPoints.push({ type: 'social_post', value: line });
+            });
+        }
+    } else if (activeTab === 'ip') {
+        var ipInput = document.getElementById('geoIpInput');
+        if (ipInput && ipInput.value.trim()) {
+            ipInput.value.trim().split('\n').forEach(function (line) {
+                line = line.trim();
+                if (line) dataPoints.push({ type: 'ip', value: line });
+            });
+        }
+    } else if (activeTab === 'manual') {
+        var manualInput = document.getElementById('geoManualInput');
+        if (manualInput && manualInput.value.trim()) {
+            manualInput.value.trim().split('\n').forEach(function (line) {
+                line = line.trim();
+                if (!line) return;
+                // Try to parse as lat,lng
+                var parts = line.split(',');
+                if (parts.length === 2 && !isNaN(parseFloat(parts[0])) && !isNaN(parseFloat(parts[1]))) {
+                    dataPoints.push({
+                        type: 'coordinates',
+                        lat: parseFloat(parts[0].trim()),
+                        lng: parseFloat(parts[1].trim())
+                    });
+                } else {
+                    dataPoints.push({ type: 'address', value: line });
+                }
+            });
+        }
+    }
+
+    if (dataPoints.length === 0) {
+        showToast('Please enter at least one data point.', 'warning');
+        return;
+    }
+
+    showLoading();
+    showResults();
+
+    try {
+        var response = await fetchApi('/triangulate', {
+            method: 'POST',
+            body: JSON.stringify({ data_points: dataPoints })
+        });
+
+        if (!response.ok) {
+            var errData = await response.json();
+            throw new Error(errData.error || 'Triangulation failed');
+        }
+
+        var data = await response.json();
+        if (data.map_data) renderMap(data.map_data);
+        if (data.analysis) {
+            var content = document.getElementById('resultsContent');
+            if (content) {
+                content.innerHTML = renderMarkdown(data.analysis);
+                content.style.display = '';
+            }
+        }
+    } catch (error) {
+        showToast('Triangulation failed: ' + error.message, 'error');
+    } finally {
+        hideLoading();
+    }
+}
+
+/* ====================================================================
+   BATCH INVESTIGATION
+   ==================================================================== */
+
+/**
+ * Run batch investigation on multiple identifiers.
+ */
+async function runBatchInvestigation() {
+    var textarea = document.getElementById('batchIdentifiers');
+    var fileInput = document.getElementById('batchFile');
+    var idTypeSelect = document.getElementById('batchIdType');
+
+    var rawText = textarea ? textarea.value.trim() : '';
+    var hasFile = fileInput && fileInput.files.length > 0;
+
+    if (!rawText && !hasFile) {
+        showToast('Please enter identifiers or upload a file.', 'warning');
+        return;
+    }
+
+    // Gather platforms
+    var platforms = [];
+    document.querySelectorAll('#batchPlatforms input[type="checkbox"]:checked').forEach(function (cb) {
+        platforms.push(cb.value);
+    });
+
+    showLoading();
+    showResults();
+
+    var content = document.getElementById('resultsContent');
+    if (content) {
+        content.innerHTML = '<div class="result-section"><p>Processing batch investigation...</p></div>';
+        content.style.display = '';
+    }
+
+    try {
+        var response;
+        if (hasFile) {
+            var formData = new FormData();
+            formData.append('file', fileInput.files[0]);
+            if (rawText) formData.append('identifiers', rawText);
+            formData.append('identifier_type', idTypeSelect ? idTypeSelect.value : 'auto');
+            formData.append('platforms', JSON.stringify(platforms));
+
+            response = await fetchApi('/batch-investigate', {
+                method: 'POST',
+                body: formData,
+                headers: {}
+            });
+        } else {
+            response = await fetchApi('/batch-investigate', {
+                method: 'POST',
+                body: JSON.stringify({
+                    identifiers: rawText,
+                    identifier_type: idTypeSelect ? idTypeSelect.value : 'auto',
+                    platforms: platforms
+                })
+            });
+        }
+
+        if (!response.ok) {
+            var errData = await response.json();
+            throw new Error(errData.error || 'Batch investigation failed');
+        }
+
+        var data = await response.json();
+
+        if (data.error) {
+            showToast('Batch error: ' + data.error, 'error');
+            hideLoading();
+            return;
+        }
+
+        // Render synthesis
+        if (content) {
+            var html = '';
+
+            // Summary header
+            if (data.summary) {
+                html += '<div class="result-section batch-summary">';
+                html += '<h3>Batch Summary</h3>';
+                html += '<div class="batch-stats">';
+                html += '<div class="batch-stat"><span class="batch-stat-value">' + (data.summary.total || 0) + '</span><span class="batch-stat-label">Total</span></div>';
+                html += '<div class="batch-stat"><span class="batch-stat-value">' + (data.summary.successful || 0) + '</span><span class="batch-stat-label">Successful</span></div>';
+                html += '<div class="batch-stat"><span class="batch-stat-value">' + (data.summary.failed || 0) + '</span><span class="batch-stat-label">Failed</span></div>';
+                html += '</div>';
+                html += '</div>';
+            }
+
+            // Synthesis
+            if (data.synthesis) {
+                html += '<div class="result-section">';
+                html += '<h3>Synthesis</h3>';
+                html += renderMarkdown(data.synthesis);
+                html += '</div>';
+            }
+
+            // Per-entity results
+            if (data.results && data.results.length > 0) {
+                html += '<div class="result-section">';
+                html += '<h3>Individual Results</h3>';
+                data.results.forEach(function (r) {
+                    html += '<details class="batch-entity-result">';
+                    html += '<summary><strong>' + escapeHtml(r.identifier || 'Unknown') + '</strong>';
+                    if (r.status) html += ' <span class="badge badge-' + (r.status === 'success' ? 'success' : 'error') + '">' + escapeHtml(r.status) + '</span>';
+                    html += '</summary>';
+                    html += '<div class="batch-entity-body">';
+                    if (r.analysis) html += renderMarkdown(r.analysis);
+                    if (r.error) html += '<p class="text-error">' + escapeHtml(r.error) + '</p>';
+                    html += '</div>';
+                    html += '</details>';
+                });
+                html += '</div>';
+            }
+
+            content.innerHTML = html;
+            content.style.display = '';
+        }
+
+        // Render map/graph if provided
+        if (data.map_data) renderMap(data.map_data);
+        if (data.graph_data) renderGraph(data.graph_data);
+        if (data.chart_data) renderCharts(data.chart_data);
+
+    } catch (error) {
+        showToast('Batch investigation failed: ' + error.message, 'error');
+    } finally {
+        hideLoading();
+    }
+}
+
+/* ====================================================================
+   FEED MONITOR
+   ==================================================================== */
+
+/**
+ * Create a new feed monitor.
+ */
+async function createMonitor() {
+    var typeSelect = document.getElementById('monitorType');
+    var queryInput = document.getElementById('monitorQuery');
+    var intervalSelect = document.getElementById('monitorInterval');
+    var thresholdSelect = document.getElementById('monitorThreshold');
+
+    if (!queryInput || !queryInput.value.trim()) {
+        showToast('Please enter a search query.', 'warning');
+        return;
+    }
+
+    // Gather platforms
+    var platforms = [];
+    document.querySelectorAll('#monitorPlatforms input[type="checkbox"]:checked').forEach(function (cb) {
+        platforms.push(cb.value);
+    });
+
+    if (platforms.length === 0) {
+        showToast('Please select at least one platform.', 'warning');
+        return;
+    }
+
+    showLoading();
+
+    try {
+        var response = await fetchApi('/monitor/create', {
+            method: 'POST',
+            body: JSON.stringify({
+                monitor_type: typeSelect ? typeSelect.value : 'keyword',
+                query: queryInput.value.trim(),
+                platforms: platforms,
+                interval_minutes: intervalSelect ? parseInt(intervalSelect.value, 10) : 15,
+                threshold: thresholdSelect ? thresholdSelect.value : 'high_confidence'
+            })
+        });
+
+        if (!response.ok) {
+            var errData = await response.json();
+            throw new Error(errData.error || 'Monitor creation failed');
+        }
+
+        var data = await response.json();
+        showToast('Monitor created: ' + (data.monitor_id || 'OK'), 'success');
+
+        // Show in results
+        showResults();
+        var content = document.getElementById('resultsContent');
+        if (content) {
+            content.innerHTML = '<div class="result-section">' +
+                '<h3>Monitor Created</h3>' +
+                '<p>Monitor ID: <code>' + escapeHtml(data.monitor_id || '') + '</code></p>' +
+                '<p>Watching for: <strong>' + escapeHtml(queryInput.value.trim()) + '</strong></p>' +
+                '<p>Platforms: ' + escapeHtml(platforms.join(', ')) + '</p>' +
+                '<p>Interval: every ' + escapeHtml(intervalSelect ? intervalSelect.value : '15') + ' minutes</p>' +
+                '</div>';
+            content.style.display = '';
+        }
+
+        // Refresh monitor list
+        loadMonitorList();
+
+    } catch (error) {
+        showToast('Monitor creation failed: ' + error.message, 'error');
+    } finally {
+        hideLoading();
+    }
+}
+
+/**
+ * Load the list of active monitors.
+ */
+async function loadMonitorList() {
+    try {
+        var response = await fetchApi('/monitor/list');
+        if (!response.ok) return;
+        var data = await response.json();
+        // The monitor list could be displayed in results or a panel.
+        // For now this is used internally.
+        return data.monitors || [];
+    } catch (e) {
+        console.warn('[Monitor] List load failed:', e);
+        return [];
+    }
+}
+
+/* ====================================================================
+   Q&A (RAG)
+   ==================================================================== */
+
+/**
+ * Send a question to the RAG Q&A endpoint.
+ */
+async function sendChatMessage() {
+    var input = document.getElementById('chatInput');
+    if (!input || !input.value.trim()) return;
+
+    var question = input.value.trim();
+    input.value = '';
+
+    // Append user message to chat
+    appendChatMessage('user', question);
+
+    // Show typing indicator
+    var typingId = appendChatMessage('ai', '<span class="typing-indicator">Thinking...</span>', true);
+
+    try {
+        var response = await fetchApi('/ask', {
+            method: 'POST',
+            body: JSON.stringify({
+                session_id: sessionId || '',
+                question: question
+            })
+        });
+
+        if (!response.ok) {
+            var errData = await response.json();
+            throw new Error(errData.error || 'Q&A failed');
+        }
+
+        var data = await response.json();
+
+        // Remove typing indicator
+        removeChatMessage(typingId);
+
+        if (data.error) {
+            appendChatMessage('ai', 'Error: ' + data.error);
+        } else if (data.answer) {
+            var kbNote = '';
+            if (data.kb_context) {
+                kbNote = '<div class="kb-context-indicator">Based on Knowledge Base context</div>';
+            }
+            appendChatMessage('ai', kbNote + renderMarkdown(data.answer), false, true);
+
+            // Store in chat history
+            chatMessages.push({
+                role: 'user',
+                text: question,
+                timestamp: new Date().toISOString()
+            });
+            chatMessages.push({
+                role: 'assistant',
+                text: data.answer,
+                timestamp: new Date().toISOString(),
+                kb_context: data.kb_context || false
+            });
+        } else {
+            appendChatMessage('ai', 'No response returned.');
+        }
+    } catch (error) {
+        removeChatMessage(typingId);
+        appendChatMessage('ai', 'Error: ' + error.message);
+    }
+}
+
+/**
+ * Append a message to the Q&A chat panel.
+ * @param {'user'|'ai'} role
+ * @param {string} content - HTML content
+ * @param {boolean} isRaw - if true, content is used as innerHTML directly
+ * @param {boolean} isHtml - if true, content is already HTML (don't escape)
+ * @returns {string} message element ID
+ */
+function appendChatMessage(role, content, isRaw, isHtml) {
+    var container = document.getElementById('chatMessages');
+    if (!container) return '';
+
+    var msgId = 'chat-msg-' + Date.now() + '-' + Math.random().toString(36).substr(2, 5);
+
+    var msg = document.createElement('div');
+    msg.className = 'chat-message ' + role;
+    msg.id = msgId;
+
+    var avatar = document.createElement('div');
+    avatar.className = 'chat-avatar';
+    avatar.textContent = role === 'user' ? 'U' : 'F';
+
+    var bubble = document.createElement('div');
+    bubble.className = 'chat-bubble';
+
+    if (isRaw || isHtml) {
+        bubble.innerHTML = content;
+    } else {
+        bubble.textContent = content;
+    }
+
+    msg.appendChild(avatar);
+    msg.appendChild(bubble);
+    container.appendChild(msg);
+
+    // Scroll to bottom
+    container.scrollTop = container.scrollHeight;
+
+    return msgId;
+}
+
+/**
+ * Remove a chat message by ID (e.g., typing indicator).
+ * @param {string} msgId
+ */
+function removeChatMessage(msgId) {
+    if (!msgId) return;
+    var el = document.getElementById(msgId);
+    if (el && el.parentNode) el.parentNode.removeChild(el);
+}
+
+/* ====================================================================
+   RESULTS RENDERING
+   ==================================================================== */
+
+/**
+ * Clear results panel and show empty state.
+ */
+function clearResults() {
+    var content = document.getElementById('resultsContent');
+    var empty = document.getElementById('resultsEmpty');
+    var mapContainer = document.getElementById('mapContainer');
+    var graphContainer = document.getElementById('graphContainer');
+    var chartsContainer = document.getElementById('chartsContainer');
+    var exportBar = document.getElementById('exportBar');
+    var sensitivity = document.getElementById('resultsSensitivity');
+
+    if (content) { content.innerHTML = ''; content.style.display = 'none'; }
+    if (empty) empty.style.display = '';
+    if (mapContainer) mapContainer.style.display = 'none';
+    if (graphContainer) graphContainer.style.display = 'none';
+    if (chartsContainer) { chartsContainer.innerHTML = ''; chartsContainer.style.display = 'none'; }
+    if (exportBar) exportBar.style.display = 'none';
+    if (sensitivity) sensitivity.innerHTML = '';
+}
+
+/**
+ * Show the results panel (hide empty state, show content area).
+ */
+function showResults() {
+    var empty = document.getElementById('resultsEmpty');
+    var content = document.getElementById('resultsContent');
+    var exportBar = document.getElementById('exportBar');
+
+    if (empty) empty.style.display = 'none';
+    if (content) content.style.display = '';
+    if (exportBar) exportBar.style.display = '';
+}
+
+/**
+ * Render a full analysis result.
+ * @param {object} data - response from backend with analysis, map_data, graph_data, etc.
+ */
+function renderAnalysis(data) {
+    showResults();
+
+    var content = document.getElementById('resultsContent');
+
+    // Render sensitivity badge
+    var sensitivity = document.getElementById('resultsSensitivity');
+    if (sensitivity && data.sensitivity) {
+        var badgeClass = 'badge-' + (data.sensitivity === 'HIGH' ? 'error' :
+            data.sensitivity === 'MEDIUM' ? 'warning' : 'info');
+        sensitivity.innerHTML = '<span class="badge ' + badgeClass + '">' +
+            escapeHtml(data.sensitivity) + '</span>';
+    }
+
+    // Render analysis text
+    if (content && data.analysis) {
+        content.innerHTML = '<div class="result-section analysis-content">' +
+            renderMarkdown(data.analysis) + '</div>';
+        content.style.display = '';
+    }
+
+    // Render map if present
+    if (data.map_data) renderMap(data.map_data);
+
+    // Render entity graph if present
+    if (data.graph_data) renderGraph(data.graph_data);
+
+    // Render charts if present
+    if (data.chart_data) renderCharts(data.chart_data);
+}
+
+/**
+ * Render a Leaflet map with markers, triangulation overlay, heatmap.
+ * @param {object} mapData - { markers, triangulation, heatmap, connections, center, zoom }
+ */
+function renderMap(mapData) {
+    var mapContainer = document.getElementById('mapContainer');
+    var mapDiv = document.getElementById('map');
+    if (!mapContainer || !mapDiv) return;
+
+    mapContainer.style.display = '';
+
+    // Clear previous map
+    if (mapInstance) {
+        mapInstance.remove();
+        mapInstance = null;
+    }
+
+    // Default center and zoom
+    var center = mapData.center || [20, 0];
+    var zoom = mapData.zoom || 3;
+
+    // Initialize map
+    mapInstance = L.map('map', {
+        center: center,
+        zoom: zoom,
+        zoomControl: true
+    });
+
+    // CartoDB Dark Matter tiles
+    L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OSM</a> &copy; <a href="https://carto.com/">CARTO</a>',
+        subdomains: 'abcd',
+        maxZoom: 19
+    }).addTo(mapInstance);
+
+    // Layer groups for control
+    var markerLayer = L.layerGroup().addTo(mapInstance);
+    var overlayLayers = { 'Markers': markerLayer };
+    var bounds = [];
+
+    // Color mapping by source type
+    var sourceColors = {
+        exif: '#9b59b6',
+        ip: '#8b5cf6',
+        social: '#d946ef',
+        manual: '#6b3fa0',
+        address: '#bb6bd9',
+        default: '#9b59b6'
+    };
+
+    // Render markers
+    if (mapData.markers && mapData.markers.length > 0) {
+        mapData.markers.forEach(function (m) {
+            var lat = m.lat || m.latitude;
+            var lng = m.lng || m.longitude;
+            if (lat == null || lng == null) return;
+
+            var color = sourceColors[m.source_type || m.type] || sourceColors.default;
+
+            var marker = L.circleMarker([lat, lng], {
+                radius: 8,
+                fillColor: color,
+                color: '#ffffff',
+                weight: 2,
+                opacity: 0.9,
+                fillOpacity: 0.8
+            });
+
+            // Popup
+            var popupHtml = '<div class="map-popup">';
+            if (m.label || m.name) popupHtml += '<strong>' + escapeHtml(m.label || m.name) + '</strong><br>';
+            popupHtml += 'Lat: ' + lat.toFixed(4) + ', Lng: ' + lng.toFixed(4);
+            if (m.source_type || m.type) popupHtml += '<br>Source: ' + escapeHtml(m.source_type || m.type);
+            if (m.confidence) popupHtml += '<br>Confidence: ' + escapeHtml(String(m.confidence));
+            if (m.description) popupHtml += '<br>' + escapeHtml(m.description);
+            popupHtml += '</div>';
+            marker.bindPopup(popupHtml);
+
+            marker.addTo(markerLayer);
+            bounds.push([lat, lng]);
+        });
+    }
+
+    // Render triangulation overlay
+    if (mapData.triangulation) {
+        var tri = mapData.triangulation;
+        var triLayer = L.layerGroup().addTo(mapInstance);
+        overlayLayers['Triangulation'] = triLayer;
+
+        // Source points to center lines
+        if (tri.source_points && tri.center) {
+            tri.source_points.forEach(function (pt) {
+                L.polyline(
+                    [[pt.lat || pt[0], pt.lng || pt[1]], [tri.center.lat || tri.center[0], tri.center.lng || tri.center[1]]],
+                    { color: '#9b59b6', weight: 2, dashArray: '8, 4', opacity: 0.7 }
+                ).addTo(triLayer);
+            });
+        }
+
+        // Confidence radius circle
+        if (tri.center && tri.confidence_radius) {
+            L.circle(
+                [tri.center.lat || tri.center[0], tri.center.lng || tri.center[1]],
+                {
+                    radius: tri.confidence_radius,
+                    color: '#9b59b6',
+                    fillColor: '#9b59b6',
+                    fillOpacity: 0.1,
+                    weight: 2,
+                    dashArray: '4, 4'
+                }
+            ).addTo(triLayer);
+        }
+
+        // Pulsing center marker
+        if (tri.center) {
+            var centerLat = tri.center.lat || tri.center[0];
+            var centerLng = tri.center.lng || tri.center[1];
+
+            L.circleMarker([centerLat, centerLng], {
+                radius: 12,
+                fillColor: '#d946ef',
+                color: '#ffffff',
+                weight: 3,
+                opacity: 1,
+                fillOpacity: 0.9,
+                className: 'pulse-marker'
+            }).bindPopup('<strong>Triangulated Center</strong><br>Lat: ' + centerLat.toFixed(4) + ', Lng: ' + centerLng.toFixed(4))
+                .addTo(triLayer);
+
+            bounds.push([centerLat, centerLng]);
+        }
+    }
+
+    // Render connections/lines
+    if (mapData.connections && mapData.connections.length > 0) {
+        var connLayer = L.layerGroup().addTo(mapInstance);
+        overlayLayers['Connections'] = connLayer;
+
+        mapData.connections.forEach(function (conn) {
+            if (conn.from && conn.to) {
+                L.polyline(
+                    [[conn.from.lat, conn.from.lng], [conn.to.lat, conn.to.lng]],
+                    { color: '#8b5cf6', weight: 1.5, opacity: 0.5 }
+                ).addTo(connLayer);
+            }
+        });
+    }
+
+    // Render heatmap via Leaflet.heat
+    if (mapData.heatmap && mapData.heatmap.length > 0 && typeof L.heatLayer !== 'undefined') {
+        var heatPoints = mapData.heatmap.map(function (pt) {
+            return [pt.lat || pt[0], pt.lng || pt[1], pt.intensity || pt[2] || 1];
+        });
+
+        var heatLayer = L.heatLayer(heatPoints, {
+            radius: 25,
+            blur: 15,
+            maxZoom: 17,
+            gradient: {
+                0.0: '#1a0a2e',
+                0.3: '#6b3fa0',
+                0.5: '#9b59b6',
+                0.7: '#d946ef',
+                1.0: '#f5d0fe'
+            }
+        }).addTo(mapInstance);
+
+        overlayLayers['Heatmap'] = heatLayer;
+    }
+
+    // Layer control
+    if (Object.keys(overlayLayers).length > 1) {
+        L.control.layers(null, overlayLayers, { collapsed: false, position: 'topright' }).addTo(mapInstance);
+    }
+
+    // Fit bounds
+    if (bounds.length > 0) {
+        mapInstance.fitBounds(bounds, { padding: [40, 40], maxZoom: 14 });
+    }
+
+    // Force resize (fix for hidden container)
+    setTimeout(function () {
+        if (mapInstance) mapInstance.invalidateSize();
+    }, 200);
+}
+
+/**
+ * Render a Cytoscape.js entity graph.
+ * @param {object} graphData - { nodes: [...], edges: [...] }
+ */
+function renderGraph(graphData) {
+    var graphContainer = document.getElementById('graphContainer');
+    var graphDiv = document.getElementById('graph');
+    if (!graphContainer || !graphDiv) return;
+    if (typeof cytoscape === 'undefined') {
+        console.warn('[Graph] Cytoscape.js not loaded');
+        return;
+    }
+    if (!graphData || !graphData.nodes || graphData.nodes.length === 0) return;
+
+    graphContainer.style.display = '';
+
+    // Destroy previous instance
+    if (graphInstance) {
+        graphInstance.destroy();
+        graphInstance = null;
+    }
+
+    // Node colors by entity type
+    var nodeColors = {
+        person: '#9b59b6',
+        org: '#8b5cf6',
+        organization: '#8b5cf6',
+        location: '#22c55e',
+        account: '#bb6bd9',
+        domain: '#6b3fa0',
+        event: '#f59e0b',
+        media: '#d946ef',
+        ip: '#6366f1',
+        email: '#ec4899',
+        phone: '#14b8a6',
+        threat_actor: '#ef4444',
+        cve: '#f97316',
+        malware: '#e11d48',
+        default: '#9b59b6'
+    };
+
+    // Build Cytoscape elements
+    var elements = [];
+
+    graphData.nodes.forEach(function (node) {
+        var nodeData = node.data || node;
+        elements.push({
+            group: 'nodes',
+            data: {
+                id: nodeData.id,
+                label: nodeData.label || nodeData.name || nodeData.id,
+                type: nodeData.type || 'default',
+                color: nodeColors[nodeData.type] || nodeColors.default
+            }
+        });
+    });
+
+    graphData.edges.forEach(function (edge) {
+        var edgeData = edge.data || edge;
+        elements.push({
+            group: 'edges',
+            data: {
+                id: edgeData.id || (edgeData.source + '-' + edgeData.target),
+                source: edgeData.source,
+                target: edgeData.target,
+                label: edgeData.label || edgeData.relationship || ''
+            }
+        });
+    });
+
+    graphInstance = cytoscape({
+        container: graphDiv,
+        elements: elements,
+        style: [
+            {
+                selector: 'node',
+                style: {
+                    'background-color': 'data(color)',
+                    'label': 'data(label)',
+                    'color': '#e5e7eb',
+                    'font-size': '10px',
+                    'text-valign': 'bottom',
+                    'text-margin-y': 5,
+                    'text-max-width': '100px',
+                    'text-wrap': 'ellipsis',
+                    'width': 30,
+                    'height': 30,
+                    'border-width': 2,
+                    'border-color': '#1a1a2e'
+                }
+            },
+            {
+                selector: 'node:selected',
+                style: {
+                    'border-width': 3,
+                    'border-color': '#ffffff',
+                    'width': 40,
+                    'height': 40
+                }
+            },
+            {
+                selector: 'edge',
+                style: {
+                    'width': 1.5,
+                    'line-color': 'rgba(155, 89, 182, 0.4)',
+                    'target-arrow-color': 'rgba(155, 89, 182, 0.6)',
+                    'target-arrow-shape': 'triangle',
+                    'arrow-scale': 0.8,
+                    'curve-style': 'bezier',
+                    'label': 'data(label)',
+                    'font-size': '8px',
+                    'color': '#9ca3af',
+                    'text-rotation': 'autorotate'
+                }
+            },
+            {
+                selector: 'edge:selected',
+                style: {
+                    'line-color': '#9b59b6',
+                    'target-arrow-color': '#9b59b6',
+                    'width': 3
+                }
+            }
+        ],
+        layout: {
+            name: 'cose',
+            animate: false,
+            padding: 30,
+            nodeRepulsion: function () { return 8000; },
+            idealEdgeLength: function () { return 80; },
+            nodeOverlap: 20
+        },
+        minZoom: 0.3,
+        maxZoom: 3
+    });
+
+    // Node click for detail popup
+    graphInstance.on('tap', 'node', function (evt) {
+        var nodeData = evt.target.data();
+        var popupHtml = '<div class="graph-popup">';
+        popupHtml += '<h4>' + escapeHtml(nodeData.label) + '</h4>';
+        popupHtml += '<p>Type: ' + escapeHtml(nodeData.type) + '</p>';
+        popupHtml += '<p>ID: ' + escapeHtml(nodeData.id) + '</p>';
+
+        // Show connected edges
+        var edges = evt.target.connectedEdges();
+        if (edges.length > 0) {
+            popupHtml += '<p>Connections: ' + edges.length + '</p>';
+        }
+        popupHtml += '</div>';
+
+        showToast(nodeData.label + ' (' + nodeData.type + ') - ' + edges.length + ' connections', 'info');
+    });
+}
+
+/**
+ * Render chart images (base64 PNGs) or Chart.js charts.
+ * @param {object|Array} chartData - either an array of base64 images or chart config objects
+ */
+function renderCharts(chartData) {
+    var container = document.getElementById('chartsContainer');
+    if (!container) return;
+
+    container.innerHTML = '';
+    container.style.display = '';
+
+    if (!chartData) return;
+
+    // Handle array of base64 PNG images
+    if (Array.isArray(chartData)) {
+        chartData.forEach(function (chart) {
+            if (chart.image_base64 || chart.image) {
+                var img = document.createElement('img');
+                img.className = 'chart-image';
+                img.src = 'data:image/png;base64,' + (chart.image_base64 || chart.image);
+                img.alt = chart.title || 'Chart';
+                container.appendChild(img);
+            } else if (chart.type && typeof Chart !== 'undefined') {
+                // Chart.js configuration
+                var wrapper = document.createElement('div');
+                wrapper.className = 'chart-wrapper';
+                var canvas = document.createElement('canvas');
+                wrapper.appendChild(canvas);
+                container.appendChild(wrapper);
+
+                new Chart(canvas, chart);
+            }
+        });
+    } else if (chartData.charts) {
+        // Nested charts array
+        renderCharts(chartData.charts);
+    }
+}
+
+/* ====================================================================
+   WATCH PANEL (Feed Monitor)
+   ==================================================================== */
+
+/**
+ * Open the Watch (feed monitor) slide-in panel.
+ */
+function openWatchPanel() {
+    var panel = document.getElementById('watchPanel');
+    var overlay = document.getElementById('watchOverlay');
+
+    if (panel) panel.classList.add('open');
+    if (overlay) overlay.classList.add('open');
+
+    watchPanelOpen = true;
+    loadWatchFindings();
+    startWatchRefresh();
+}
+
+/**
+ * Close the Watch panel.
+ */
+function closeWatchPanel() {
+    var panel = document.getElementById('watchPanel');
+    var overlay = document.getElementById('watchOverlay');
+
+    if (panel) panel.classList.remove('open');
+    if (overlay) overlay.classList.remove('open');
+
+    watchPanelOpen = false;
+    stopWatchRefresh();
+}
+
+/**
+ * Load watch findings from the API.
+ */
+async function loadWatchFindings() {
+    var findingsEl = document.getElementById('watchFindings');
+    var emptyState = document.querySelector('#watchBody .results-empty');
+
+    try {
+        var response = await fetchApi('/monitor/watch');
+        if (!response.ok) return;
+
+        var data = await response.json();
+        var findings = data.findings || [];
+
+        if (findings.length === 0) {
+            if (findingsEl) findingsEl.style.display = 'none';
+            if (emptyState) emptyState.style.display = '';
+            return;
+        }
+
+        if (emptyState) emptyState.style.display = 'none';
+        if (findingsEl) {
+            findingsEl.style.display = '';
+            findingsEl.innerHTML = findings.map(function (f) {
+                return renderWatchFinding(f);
+            }).join('');
+        }
+    } catch (e) {
+        console.warn('[Watch] Load failed:', e);
+    }
+}
+
+/**
+ * Render a single watch finding card.
+ * @param {object} finding
+ * @returns {string} HTML
+ */
+function renderWatchFinding(finding) {
+    var confidenceClass = (finding.confidence === 'high') ? 'confidence-high' :
+        (finding.confidence === 'medium') ? 'confidence-medium' : 'confidence-low';
+
+    return '<div class="watch-finding" data-id="' + escapeHtml(finding.id || '') + '">' +
+        '<div class="watch-finding-header">' +
+            '<span class="watch-finding-source">' + escapeHtml(finding.platform || finding.source || '') + '</span>' +
+            '<span class="watch-finding-time">' + formatTimestamp(finding.timestamp || finding.created_at) + '</span>' +
+        '</div>' +
+        '<div class="watch-finding-body">' +
+            '<span class="badge ' + confidenceClass + '">' + escapeHtml(finding.confidence || 'unknown') + '</span>' +
+            '<p>' + escapeHtml(finding.summary || finding.content || '') + '</p>' +
+        '</div>' +
+        '<div class="watch-finding-actions">' +
+            '<button class="btn btn-sm btn-primary watch-approve-btn" data-finding-id="' + escapeHtml(finding.id || '') + '">Approve</button>' +
+            '<button class="btn btn-sm btn-ghost watch-dismiss-btn" data-finding-id="' + escapeHtml(finding.id || '') + '">Dismiss</button>' +
+        '</div>' +
+    '</div>';
+}
+
+/**
+ * Approve a watch finding.
+ * @param {string} findingId
+ */
+async function approveFinding(findingId) {
+    try {
+        var response = await fetchApi('/monitor/' + findingId + '/approve', {
+            method: 'POST',
+            body: JSON.stringify({})
+        });
+
+        if (response.ok) {
+            showToast('Finding approved.', 'success');
+            loadWatchFindings();
+        } else {
+            var data = await response.json();
+            showToast('Approve failed: ' + (data.error || 'Unknown error'), 'error');
+        }
+    } catch (e) {
+        showToast('Approve failed: ' + e.message, 'error');
+    }
+}
+
+/**
+ * Dismiss a watch finding.
+ * @param {string} findingId
+ */
+async function dismissFinding(findingId) {
+    try {
+        var response = await fetchApi('/monitor/' + findingId + '/dismiss', {
+            method: 'POST',
+            body: JSON.stringify({})
+        });
+
+        if (response.ok) {
+            showToast('Finding dismissed.', 'info');
+            loadWatchFindings();
+        } else {
+            var data = await response.json();
+            showToast('Dismiss failed: ' + (data.error || 'Unknown error'), 'error');
+        }
+    } catch (e) {
+        showToast('Dismiss failed: ' + e.message, 'error');
+    }
+}
+
+/**
+ * Start auto-refreshing watch findings every 30 seconds.
+ */
+function startWatchRefresh() {
+    stopWatchRefresh();
+    watchRefreshTimer = setInterval(function () {
+        if (watchPanelOpen) loadWatchFindings();
+    }, 30000);
+}
+
+/**
+ * Stop the watch auto-refresh timer.
+ */
+function stopWatchRefresh() {
+    if (watchRefreshTimer) {
+        clearInterval(watchRefreshTimer);
+        watchRefreshTimer = null;
+    }
+}
+
+/* ====================================================================
+   KNOWLEDGE BASE PANEL
+   ==================================================================== */
+
+/**
+ * Open the Knowledge Base slide-in panel.
+ */
+function openKbPanel() {
+    var panel = document.getElementById('kbPanel');
+    var overlay = document.getElementById('kbOverlay');
+
+    if (panel) panel.classList.add('open');
+    if (overlay) overlay.classList.add('open');
+
+    kbPanelOpen = true;
+    loadKbReports();
+    loadKbStats();
+}
+
+/**
+ * Close the KB panel.
+ */
+function closeKbPanel() {
+    var panel = document.getElementById('kbPanel');
+    var overlay = document.getElementById('kbOverlay');
+
+    if (panel) panel.classList.remove('open');
+    if (overlay) overlay.classList.remove('open');
+
+    kbPanelOpen = false;
+}
+
+/**
+ * Load reports from the Knowledge Base.
+ */
+async function loadKbReports() {
+    var listEl = document.getElementById('kbReportList');
+    if (!listEl) return;
+
+    var searchVal = '';
+    var searchInput = document.getElementById('kbSearch');
+    if (searchInput) searchVal = searchInput.value.trim();
+
+    try {
+        var url = '/kb/reports';
+        if (searchVal) url += '?q=' + encodeURIComponent(searchVal);
+
+        var response = await fetchApi(url);
+        if (!response.ok) return;
+
+        var data = await response.json();
+        var reports = data.reports || [];
+
+        if (reports.length === 0) {
+            listEl.innerHTML = '<div class="kb-empty">No reports found.</div>';
+            return;
+        }
+
+        listEl.innerHTML = reports.map(function (report) {
+            var activeClass = report.in_knowledge_base ? 'kb-report-active' : 'kb-report-inactive';
+            return '<div class="kb-report-item ' + activeClass + '" data-report-id="' + escapeHtml(report.id || report.report_id || '') + '">' +
+                '<div class="kb-report-info">' +
+                    '<div class="kb-report-title">' + escapeHtml(report.title || report.indicator || report.filename || 'Untitled') + '</div>' +
+                    '<div class="kb-report-meta">' +
+                        escapeHtml(report.report_type || report.type || '') + ' &middot; ' +
+                        formatTimestamp(report.created_at) + ' &middot; ' +
+                        (report.kb_chunk_count || 0) + ' chunks' +
+                    '</div>' +
+                '</div>' +
+                '<div class="kb-report-actions">' +
+                    '<button class="btn btn-sm btn-ghost kb-toggle-btn" data-report-id="' + escapeHtml(report.id || report.report_id || '') + '">' +
+                        (report.in_knowledge_base ? 'Remove' : 'Add') +
+                    '</button>' +
+                    '<button class="btn btn-sm btn-ghost kb-delete-btn" data-report-id="' + escapeHtml(report.id || report.report_id || '') + '">' +
+                        'Delete' +
+                    '</button>' +
+                '</div>' +
+            '</div>';
+        }).join('');
+    } catch (e) {
+        console.warn('[KB] Load reports failed:', e);
+        listEl.innerHTML = '<div class="kb-empty">Failed to load reports.</div>';
+    }
+}
+
+/**
+ * Toggle a report's inclusion in the Knowledge Base.
+ * @param {string} reportId
+ */
+async function toggleKbReport(reportId) {
+    try {
+        var response = await fetchApi('/kb/reports/' + reportId + '/toggle', {
+            method: 'POST',
+            body: JSON.stringify({})
+        });
+
+        if (response.ok) {
+            showToast('Report updated.', 'success');
+            loadKbReports();
+            loadKbStats();
+        }
+    } catch (e) {
+        showToast('Toggle failed: ' + e.message, 'error');
+    }
+}
+
+/**
+ * Delete a report from the Knowledge Base.
+ * @param {string} reportId
+ */
+async function deleteKbReport(reportId) {
+    if (!confirm('Delete this report from the Knowledge Base?')) return;
+
+    try {
+        var response = await fetchApi('/kb/reports/' + reportId, {
+            method: 'DELETE'
+        });
+
+        if (response.ok) {
+            showToast('Report deleted.', 'success');
+            loadKbReports();
+            loadKbStats();
+        }
+    } catch (e) {
+        showToast('Delete failed: ' + e.message, 'error');
+    }
+}
+
+/**
+ * Rebuild the Knowledge Base index.
+ */
+async function rebuildKb() {
+    showToast('Rebuilding Knowledge Base index...', 'info');
+
+    try {
+        var response = await fetchApi('/kb/rebuild', {
+            method: 'POST',
+            body: JSON.stringify({})
+        });
+
+        if (response.ok) {
+            var data = await response.json();
+            showToast('Knowledge Base rebuilt: ' + (data.chunks || 0) + ' chunks indexed.', 'success');
+            loadKbStats();
+        } else {
+            var errData = await response.json();
+            showToast('Rebuild failed: ' + (errData.error || 'Unknown error'), 'error');
+        }
+    } catch (e) {
+        showToast('Rebuild failed: ' + e.message, 'error');
+    }
+}
+
+/**
+ * Load Knowledge Base statistics.
+ */
+async function loadKbStats() {
+    try {
+        var response = await fetchApi('/kb/stats');
+        if (!response.ok) return;
+
+        var stats = await response.json();
+
+        var docsEl = document.getElementById('kbStatDocs');
+        var chunksEl = document.getElementById('kbStatChunks');
+
+        if (docsEl) docsEl.textContent = stats.total_reports || 0;
+        if (chunksEl) chunksEl.textContent = stats.total_chunks || 0;
+    } catch (e) {
+        console.warn('[KB] Stats load failed:', e);
+    }
+}
+
+/* ====================================================================
+   EXPORT FUNCTIONALITY
+   ==================================================================== */
+
+/**
+ * Generic export handler. Downloads a file from the export endpoint.
+ * @param {string} format - 'pdf'|'markdown'|'stix'|'csv'|'json'
+ */
+async function exportResults(format) {
+    if (!sessionId && !currentTool) {
+        showToast('No results to export.', 'warning');
+        return;
+    }
+
+    showLoading();
+
+    try {
+        var response = await fetchApi('/export/' + format, {
+            method: 'POST',
+            body: JSON.stringify({
+                session_id: sessionId || '',
+                tool: currentTool
+            })
+        });
+
+        if (!response.ok) {
+            var errData = await response.json();
+            throw new Error(errData.error || 'Export failed');
+        }
+
+        // Download as file
+        var blob = await response.blob();
+        var url = URL.createObjectURL(blob);
+        var a = document.createElement('a');
+        a.href = url;
+
+        var extensions = {
+            pdf: '.pdf',
+            markdown: '.md',
+            stix: '.stix.json',
+            csv: '.csv',
+            json: '.json'
+        };
+
+        a.download = 'fortis_export_' + Date.now() + (extensions[format] || '.txt');
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        URL.revokeObjectURL(url);
+
+        showToast('Export downloaded: ' + format.toUpperCase(), 'success');
+    } catch (error) {
+        showToast('Export failed: ' + error.message, 'error');
+    } finally {
+        hideLoading();
+    }
+}
+
+/**
+ * Export to PDF.
+ */
+function exportPdf() {
+    exportResults('pdf');
+}
+
+/**
+ * Export as Markdown.
+ */
+function exportMarkdown() {
+    exportResults('markdown');
+}
+
+/**
+ * Export as STIX 2.1.
+ */
+function exportStix() {
+    exportResults('stix');
+}
+
+/**
+ * Export as CSV.
+ */
+function exportCsv() {
+    exportResults('csv');
+}
+
+/**
+ * Export as JSON.
+ */
+function exportJson() {
+    exportResults('json');
+}
+
+/**
+ * Export to Google Drive.
+ * @param {string} format - export format to upload
+ */
+async function exportDrive(format) {
+    format = format || 'pdf';
+    showLoading();
+
+    try {
+        var response = await fetchApi('/export/drive/' + format, {
+            method: 'POST',
+            body: JSON.stringify({
+                session_id: sessionId || '',
+                tool: currentTool
+            })
+        });
+
+        var data = await response.json();
+
+        if (!response.ok) {
+            throw new Error(data.error || 'Drive upload failed');
+        }
+
+        var msg = 'Uploaded to Google Drive.';
+        if (data.web_view_link) {
+            msg += ' Opening...';
+            window.open(data.web_view_link, '_blank');
+        }
+        showToast(msg, 'success');
+    } catch (error) {
+        showToast('Drive export failed: ' + error.message, 'error');
+    } finally {
+        hideLoading();
+    }
+}
+
+/* ====================================================================
+   SUBMIT DISPATCHER
+   ==================================================================== */
+
+/**
+ * Dispatch the submit action based on the currently selected tool.
+ */
+function handleSubmit() {
+    switch (currentTool) {
+        case 'ingest':
+            uploadReport();
+            break;
+        case 'investigate':
+            runInvestigation();
+            break;
+        case 'geo':
+            runGeolocation();
+            break;
+        case 'batch':
+            runBatchInvestigation();
+            break;
+        case 'monitor':
+            createMonitor();
+            break;
+        case 'qa':
+            sendChatMessage();
+            break;
+        default:
+            showToast('Unknown tool: ' + currentTool, 'error');
+    }
+}
+
+/* ====================================================================
+   EVENT BINDINGS (DOMContentLoaded)
+   ==================================================================== */
+
+document.addEventListener('DOMContentLoaded', function () {
+
+    // ---- Authentication ----
+    checkAuth();
+    fetchOsintStatus();
+
+    // ---- Tool Card Selection ----
+    document.querySelectorAll('.tool-card').forEach(function (card) {
+        card.addEventListener('click', function () {
+            selectTool(this.dataset.tool);
+        });
+    });
+
+    // ---- Submit Button ----
+    var submitBtn = document.getElementById('btnSubmit');
+    if (submitBtn) {
+        submitBtn.addEventListener('click', function () {
+            handleSubmit();
+        });
+    }
+
+    // ---- Logout ----
+    var logoutBtn = document.getElementById('btnLogout');
+    if (logoutBtn) {
+        logoutBtn.addEventListener('click', function () {
+            handleLogout();
+        });
+    }
+
+    // ---- Geolocation Tabs ----
+    document.querySelectorAll('#geoTabs .tab').forEach(function (tab) {
+        tab.addEventListener('click', function () {
+            switchGeoTab(this.dataset.geoTab);
+        });
+    });
+
+    // ---- Q&A Chat ----
+    var chatSendBtn = document.getElementById('chatSend');
+    if (chatSendBtn) {
+        chatSendBtn.addEventListener('click', function () {
+            sendChatMessage();
+        });
+    }
+
+    var chatInput = document.getElementById('chatInput');
+    if (chatInput) {
+        chatInput.addEventListener('keypress', function (e) {
+            if (e.key === 'Enter') {
+                e.preventDefault();
+                sendChatMessage();
+            }
+        });
+    }
+
+    // ---- Watch Panel ----
+    var watchBtn = document.getElementById('btnWatch');
+    if (watchBtn) {
+        watchBtn.addEventListener('click', function () {
+            if (watchPanelOpen) {
+                closeWatchPanel();
+            } else {
+                closeKbPanel(); // Close KB if open
+                openWatchPanel();
+            }
+        });
+    }
+
+    var watchCloseBtn = document.getElementById('watchClose');
+    if (watchCloseBtn) {
+        watchCloseBtn.addEventListener('click', function () {
+            closeWatchPanel();
+        });
+    }
+
+    var watchOverlay = document.getElementById('watchOverlay');
+    if (watchOverlay) {
+        watchOverlay.addEventListener('click', function () {
+            closeWatchPanel();
+        });
+    }
+
+    // Watch finding actions (delegated)
+    var watchBody = document.getElementById('watchBody');
+    if (watchBody) {
+        watchBody.addEventListener('click', function (e) {
+            var approveBtn = e.target.closest('.watch-approve-btn');
+            if (approveBtn) {
+                approveFinding(approveBtn.dataset.findingId);
+                return;
+            }
+
+            var dismissBtn = e.target.closest('.watch-dismiss-btn');
+            if (dismissBtn) {
+                dismissFinding(dismissBtn.dataset.findingId);
+                return;
+            }
+        });
+    }
+
+    var clearFindingsBtn = document.getElementById('btnClearFindings');
+    if (clearFindingsBtn) {
+        clearFindingsBtn.addEventListener('click', function () {
+            var findingsEl = document.getElementById('watchFindings');
+            if (findingsEl) findingsEl.innerHTML = '';
+            showToast('Findings cleared.', 'info');
+        });
+    }
+
+    // ---- Knowledge Base Panel ----
+    var kbBtn = document.getElementById('btnKnowledgeBase');
+    if (kbBtn) {
+        kbBtn.addEventListener('click', function () {
+            if (kbPanelOpen) {
+                closeKbPanel();
+            } else {
+                closeWatchPanel(); // Close watch if open
+                openKbPanel();
+            }
+        });
+    }
+
+    var kbCloseBtn = document.getElementById('kbClose');
+    if (kbCloseBtn) {
+        kbCloseBtn.addEventListener('click', function () {
+            closeKbPanel();
+        });
+    }
+
+    var kbOverlay = document.getElementById('kbOverlay');
+    if (kbOverlay) {
+        kbOverlay.addEventListener('click', function () {
+            closeKbPanel();
+        });
+    }
+
+    // KB actions (delegated)
+    var kbBody = document.getElementById('kbBody');
+    if (kbBody) {
+        kbBody.addEventListener('click', function (e) {
+            var toggleBtn = e.target.closest('.kb-toggle-btn');
+            if (toggleBtn) {
+                toggleKbReport(toggleBtn.dataset.reportId);
+                return;
+            }
+
+            var deleteBtn = e.target.closest('.kb-delete-btn');
+            if (deleteBtn) {
+                deleteKbReport(deleteBtn.dataset.reportId);
+                return;
+            }
+        });
+    }
+
+    // KB search
+    var kbSearchInput = document.getElementById('kbSearch');
+    if (kbSearchInput) {
+        var kbSearchDebounce = null;
+        kbSearchInput.addEventListener('input', function () {
+            clearTimeout(kbSearchDebounce);
+            kbSearchDebounce = setTimeout(function () {
+                loadKbReports();
+            }, 300);
+        });
+    }
+
+    // KB rebuild
+    var rebuildBtn = document.getElementById('btnKbRebuild');
+    if (rebuildBtn) {
+        rebuildBtn.addEventListener('click', function () {
+            rebuildKb();
+        });
+    }
+
+    // KB stats refresh
+    var kbStatsBtn = document.getElementById('btnKbStats');
+    if (kbStatsBtn) {
+        kbStatsBtn.addEventListener('click', function () {
+            loadKbStats();
+            showToast('KB stats refreshed.', 'info');
+        });
+    }
+
+    // ---- Export Buttons ----
+    var exportBar = document.getElementById('exportBar');
+    if (exportBar) {
+        exportBar.addEventListener('click', function (e) {
+            var btn = e.target.closest('.export-btn');
+            if (!btn) return;
+
+            var format = btn.dataset.format;
+            if (!format) return;
+
+            if (format === 'drive') {
+                exportDrive('pdf');
+            } else {
+                exportResults(format);
+            }
+        });
+    }
+
+    // ---- Drop Zones ----
+    initDropZone('ingestDropZone', 'ingestFiles', 'ingestFileList', ['.pdf', '.md', '.txt']);
+    initDropZone('geoImageDropZone', 'geoImages', 'geoImageFileList', ['image/*']);
+    initDropZone('batchDropZone', 'batchFile', 'batchFileList', ['.csv', '.xlsx', '.xls']);
+
+    // ---- Auto-detect Identifier Type ----
+    var investSubject = document.getElementById('investSubject');
+    var investIdType = document.getElementById('investIdType');
+    if (investSubject && investIdType) {
+        investSubject.addEventListener('input', function () {
+            if (investIdType.value === 'auto') {
+                var detected = autoDetectIdentifierType(investSubject.value);
+                investSubject.title = 'Detected type: ' + detected;
+            }
+        });
+    }
+
+    // ---- Keyboard shortcut: Escape to close panels ----
+    document.addEventListener('keydown', function (e) {
+        if (e.key === 'Escape') {
+            if (watchPanelOpen) closeWatchPanel();
+            if (kbPanelOpen) closeKbPanel();
+        }
+    });
+
+    // ---- Initial tool selection ----
+    selectTool('ingest');
+});

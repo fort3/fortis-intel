@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+Lib/
+Scripts/
+Include/
+pyvenv.cfg
+.pytest_cache/
+.mypy_cache/
+
+# Node
+node_modules/
+
+# Secrets — never commit real credentials
+.env
+.env.local
+.env.*.local
+
+# Local tooling / plans
+plans/
+
+# Runtime data
+uploads/*
+!uploads/.gitkeep
+vectorstores/*
+!vectorstores/.gitkeep
+app/data/*
+!app/data/.gitkeep
+data/
+*.pdf
+report.pdf
+logs/
+
+# Serena
+.serena/cache/
+.serena/project.local.yml
+
+# Vendored man pages
+share/
+
+# IDE / OS
+.cursor/
+.DS_Store
+Thumbs.db
+
+# Temporary documents
+*.gdoc
+plans/*.md
