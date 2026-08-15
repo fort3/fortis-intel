@@ -72,36 +72,100 @@ class WebScraper:
             log.exception("Unexpected error parsing RSS feed %r", feed_url)
             return []
 
+    NEWS_RSS_FEEDS: list[dict[str, str]] = [
+        {"name": "BBC News",      "url": "https://feeds.bbci.co.uk/news/rss.xml"},
+        {"name": "BBC World",     "url": "https://feeds.bbci.co.uk/news/world/rss.xml"},
+        {"name": "CNN Top",       "url": "http://rss.cnn.com/rss/edition.rss"},
+        {"name": "CNN World",     "url": "http://rss.cnn.com/rss/edition_world.rss"},
+        {"name": "Reuters World", "url": "https://www.reutersagency.com/feed/?taxonomy=best-sectors&post_type=best"},
+        {"name": "AP News",       "url": "https://rsshub.app/apnews/topics/apf-topnews"},
+        {"name": "Al Jazeera",    "url": "https://www.aljazeera.com/xml/rss/all.xml"},
+    ]
+
+    def _fetch_news_rss(self, query: str, limit: int = 30) -> list[dict[str, Any]]:
+        """Query curated RSS feeds and filter entries by keyword match."""
+        q_lower = query.lower()
+        q_words = q_lower.split()
+        articles: list[dict[str, Any]] = []
+        seen_urls: set[str] = set()
+
+        for feed_info in self.NEWS_RSS_FEEDS:
+            try:
+                feed = feedparser.parse(feed_info["url"])
+                for entry in feed.entries:
+                    title = getattr(entry, "title", "") or ""
+                    summary = getattr(entry, "summary", "") or ""
+                    link = getattr(entry, "link", "") or ""
+
+                    haystack = f"{title} {summary}".lower()
+                    if not any(w in haystack for w in q_words):
+                        continue
+                    if link in seen_urls:
+                        continue
+                    seen_urls.add(link)
+
+                    articles.append({
+                        "title": title,
+                        "url": link,
+                        "source": feed_info["name"],
+                        "published": getattr(entry, "published", ""),
+                        "snippet": summary[:300],
+                    })
+                    if len(articles) >= limit:
+                        return articles
+            except Exception:
+                log.debug("RSS feed %s unavailable, skipping", feed_info["name"])
+
+        return articles
+
     def fetch_news(
         self,
         query: str,
         date_from: str | None = None,
         date_to: str | None = None,
     ) -> list[dict[str, Any]]:
-        if not self._newsapi:
-            log.warning("NewsAPI not configured — set NEWSAPI_KEY environment variable")
-            return []
+        articles: list[dict[str, Any]] = []
+        seen_urls: set[str] = set()
+
+        # Layer 1: NewsAPI (if configured)
+        if self._newsapi:
+            try:
+                params: dict[str, Any] = {"q": query, "language": "en", "sort_by": "relevancy"}
+                if date_from:
+                    params["from_param"] = date_from
+                if date_to:
+                    params["to"] = date_to
+                response = self._newsapi.get_everything(**params)
+                for article in response.get("articles", []):
+                    source = article.get("source") or {}
+                    url = article.get("url", "")
+                    if url in seen_urls:
+                        continue
+                    seen_urls.add(url)
+                    articles.append({
+                        "title": article.get("title", ""),
+                        "url": url,
+                        "source": source.get("name", ""),
+                        "published": article.get("publishedAt", ""),
+                        "snippet": article.get("description", ""),
+                    })
+            except Exception:
+                log.exception("NewsAPI error for query=%r, falling back to RSS", query)
+
+        # Layer 2: curated RSS feeds (BBC, CNN, Reuters, AP, Al Jazeera)
         try:
-            params: dict[str, Any] = {"q": query, "language": "en", "sort_by": "relevancy"}
-            if date_from:
-                params["from_param"] = date_from
-            if date_to:
-                params["to"] = date_to
-            response = self._newsapi.get_everything(**params)
-            articles: list[dict[str, Any]] = []
-            for article in response.get("articles", []):
-                source = article.get("source") or {}
-                articles.append({
-                    "title": article.get("title", ""),
-                    "url": article.get("url", ""),
-                    "source": source.get("name", ""),
-                    "published": article.get("publishedAt", ""),
-                    "snippet": article.get("description", ""),
-                })
-            return articles
+            rss_cap = max(10, 30 - len(articles))
+            for item in self._fetch_news_rss(query, limit=rss_cap):
+                if item["url"] not in seen_urls:
+                    seen_urls.add(item["url"])
+                    articles.append(item)
         except Exception:
-            log.exception("Unexpected error fetching news for query=%r", query)
-            return []
+            log.exception("RSS news fetch failed for query=%r", query)
+
+        if not articles:
+            log.info("No news found for query=%r (NewsAPI %s)",
+                     query, "configured" if self._newsapi else "not configured")
+        return articles
 
     def whois_lookup(self, domain: str) -> dict[str, Any]:
         try:

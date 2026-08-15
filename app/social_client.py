@@ -238,7 +238,7 @@ class SocialClient:
             return
         self._mastodon_base_url = base_url
         self._mastodon_token = token
-        log.info("Mastodon client initialised (%s)", base_url)
+        log.info("Mastodon client initialised (instance=%s, token=%s…)", base_url, token[:8] if token else "?")
 
     def _init_facebook(self) -> None:
         token = os.getenv("FACEBOOK_ACCESS_TOKEN")
@@ -803,6 +803,20 @@ class SocialClient:
     def _mastodon_headers(self) -> dict[str, str]:
         return {"Authorization": f"Bearer {self._mastodon_token}"}
 
+    def _mastodon_json(self, resp: requests.Response) -> Any:
+        """Parse a Mastodon API response, returning None if the body is not JSON."""
+        ct = resp.headers.get("Content-Type", "")
+        if "application/json" not in ct:
+            log.warning(
+                "Mastodon returned non-JSON response (Content-Type: %s, status: %s, body: %.200s)",
+                ct, resp.status_code, resp.text[:200],
+            )
+            return None
+        body = resp.text.strip()
+        if not body:
+            return None
+        return resp.json()
+
     def _mastodon_search_username(self, username: str) -> list[dict[str, Any]]:
         if not self._mastodon_base_url:
             return []
@@ -815,10 +829,10 @@ class SocialClient:
                 timeout=15,
             )
             resp.raise_for_status()
-            if not resp.text.strip():
-                log.warning("Mastodon search returned empty body — check token scopes (need read:search)")
+            data = self._mastodon_json(resp)
+            if data is None:
                 return []
-            accounts = resp.json().get("accounts", [])
+            accounts = data.get("accounts", [])
             results: list[dict[str, Any]] = []
             for acct in accounts:
                 results.append(self._normalise_profile(
@@ -857,28 +871,10 @@ class SocialClient:
                 timeout=15,
             )
             resp.raise_for_status()
-            statuses = resp.json()
-            posts: list[dict[str, Any]] = []
-            for st in statuses:
-                content = st.get("content", "")
-                hashtags_raw = [t.get("name", "") for t in st.get("tags", [])]
-                mentions_raw = [m.get("acct", "") for m in st.get("mentions", [])]
-                media_urls = [m.get("url", "") for m in st.get("media_attachments", []) if m.get("url")]
-                posts.append(self._normalise_post(
-                    platform="mastodon",
-                    post_id=str(st.get("id", "")),
-                    author_username=st.get("account", {}).get("acct", ""),
-                    content=content,
-                    url=st.get("url", ""),
-                    timestamp=st.get("created_at"),
-                    likes=st.get("favourites_count", 0),
-                    shares=st.get("reblogs_count", 0),
-                    replies=st.get("replies_count", 0),
-                    hashtags=hashtags_raw,
-                    mentions=mentions_raw,
-                    media_urls=media_urls,
-                ))
-            return posts
+            statuses = self._mastodon_json(resp)
+            if not statuses:
+                return []
+            return self._mastodon_parse_statuses(statuses)
         except Exception as exc:
             log.error("Mastodon get_user_posts(%r) failed: %s", user_id, exc)
             return []
@@ -927,8 +923,9 @@ class SocialClient:
                     timeout=15,
                 )
                 resp.raise_for_status()
-                if resp.text.strip():
-                    for p in self._mastodon_parse_statuses(resp.json()):
+                data = self._mastodon_json(resp)
+                if isinstance(data, list):
+                    for p in self._mastodon_parse_statuses(data):
                         pid = p.get("post_id", "")
                         if pid and pid not in seen_ids:
                             seen_ids.add(pid)
@@ -945,8 +942,9 @@ class SocialClient:
                 timeout=15,
             )
             resp.raise_for_status()
-            if resp.text.strip():
-                for p in self._mastodon_parse_statuses(resp.json().get("statuses", [])):
+            data = self._mastodon_json(resp)
+            if isinstance(data, dict):
+                for p in self._mastodon_parse_statuses(data.get("statuses", [])):
                     pid = p.get("post_id", "")
                     if pid and pid not in seen_ids:
                         seen_ids.add(pid)
@@ -977,9 +975,10 @@ class SocialClient:
                 timeout=15,
             )
             resp.raise_for_status()
-            if not resp.text.strip():
+            data = self._mastodon_json(resp)
+            if not isinstance(data, list):
                 return []
-            return self._mastodon_parse_statuses(resp.json())
+            return self._mastodon_parse_statuses(data)
         except Exception as exc:
             log.error("Mastodon public_timeline failed: %s", exc)
             return []
