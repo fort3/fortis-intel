@@ -69,6 +69,10 @@ from app.intel_graph import (
     graph_to_cytoscape_json,
     graph_context,
     cache_graph,
+    persist_relationships,
+    query_shared_connections,
+    query_location_clusters,
+    query_activity_overlap,
 )
 from app.forge import gated_invoke
 from app.forge.config import FORGE_ENABLED
@@ -398,10 +402,13 @@ def create_app():
                 "max-age=31536000; includeSubDomains"
             )
 
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; "
-            "script-src 'self' https://cdn.jsdelivr.net; "
-            "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://cdn.jsdelivr.net; "
+            "script-src 'self' https://cdn.jsdelivr.net https://unpkg.com https://cdnjs.cloudflare.com; "
+            "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com "
+            "https://cdn.jsdelivr.net https://unpkg.com https://cdnjs.cloudflare.com; "
             "font-src 'self' https://fonts.gstatic.com; "
             "img-src 'self' data: https://*.basemaps.cartocdn.com "
             "https://*.tile.openstreetmap.org https://server.arcgisonline.com; "
@@ -815,6 +822,14 @@ def create_app():
             graph_json = {"nodes": [], "edges": []}
             entity_graph_ctx = "No entity graph available."
             graph_cache_key = ""
+
+        # Persist entity relationships to SQLite for cross-investigation queries
+        try:
+            if entity_graph and entity_graph.number_of_edges() > 0:
+                persisted = persist_relationships(entity_graph, get_report_store())
+                print(f"[GRAPH] Persisted {persisted} relationships for {clean_id}")
+        except Exception as exc:
+            print(f"[WARN] Relationship persistence failed (non-fatal): {exc}")
 
         # Build map data
         map_data = {}
@@ -2046,6 +2061,34 @@ def create_app():
             "any_configured": any(
                 s["configured"] for s in platform_status.values()
             ),
+        })
+
+    @app.route("/health", methods=["GET"])
+    def health():
+        """Health check endpoint for container orchestration and monitoring."""
+        components = {}
+
+        # LLM: check if DeepSeek API key is configured
+        components["llm"] = bool(os.getenv("DEEPSEEK_API_KEY"))
+
+        # Redis: try a ping
+        try:
+            import redis as _redis
+            redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+            r = _redis.from_url(redis_url, socket_connect_timeout=2)
+            r.ping()
+            components["redis"] = True
+        except Exception:
+            components["redis"] = False
+
+        # Vectorstore: check if the KB directory exists and has content
+        components["vectorstore"] = VECTORSTORE_DIR.is_dir() and any(VECTORSTORE_DIR.iterdir())
+
+        overall = "healthy" if any(components.values()) else "degraded"
+        return jsonify({
+            "status": overall,
+            "version": "1.0.0",
+            "components": components,
         })
 
     @app.route("/gdrive-status", methods=["GET"])

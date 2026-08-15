@@ -11,6 +11,9 @@ from __future__ import annotations
 import logging
 import math
 import os
+import threading
+import time
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -109,6 +112,46 @@ _SOURCE_ICONS: dict[str, str] = {
 
 
 # ---------------------------------------------------------------------------
+# Geocoding cache (TTL-based LRU)
+# ---------------------------------------------------------------------------
+
+class _GeoCache:
+    """Thread-safe LRU cache with TTL for geocoding results."""
+
+    def __init__(self, maxsize: int = 512, ttl_seconds: int = 3600):
+        self._maxsize = maxsize
+        self._ttl = ttl_seconds
+        self._cache: OrderedDict[str, tuple[float, Any]] = OrderedDict()
+        self._lock = threading.Lock()
+
+    def get(self, key: str) -> Any | None:
+        with self._lock:
+            entry = self._cache.get(key)
+            if entry is None:
+                return None
+            ts, value = entry
+            if time.monotonic() - ts > self._ttl:
+                self._cache.pop(key, None)
+                return None
+            # Move to end (most recently used)
+            self._cache.move_to_end(key)
+            return value
+
+    def put(self, key: str, value: Any) -> None:
+        with self._lock:
+            if key in self._cache:
+                self._cache.move_to_end(key)
+            self._cache[key] = (time.monotonic(), value)
+            while len(self._cache) > self._maxsize:
+                self._cache.popitem(last=False)
+
+
+# Module-level caches shared across GeoClient instances
+_geocode_cache = _GeoCache(maxsize=512, ttl_seconds=3600)
+_reverse_geocode_cache = _GeoCache(maxsize=512, ttl_seconds=3600)
+
+
+# ---------------------------------------------------------------------------
 # Client
 # ---------------------------------------------------------------------------
 
@@ -165,7 +208,8 @@ class GeoClient:
 
         Uses Nominatim as the primary geocoder. Falls back to Google
         Geocoding API if ``GOOGLE_GEOCODING_API_KEY`` is configured and
-        Nominatim fails.
+        Nominatim fails.  Results are cached in an LRU cache with TTL
+        to avoid repeated API calls for the same query.
 
         Args:
             location_text: Human-readable location string.
@@ -176,6 +220,19 @@ class GeoClient:
         if not location_text or not location_text.strip():
             return None
 
+        cache_key = location_text.strip().lower()
+        cached = _geocode_cache.get(cache_key)
+        if cached is not None:
+            log.debug("Geocode cache hit for %r", location_text)
+            return cached
+
+        result = self._geocode_uncached(location_text)
+        # Cache both successful results and None to avoid re-querying failures
+        _geocode_cache.put(cache_key, result)
+        return result
+
+    def _geocode_uncached(self, location_text: str) -> GeoDataPoint | None:
+        """Internal geocoding without cache lookup."""
         # --- Try Nominatim first ---
         if self._nominatim is not None:
             try:
@@ -214,7 +271,8 @@ class GeoClient:
     def reverse_geocode(self, lat: float, lon: float) -> dict[str, Any]:
         """Convert coordinates to a human-readable address.
 
-        Uses Nominatim reverse geocoding.
+        Uses Nominatim reverse geocoding.  Results are cached in an LRU
+        cache with TTL to avoid repeated API calls.
 
         Args:
             lat: Latitude.
@@ -224,6 +282,19 @@ class GeoClient:
             Dict with ``address``, ``city``, ``country``, and ``raw`` keys.
             Returns an empty dict on failure.
         """
+        # Round to 4 decimal places (~11m precision) for cache key stability
+        cache_key = f"{round(lat, 4)},{round(lon, 4)}"
+        cached = _reverse_geocode_cache.get(cache_key)
+        if cached is not None:
+            log.debug("Reverse geocode cache hit for (%s, %s)", lat, lon)
+            return cached
+
+        result = self._reverse_geocode_uncached(lat, lon)
+        _reverse_geocode_cache.put(cache_key, result)
+        return result
+
+    def _reverse_geocode_uncached(self, lat: float, lon: float) -> dict[str, Any]:
+        """Internal reverse geocoding without cache lookup."""
         if self._nominatim is None:
             log.warning("Nominatim geocoder is not available for reverse geocoding")
             return {}

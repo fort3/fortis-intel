@@ -95,6 +95,10 @@
         <span class="tool-card-icon">&#x1F4E1;</span>
         <span class="tool-card-label">Feed Monitor</span>
       </div>
+      <div class="tool-card" data-tool="scenario" title="Generate analytical scenarios from OSINT patterns">
+        <span class="tool-card-icon">&#x1F9E0;</span>
+        <span class="tool-card-label">Scenarios</span>
+      </div>
       <div class="tool-card" data-tool="qa" title="Ask questions against your knowledge base">
         <span class="tool-card-icon">&#x1F4AC;</span>
         <span class="tool-card-label">Q&amp;A (RAG)</span>
@@ -380,6 +384,38 @@
                 <option value="high_confidence" selected>High confidence only</option>
                 <option value="geo_match">Geo matches only</option>
               </select>
+            </div>
+          </div>
+
+          <!-- ============================================================
+               TOOL FORM: Scenarios
+               ============================================================ -->
+          <div class="tool-form" id="form-scenario">
+            <div class="form-group">
+              <label class="form-label">Scenario Type</label>
+              <select class="form-select" id="scenarioType">
+                <option value="pattern_of_life">Pattern of Life &mdash; posting times, locations, habits</option>
+                <option value="network_mapping">Network Mapping &mdash; connections between entities</option>
+                <option value="location_prediction">Location Prediction &mdash; predict likely locations</option>
+                <option value="influence_analysis">Influence Analysis &mdash; assess reach and influence</option>
+              </select>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Session Reference (optional)</label>
+              <input type="text" class="form-input" id="scenarioSessionId" placeholder="e.g. inv_abc123 &mdash; load context from a prior investigation" />
+              <div class="form-hint">Enter a session ID from a previous investigation to use its data as context</div>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Subject Context (optional)</label>
+              <textarea class="form-textarea" id="scenarioSubjectCtx" placeholder="Additional context about the subject or focus area..." rows="3"></textarea>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">OSINT Data (optional)</label>
+              <textarea class="form-textarea mono" id="scenarioOsintData" placeholder="Paste raw OSINT data or leave blank to pull from session/KB..." rows="5"></textarea>
+              <div class="form-hint">If empty, data will be loaded from the referenced session or Knowledge Base</div>
             </div>
           </div>
 

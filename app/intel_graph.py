@@ -10,7 +10,9 @@ Edge types: associated_with, located_at, posted_from, linked_to,
 """
 
 import time
+import uuid
 from collections import defaultdict
+from datetime import datetime, timezone
 
 import networkx as nx
 
@@ -343,6 +345,248 @@ def get_entity_neighborhood(graph: nx.DiGraph, entity_type: str,
         for hop2 in list(graph.successors(neighbor)) + list(graph.predecessors(neighbor)):
             nodes.add(hop2)
     return graph.subgraph(nodes).copy()
+
+
+# ── Cross-investigation persistence (SQLite) ─────────────────────
+
+
+def persist_relationships(graph: nx.DiGraph, report_store) -> int:
+    """Persist entity relationships from a graph to SQLite via ReportStore.
+
+    Walks all edges in the graph and saves them as EntityRelationship
+    records.  Existing relationships (same source+target+type) are
+    updated with incremented observation_count and fresh last_observed.
+
+    Args:
+        graph: A NetworkX DiGraph produced by build_investigation_graph
+               or build_entity_graph.
+        report_store: A ReportStore instance (from app.report_store).
+
+    Returns:
+        Number of relationships saved.
+    """
+    from app.report_store import EntityRelationship  # local to avoid circular
+
+    if graph.number_of_edges() == 0:
+        return 0
+
+    now = datetime.now(tz=timezone.utc).isoformat()
+    rels: list = []
+
+    for u, v, attrs in graph.edges(data=True):
+        u_attrs = graph.nodes.get(u, {})
+        v_attrs = graph.nodes.get(v, {})
+
+        source_entity = u_attrs.get("label", u)
+        source_type = u_attrs.get("type", "unknown")
+        target_entity = v_attrs.get("label", v)
+        target_type = v_attrs.get("type", "unknown")
+        rel_type = attrs.get("relationship", "associated_with")
+        confidence = float(attrs.get("confidence", u_attrs.get("confidence", 0)))
+
+        # Check for existing relationship so we can bump observation_count
+        existing = report_store.get_relationships_for_entity(source_entity)
+        found = None
+        for e in existing:
+            if (e.target_entity == target_entity
+                    and e.relationship_type == rel_type):
+                found = e
+                break
+
+        if found:
+            # Update existing
+            found.last_observed = now
+            found.observation_count += 1
+            if confidence > found.confidence:
+                found.confidence = confidence
+            report_store.save_relationship(found)
+        else:
+            rels.append(EntityRelationship(
+                relationship_id=uuid.uuid4().hex,
+                source_entity=source_entity,
+                source_type=source_type,
+                target_entity=target_entity,
+                target_type=target_type,
+                relationship_type=rel_type,
+                confidence=confidence,
+                evidence_source="intel_graph",
+                first_observed=now,
+                last_observed=now,
+                observation_count=1,
+            ))
+
+    saved = report_store.save_relationships_batch(rels) if rels else 0
+    return saved + (graph.number_of_edges() - len(rels))  # updated + new
+
+
+def query_shared_connections(entity_value: str, report_store) -> list[dict]:
+    """Find entities that share connections with the given entity.
+
+    Queries the entity_relationships table for all entities linked to
+    ``entity_value``, then finds other entities connected to those same
+    targets.
+
+    Args:
+        entity_value: The entity name/value to search for.
+        report_store: A ReportStore instance.
+
+    Returns:
+        List of dicts with shared connection info, sorted by overlap count.
+    """
+    direct_rels = report_store.get_relationships_for_entity(entity_value)
+    if not direct_rels:
+        return []
+
+    # Collect all directly connected entity names
+    direct_targets: set[str] = set()
+    for r in direct_rels:
+        if r.source_entity == entity_value:
+            direct_targets.add(r.target_entity)
+        else:
+            direct_targets.add(r.source_entity)
+
+    # For each direct target, find OTHER entities also connected
+    shared: dict[str, dict] = {}
+    for target in direct_targets:
+        target_rels = report_store.get_relationships_for_entity(target)
+        for tr in target_rels:
+            other = (tr.target_entity
+                     if tr.source_entity == target
+                     else tr.source_entity)
+            if other == entity_value or other == target:
+                continue
+
+            if other not in shared:
+                shared[other] = {
+                    "entity": other,
+                    "shared_connections": [],
+                    "overlap_count": 0,
+                    "max_confidence": 0.0,
+                }
+            entry = shared[other]
+            if target not in entry["shared_connections"]:
+                entry["shared_connections"].append(target)
+                entry["overlap_count"] += 1
+            if tr.confidence > entry["max_confidence"]:
+                entry["max_confidence"] = tr.confidence
+
+    results = sorted(
+        shared.values(),
+        key=lambda x: x["overlap_count"],
+        reverse=True,
+    )
+    return results[:50]
+
+
+def query_location_clusters(report_store) -> list[dict]:
+    """Find entities clustered by location from persisted relationships.
+
+    Looks for ``located_at`` relationships and groups entities by their
+    target location.
+
+    Args:
+        report_store: A ReportStore instance.
+
+    Returns:
+        List of location cluster dicts sorted by entity count.
+    """
+    located_rels = report_store.get_relationships_by_type("located_at")
+    if not located_rels:
+        return []
+
+    clusters: dict[str, list] = defaultdict(list)
+    for r in located_rels:
+        location = r.target_entity
+        clusters[location].append({
+            "entity": r.source_entity,
+            "entity_type": r.source_type,
+            "confidence": r.confidence,
+            "first_observed": r.first_observed,
+            "last_observed": r.last_observed,
+        })
+
+    results = []
+    for location, entities in clusters.items():
+        if len(entities) >= 2:
+            results.append({
+                "location": location,
+                "entity_count": len(entities),
+                "entities": sorted(
+                    entities,
+                    key=lambda e: e["confidence"],
+                    reverse=True,
+                ),
+                "avg_confidence": (
+                    sum(e["confidence"] for e in entities) / len(entities)
+                ),
+            })
+
+    return sorted(results, key=lambda x: x["entity_count"], reverse=True)
+
+
+def query_activity_overlap(
+    entity1: str, entity2: str, report_store
+) -> list[dict]:
+    """Find shared activity (common connections) between two entities.
+
+    Queries relationships for both entities and identifies targets that
+    appear in both sets.
+
+    Args:
+        entity1: First entity name/value.
+        entity2: Second entity name/value.
+        report_store: A ReportStore instance.
+
+    Returns:
+        List of shared activity dicts.
+    """
+    rels1 = report_store.get_relationships_for_entity(entity1)
+    rels2 = report_store.get_relationships_for_entity(entity2)
+
+    if not rels1 or not rels2:
+        return []
+
+    def _connected_set(entity_val, rels):
+        targets = {}
+        for r in rels:
+            other = (r.target_entity
+                     if r.source_entity == entity_val
+                     else r.source_entity)
+            if other not in targets:
+                targets[other] = {
+                    "relationship_type": r.relationship_type,
+                    "confidence": r.confidence,
+                    "entity_type": (r.target_type
+                                    if r.source_entity == entity_val
+                                    else r.source_type),
+                }
+            elif r.confidence > targets[other]["confidence"]:
+                targets[other]["confidence"] = r.confidence
+        return targets
+
+    targets1 = _connected_set(entity1, rels1)
+    targets2 = _connected_set(entity2, rels2)
+
+    common = set(targets1.keys()) & set(targets2.keys())
+
+    results = []
+    for shared_entity in common:
+        t1 = targets1[shared_entity]
+        t2 = targets2[shared_entity]
+        results.append({
+            "shared_entity": shared_entity,
+            "entity_type": t1.get("entity_type", "unknown"),
+            "entity1_relationship": t1["relationship_type"],
+            "entity1_confidence": t1["confidence"],
+            "entity2_relationship": t2["relationship_type"],
+            "entity2_confidence": t2["confidence"],
+        })
+
+    return sorted(
+        results,
+        key=lambda x: max(x["entity1_confidence"], x["entity2_confidence"]),
+        reverse=True,
+    )
 
 
 # ── Export ─────────────────────────────────────────────────────────────

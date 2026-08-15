@@ -343,6 +343,7 @@ const TOOL_TITLES = {
     geo: 'Geolocation',
     batch: 'Batch Investigation',
     monitor: 'Feed Monitor',
+    scenario: 'Scenarios',
     qa: 'Q&A (RAG)'
 };
 
@@ -390,6 +391,7 @@ function selectTool(toolName) {
             geo: 'Triangulate',
             batch: 'Run Batch',
             monitor: 'Create Monitor',
+            scenario: 'Generate Scenario',
             qa: 'Send'
         };
         submitBtn.innerHTML = '&#x25B6; ' + (labels[toolName] || 'Execute');
@@ -1089,6 +1091,108 @@ async function loadMonitorList() {
 }
 
 /* ====================================================================
+   SCENARIO GENERATION
+   ==================================================================== */
+
+/**
+ * Run a scenario analysis against the /scenario endpoint.
+ */
+async function runScenario() {
+    var typeSelect = document.getElementById('scenarioType');
+    var sessionInput = document.getElementById('scenarioSessionId');
+    var subjectCtx = document.getElementById('scenarioSubjectCtx');
+    var osintData = document.getElementById('scenarioOsintData');
+
+    var scenarioType = typeSelect ? typeSelect.value : 'pattern_of_life';
+
+    // Need at least a session reference or OSINT data
+    var refSession = sessionInput ? sessionInput.value.trim() : '';
+    var rawOsint = osintData ? osintData.value.trim() : '';
+    var subjectContext = subjectCtx ? subjectCtx.value.trim() : '';
+
+    if (!refSession && !rawOsint) {
+        showToast('Provide a session reference or paste OSINT data for scenario analysis.', 'warning');
+        return;
+    }
+
+    showLoading();
+    showResults();
+
+    var content = document.getElementById('resultsContent');
+    if (content) {
+        var typeLabel = {
+            pattern_of_life: 'Pattern of Life',
+            network_mapping: 'Network Mapping',
+            location_prediction: 'Location Prediction',
+            influence_analysis: 'Influence Analysis'
+        };
+        content.innerHTML = '<div class="result-section"><p>Generating <strong>' +
+            escapeHtml(typeLabel[scenarioType] || scenarioType) +
+            '</strong> scenario analysis...</p></div>';
+        content.style.display = '';
+    }
+
+    try {
+        var payload = {
+            scenario_type: scenarioType,
+            subject_context: subjectContext
+        };
+        if (refSession) payload.session_id = refSession;
+        if (rawOsint) payload.osint_data = rawOsint;
+
+        var response = await fetchApi('/scenario', {
+            method: 'POST',
+            body: JSON.stringify(payload)
+        });
+
+        if (!response.ok) {
+            var errData = await response.json();
+            throw new Error(errData.error || 'Scenario generation failed');
+        }
+
+        var data = await response.json();
+
+        if (data.error) {
+            showToast('Scenario error: ' + data.error, 'error');
+            hideLoading();
+            return;
+        }
+
+        // Store session if returned
+        if (data.session_id) sessionId = data.session_id;
+
+        // Render scenario analysis using renderAnalysis
+        renderAnalysis({
+            analysis: data.scenario || data.analysis || '',
+            sensitivity_level: 'INTERNAL',
+            session_id: data.session_id,
+            identifier: scenarioType,
+            identifier_type: 'scenario'
+        });
+
+        // Store for export
+        lastAnalysisData = {
+            analysis: data.scenario || data.analysis || '',
+            session_id: data.session_id || sessionId,
+            sensitivity_level: 'INTERNAL',
+            identifier: scenarioType,
+            identifier_type: 'scenario'
+        };
+
+        showToast('Scenario analysis complete.', 'success');
+
+    } catch (error) {
+        showToast('Scenario generation failed: ' + error.message, 'error');
+        if (content) {
+            content.innerHTML = '<div class="result-section result-error"><p>Error: ' +
+                escapeHtml(error.message) + '</p></div>';
+        }
+    } finally {
+        hideLoading();
+    }
+}
+
+/* ====================================================================
    Q&A (RAG)
    ==================================================================== */
 
@@ -1311,7 +1415,8 @@ function renderAnalysis(data) {
     if (data.map_data) renderMap(data.map_data);
 
     // Render entity graph if present
-    if (data.graph_data) renderGraph(data.graph_data);
+    if (data.entity_graph) renderGraph(data.entity_graph);
+    else if (data.graph_data) renderGraph(data.graph_data);
 
     // Render charts if present
     if (data.chart_data) renderCharts(data.chart_data);
@@ -1668,7 +1773,13 @@ function renderGraph(graphData) {
                 id: nodeData.id,
                 label: nodeData.label || nodeData.name || nodeData.id,
                 type: nodeData.type || 'default',
-                color: nodeColors[nodeData.type] || nodeColors.default
+                color: nodeColors[nodeData.type] || nodeColors.default,
+                confidence: nodeData.confidence || '',
+                platform: nodeData.platform || '',
+                source: nodeData.source || '',
+                aliases: nodeData.aliases || '',
+                url: nodeData.url || '',
+                description: nodeData.description || ''
             }
         });
     });
@@ -1755,20 +1866,75 @@ function renderGraph(graphData) {
     // Node click for detail popup
     graphInstance.on('tap', 'node', function (evt) {
         var nodeData = evt.target.data();
-        var popupHtml = '<div class="graph-popup">';
-        popupHtml += '<h4>' + escapeHtml(nodeData.label) + '</h4>';
-        popupHtml += '<p>Type: ' + escapeHtml(nodeData.type) + '</p>';
-        popupHtml += '<p>ID: ' + escapeHtml(nodeData.id) + '</p>';
-
-        // Show connected edges
         var edges = evt.target.connectedEdges();
-        if (edges.length > 0) {
-            popupHtml += '<p>Connections: ' + edges.length + '</p>';
-        }
+
+        // Build detail popup HTML
+        var popupHtml = '<div class="graph-detail-popup" id="graphDetailPopup">';
+        popupHtml += '<div class="graph-detail-header">';
+        popupHtml += '<span class="graph-detail-type-badge" style="background:' + escapeHtml(nodeData.color) + ';">' + escapeHtml(nodeData.type) + '</span>';
+        popupHtml += '<button class="graph-detail-close" onclick="closeGraphDetail()">&times;</button>';
+        popupHtml += '</div>';
+        popupHtml += '<h4 class="graph-detail-label">' + escapeHtml(nodeData.label) + '</h4>';
+
+        // Entity metadata
+        popupHtml += '<div class="graph-detail-meta">';
+        if (nodeData.confidence) popupHtml += '<div><span class="graph-detail-key">Confidence:</span> ' + escapeHtml(String(nodeData.confidence)) + '</div>';
+        if (nodeData.platform) popupHtml += '<div><span class="graph-detail-key">Platform:</span> ' + escapeHtml(nodeData.platform) + '</div>';
+        if (nodeData.source) popupHtml += '<div><span class="graph-detail-key">Source:</span> ' + escapeHtml(nodeData.source) + '</div>';
+        if (nodeData.aliases) popupHtml += '<div><span class="graph-detail-key">Aliases:</span> ' + escapeHtml(nodeData.aliases) + '</div>';
+        if (nodeData.description) popupHtml += '<div><span class="graph-detail-key">Description:</span> ' + escapeHtml(nodeData.description) + '</div>';
+        if (nodeData.url) popupHtml += '<div><span class="graph-detail-key">URL:</span> <a href="' + escapeHtml(nodeData.url) + '" target="_blank" rel="noopener">' + escapeHtml(nodeData.url) + '</a></div>';
         popupHtml += '</div>';
 
-        showToast(nodeData.label + ' (' + nodeData.type + ') - ' + edges.length + ' connections', 'info');
+        // Connected edges list
+        if (edges.length > 0) {
+            popupHtml += '<div class="graph-detail-connections">';
+            popupHtml += '<div class="graph-detail-key">Connections (' + edges.length + '):</div>';
+            popupHtml += '<ul>';
+            edges.forEach(function (edge) {
+                var ed = edge.data();
+                var otherNodeId = ed.source === nodeData.id ? ed.target : ed.source;
+                var otherNode = graphInstance.getElementById(otherNodeId);
+                var otherLabel = otherNode.data('label') || otherNodeId;
+                var relLabel = ed.label || 'connected';
+                var direction = ed.source === nodeData.id ? ' -> ' : ' <- ';
+                popupHtml += '<li>' + escapeHtml(relLabel) + direction + escapeHtml(otherLabel) + '</li>';
+            });
+            popupHtml += '</ul>';
+            popupHtml += '</div>';
+        }
+
+        popupHtml += '</div>';
+
+        // Remove existing popup
+        closeGraphDetail();
+
+        // Insert popup into graph container
+        var graphContainer = document.getElementById('graphContainer');
+        if (graphContainer) {
+            var popupDiv = document.createElement('div');
+            popupDiv.id = 'graphDetailWrapper';
+            popupDiv.innerHTML = popupHtml;
+            graphContainer.appendChild(popupDiv);
+        }
     });
+
+    // Click on background to close popup
+    graphInstance.on('tap', function (evt) {
+        if (evt.target === graphInstance) {
+            closeGraphDetail();
+        }
+    });
+}
+
+/**
+ * Close the graph detail popup overlay.
+ */
+function closeGraphDetail() {
+    var existing = document.getElementById('graphDetailWrapper');
+    if (existing && existing.parentNode) {
+        existing.parentNode.removeChild(existing);
+    }
 }
 
 /**
@@ -2328,6 +2494,9 @@ function handleSubmit() {
             break;
         case 'monitor':
             createMonitor();
+            break;
+        case 'scenario':
+            runScenario();
             break;
         case 'qa':
             sendChatMessage();
