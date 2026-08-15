@@ -268,7 +268,7 @@ If you want to use the official Instagram Graph API for higher rate limits:
 1. Log in to your Mastodon instance
 2. Go to **Preferences > Development > New Application**
 3. Set an application name (e.g., `Fortis`)
-4. Select the scopes you need (at minimum: `read`)
+4. Select scopes: `read:search` and `read:statuses` (or simply `read` for all read access)
 5. Click **Submit**
 6. Copy the **Access Token** from the application page
 
@@ -317,6 +317,7 @@ If you want to use the official Instagram Graph API for higher rate limits:
 |---|---|
 | `TELEGRAM_API_ID` | Telegram application API ID |
 | `TELEGRAM_API_HASH` | Telegram application API hash |
+| `TELEGRAM_SESSION_PATH` | Path to the session file (default: `data/telegram_session`) |
 
 **How to get the keys:**
 
@@ -324,6 +325,23 @@ If you want to use the official Instagram Graph API for higher rate limits:
 2. Click **API development tools**
 3. Fill in the application form
 4. Note the **api_id** and **api_hash**
+
+**One-time session setup:**
+
+Telegram uses Telethon, which requires a one-time interactive phone authentication to create a reusable session file. Run the built-in setup script:
+
+```bash
+python -m app.telegram_auth
+```
+
+The script will:
+
+1. Prompt for your phone number (with country code, e.g. `+1234567890`)
+2. Send a verification code via Telegram
+3. Prompt for the code (and 2FA password if enabled)
+4. Save the session to `data/telegram_session.session`
+
+After this one-time setup, the session file persists on disk and the app reuses it automatically -- no further phone input is needed. If you move the app to a different machine, copy the `.session` file along with it.
 
 **Free tier:** 30 requests per minute. Access to public channels and groups.
 

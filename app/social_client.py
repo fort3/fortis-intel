@@ -1,9 +1,9 @@
 """Multi-platform social media client for Fortis Intelligence Hub.
 
-Phase 1: Real API integrations for Twitter/X, Reddit, Instagram, YouTube,
-Mastodon, Facebook, and TikTok.  Telegram remains a Phase-2 stub.  Every
-platform call is wrapped in try/except so the client degrades gracefully
-when credentials are missing or a library is not installed.
+Real API integrations for Twitter/X, Reddit, Instagram, YouTube,
+Mastodon, Facebook, TikTok, and Telegram.  Every platform call is
+wrapped in try/except so the client degrades gracefully when
+credentials are missing or a library is not installed.
 """
 
 import logging
@@ -39,10 +39,19 @@ except ImportError:
 
 HAS_TELETHON = False
 try:
-    from telethon import TelegramClient as _TC  # noqa: F401
+    from telethon import TelegramClient as _TC
+    from telethon import functions as _tl_functions  # noqa: F401
+    from telethon.tl.types import (
+        User as _TLUser,
+        Channel as _TLChannel,
+        Chat as _TLChat,
+    )
     HAS_TELETHON = True
 except ImportError:
-    pass
+    _TC = None  # type: ignore[assignment,misc]
+    _TLUser = None  # type: ignore[assignment,misc]
+    _TLChannel = None  # type: ignore[assignment,misc]
+    _TLChat = None  # type: ignore[assignment,misc]
 
 HAS_INSTALOADER = False
 try:
@@ -133,6 +142,9 @@ class SocialClient:
         self._mastodon_token: str | None = None
         self._facebook_token: str | None = None
         self._tiktok_api_key: str | None = None
+        self._telegram_api_id: int | None = None
+        self._telegram_api_hash: str | None = None
+        self._telegram_session_path: str | None = None
 
         self._init_twitter()
         self._init_reddit()
@@ -141,6 +153,7 @@ class SocialClient:
         self._init_mastodon()
         self._init_facebook()
         self._init_tiktok()
+        self._init_telegram()
 
         available = [k for k, v in self.LIBRARY_FLAGS.items() if v]
         ready = [k for k in available if self._platform_ready(k)]
@@ -243,6 +256,33 @@ class SocialClient:
         self._tiktok_api_key = api_key
         log.info("TikTok Research API client initialised")
 
+    def _init_telegram(self) -> None:
+        if not HAS_TELETHON:
+            return
+        api_id_str = os.getenv("TELEGRAM_API_ID", "")
+        api_hash = os.getenv("TELEGRAM_API_HASH", "")
+        if not (api_id_str and api_hash):
+            log.debug("TELEGRAM_API_ID / TELEGRAM_API_HASH not set; Telegram disabled")
+            return
+        try:
+            self._telegram_api_id = int(api_id_str)
+        except ValueError:
+            log.warning("TELEGRAM_API_ID must be an integer; Telegram disabled")
+            return
+        self._telegram_api_hash = api_hash
+        session_path = os.getenv("TELEGRAM_SESSION_PATH", "data/telegram_session")
+        self._telegram_session_path = session_path
+        session_file = session_path + ".session"
+        if not os.path.isfile(session_file):
+            log.warning(
+                "Telegram session file not found at %s — run "
+                "'python -m app.telegram_auth' to authenticate first",
+                session_file,
+            )
+            self._telegram_api_id = None
+            return
+        log.info("Telegram client initialised (session: %s)", session_path)
+
     def _platform_ready(self, platform: str) -> bool:
         """Return True if the platform's API client was successfully built."""
         return {
@@ -253,7 +293,7 @@ class SocialClient:
             "mastodon": self._mastodon_base_url is not None,
             "facebook": self._facebook_token is not None,
             "tiktok": self._tiktok_api_key is not None,
-            "telegram": False,  # Phase 2
+            "telegram": self._telegram_api_id is not None,
         }.get(platform, False)
 
     # ------------------------------------------------------------------
@@ -1120,15 +1160,202 @@ class SocialClient:
             return []
 
     # ==================================================================
-    # TELEGRAM  (Phase 2 stub)
+    # TELEGRAM  (Telethon — async bridge)
     # ==================================================================
 
-    def _telegram_stub(self, method: str, *args: Any) -> list[dict[str, Any]]:
-        log.warning(
-            "Telegram %s() is a Phase 2 stub (Telethon requires async + phone auth)",
-            method,
-        )
-        return []
+    def _telegram_run(self, coro_fn):
+        """Run an async Telethon coroutine synchronously.
+
+        Creates a fresh TelegramClient using the persisted session file,
+        connects, runs the coroutine, then disconnects.
+        """
+        import asyncio
+
+        async def _wrapper():
+            client = _TC(
+                self._telegram_session_path,
+                self._telegram_api_id,
+                self._telegram_api_hash,
+            )
+            await client.connect()
+            if not await client.is_user_authorized():
+                log.error("Telegram session is not authorized — re-run 'python -m app.telegram_auth'")
+                await client.disconnect()
+                return None
+            try:
+                return await coro_fn(client)
+            finally:
+                await client.disconnect()
+
+        try:
+            loop = asyncio.new_event_loop()
+            result = loop.run_until_complete(_wrapper())
+            loop.close()
+            return result
+        except Exception as exc:
+            log.error("Telegram async bridge failed: %s", exc)
+            return None
+
+    def _telegram_search_username(self, username: str) -> list[dict[str, Any]]:
+        if not self._telegram_api_id:
+            return []
+
+        async def _search(client):
+            try:
+                entity = await client.get_entity(username)
+            except Exception:
+                return []
+
+            results = []
+            if isinstance(entity, _TLChannel):
+                results.append(self._normalise_profile(
+                    platform="telegram",
+                    user_id=str(entity.id),
+                    username=entity.username or "",
+                    display_name=entity.title or "",
+                    bio=getattr(entity, "about", "") or "",
+                    url=f"https://t.me/{entity.username}" if entity.username else "",
+                    followers=getattr(entity, "participants_count", 0) or 0,
+                    following=0,
+                    post_count=0,
+                    verified=getattr(entity, "verified", False),
+                ))
+            elif isinstance(entity, _TLUser):
+                name_parts = [entity.first_name or "", entity.last_name or ""]
+                display = " ".join(p for p in name_parts if p)
+                results.append(self._normalise_profile(
+                    platform="telegram",
+                    user_id=str(entity.id),
+                    username=entity.username or "",
+                    display_name=display,
+                    bio="",
+                    url=f"https://t.me/{entity.username}" if entity.username else "",
+                    followers=0,
+                    following=0,
+                    post_count=0,
+                    verified=getattr(entity, "verified", False),
+                    profile_image_url="",
+                ))
+            elif isinstance(entity, _TLChat):
+                results.append(self._normalise_profile(
+                    platform="telegram",
+                    user_id=str(entity.id),
+                    username="",
+                    display_name=entity.title or "",
+                    bio="",
+                    url="",
+                    followers=getattr(entity, "participants_count", 0) or 0,
+                    following=0,
+                    post_count=0,
+                ))
+            return results
+
+        result = self._telegram_run(_search)
+        return result if result is not None else []
+
+    def _telegram_search_content(
+        self, query: str, limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        if not self._telegram_api_id:
+            return []
+
+        async def _search(client):
+            from telethon.tl.functions.messages import SearchGlobalRequest
+            from telethon.tl.types import InputMessagesFilterEmpty
+
+            try:
+                result = await client(SearchGlobalRequest(
+                    q=query,
+                    filter=InputMessagesFilterEmpty(),
+                    min_date=None,
+                    max_date=None,
+                    offset_rate=0,
+                    offset_peer=await client.get_input_entity("me"),
+                    offset_id=0,
+                    limit=min(limit, 50),
+                ))
+            except Exception as exc:
+                log.warning("Telegram global search failed: %s", exc)
+                return []
+
+            posts = []
+            for msg in result.messages:
+                if not msg.message:
+                    continue
+                chat_title = ""
+                for chat in result.chats:
+                    if chat.id == getattr(msg.peer_id, "channel_id", None) or \
+                       chat.id == getattr(msg.peer_id, "chat_id", None):
+                        chat_title = getattr(chat, "title", "") or ""
+                        break
+                ts = msg.date.isoformat() if msg.date else ""
+                posts.append(self._normalise_post(
+                    platform="telegram",
+                    post_id=str(msg.id),
+                    author_username=chat_title,
+                    content=msg.message,
+                    url="",
+                    timestamp=ts,
+                    likes=0,
+                    shares=getattr(msg, "forwards", 0) or 0,
+                    replies=0,
+                    media_urls=[],
+                ))
+            return posts
+
+        result = self._telegram_run(_search)
+        return result if result is not None else []
+
+    def _telegram_get_user_posts(
+        self, user_id: str, limit: int = 100, since: str | None = None,
+    ) -> list[dict[str, Any]]:
+        if not self._telegram_api_id:
+            return []
+
+        async def _get_posts(client):
+            from datetime import datetime, timezone as tz
+            try:
+                entity = await client.get_entity(user_id)
+            except Exception as exc:
+                log.warning("Telegram get_entity(%r) failed: %s", user_id, exc)
+                return []
+
+            offset_date = None
+            if since:
+                try:
+                    offset_date = datetime.fromisoformat(since).replace(tzinfo=tz.utc)
+                except (ValueError, TypeError):
+                    pass
+
+            posts = []
+            async for msg in client.iter_messages(
+                entity, limit=min(limit, 200), offset_date=offset_date,
+            ):
+                if not msg.message:
+                    continue
+                ts = msg.date.isoformat() if msg.date else ""
+                chat_title = getattr(entity, "title", "") or getattr(entity, "username", "") or ""
+                media_urls = []
+                if msg.photo:
+                    media_urls.append("telegram://photo")
+                if msg.document:
+                    media_urls.append("telegram://document")
+                posts.append(self._normalise_post(
+                    platform="telegram",
+                    post_id=str(msg.id),
+                    author_username=chat_title,
+                    content=msg.message,
+                    url=f"https://t.me/{getattr(entity, 'username', '')}/{msg.id}" if getattr(entity, "username", "") else "",
+                    timestamp=ts,
+                    likes=0,
+                    shares=getattr(msg, "forwards", 0) or 0,
+                    replies=getattr(msg, "replies", None) and getattr(msg.replies, "replies", 0) or 0,
+                    media_urls=media_urls,
+                ))
+            return posts
+
+        result = self._telegram_run(_get_posts)
+        return result if result is not None else []
 
     # ------------------------------------------------------------------
     # Public API
@@ -1163,7 +1390,7 @@ class SocialClient:
             elif platform == "tiktok":
                 results.extend(self._tiktok_search_username(username))
             elif platform == "telegram":
-                results.extend(self._telegram_stub("search_username", username))
+                results.extend(self._telegram_search_username(username))
             elif platform == "youtube":
                 # YouTube search is content-centric; username lookup not supported
                 log.debug("YouTube does not support username search; skipping")
@@ -1204,7 +1431,7 @@ class SocialClient:
             elif platform == "tiktok":
                 results.extend(self._tiktok_search_content(query))
             elif platform == "telegram":
-                results.extend(self._telegram_stub("search_content", query))
+                results.extend(self._telegram_search_content(query))
             elif platform == "instagram":
                 # Instagram public scraping doesn't support content search
                 log.debug("Instagram content search not available via public API; skipping")
@@ -1262,7 +1489,7 @@ class SocialClient:
         if platform == "tiktok":
             return self._tiktok_get_user_posts(user_id, limit, since)
         if platform == "telegram":
-            return self._telegram_stub("get_user_posts", user_id)
+            return self._telegram_get_user_posts(user_id, limit, since)
         self._stub_warn("get_user_posts", platform)
         return []
 
