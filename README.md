@@ -10,10 +10,13 @@ An OSINT-driven intelligence and analysis platform for open-source intelligence 
 - **Geospatial Triangulation** -- Triangulate locations from EXIF data, social geotags, IP addresses, check-ins, and text mentions with interactive Leaflet.js maps
 - **AI-Powered Analysis** -- DeepSeek LLM generates investigation reports, pattern-of-life analyses, network mapping, and influence assessments
 - **RAG Knowledge Base** -- Upload PDF and Markdown reports, index them with FAISS vectorstore, and ask natural-language questions
+- **Analytical Scenarios** -- Generate pattern-of-life, network mapping, location prediction, and influence analysis from collected OSINT data
 - **Feed Monitoring** -- Set up keyword, username, and hashtag monitors with Celery background tasks and automatic enrichment
-- **ForgeChain Governance** -- Every LLM output passes through a 3-verifier consensus gate (rule, safety, consistency) before reaching the analyst
-- **Entity Relationship Graphs** -- Cytoscape.js-powered interactive graphs showing connections across investigations
+- **ForgeChain Governance** -- Every LLM request passes through a 3-verifier consensus gate (rule, safety, consistency) before execution
+- **Elevated Authorization** -- Investigation endpoints support elevated authorization for privileged analysts handling sensitive cases
+- **Entity Relationship Graphs** -- Cytoscape.js-powered interactive graphs with click-to-drill-down entity detail popups
 - **Multi-Format Export** -- PDF, Markdown, STIX 2.1, CSV, JSON, and Google Drive export with map snapshots
+- **Docker Ready** -- Dockerfile and docker-compose.yml for containerized deployment with Redis, Celery worker, and Celery beat
 
 ---
 
@@ -104,7 +107,17 @@ python -m spacy download en_core_web_sm
 cp .env.example .env
 ```
 
-Open `.env` and add your API keys. See the [OSINT API Configuration Guide](#osint-api-configuration-guide) below for details on obtaining each key. At minimum, you need `DEEPSEEK_API_KEY` for LLM analysis.
+Open `.env` and configure at minimum:
+
+```
+FLASK_SECRET_KEY=<random-string>
+SESSION_SECRET_KEY=<random-string>
+DEEPSEEK_API_KEY=<your-deepseek-key>
+```
+
+Generate secure keys with: `python -c "import secrets; print(secrets.token_hex(32))"`
+
+See the [OSINT API Configuration Guide](#osint-api-configuration-guide) below for all available API keys.
 
 ### 6. Run the Application
 
@@ -417,6 +430,50 @@ This is optional. The platform uses Nominatim (OpenStreetMap) as the default geo
 
 ---
 
+### Google Drive Export (Optional)
+
+| Env Variable | Description |
+|---|---|
+| `GDRIVE_SERVICE_ACCOUNT_KEY` | Path to Google service account JSON key file |
+| `GDRIVE_FOLDER_ID` | Target Drive folder ID for exported reports |
+
+**How to set up:**
+
+1. Go to [Google Cloud Console](https://console.cloud.google.com/)
+2. Enable the **Google Drive API**
+3. Create a **Service Account** under **IAM & Admin > Service Accounts**
+4. Generate a JSON key for the service account and save it locally
+5. Share the target Drive folder with the service account email
+6. Set `GDRIVE_SERVICE_ACCOUNT_KEY` to the path of the JSON key file
+
+---
+
+### Notifications (Optional)
+
+| Env Variable | Description |
+|---|---|
+| `SLACK_WEBHOOK_URL` | Slack incoming webhook URL for feed monitor alerts |
+| `SMTP_HOST` | SMTP server hostname (e.g., `smtp.gmail.com`) |
+| `SMTP_PORT` | SMTP server port (default: `587`) |
+| `SMTP_USER` | SMTP username / email address |
+| `SMTP_PASSWORD` | SMTP password or app-specific password |
+| `NOTIFICATION_EMAIL` | Recipient email for feed monitor alerts |
+
+Configure either Slack, email, or both. Feed monitor findings will be sent as alerts when new content is detected.
+
+---
+
+### Feed Monitor & Knowledge Base Settings
+
+| Env Variable | Description | Default |
+|---|---|---|
+| `MONITOR_DEFAULT_INTERVAL` | Default polling interval in minutes | `15` |
+| `MONITOR_MAX_ACTIVE` | Maximum concurrent active monitors | `20` |
+| `KB_RETENTION_DAYS` | Days before reports are auto-archived | `90` |
+| `VECTORSTORE_HMAC_KEY` | HMAC key for vectorstore integrity checks | (auto-generated) |
+
+---
+
 ## Docker Setup
 
 A `Dockerfile` and `docker-compose.yml` are included for containerized deployment.
@@ -516,11 +573,11 @@ Export reports in multiple formats:
 
 Every LLM invocation passes through ForgeChain, a 3-verifier consensus gate:
 
-1. **Rule Verifier** -- Checks output against OSINT-specific policies (minor protection, harassment detection, purpose documentation, legal compliance)
-2. **Safety Verifier** (LLM-based) -- DeepSeek v4-pro evaluates output for safety concerns
-3. **Consistency Verifier** (LLM-based) -- DeepSeek v4-pro checks factual consistency and hallucination
+1. **Rule Verifier** -- Checks inputs against OSINT-specific policies (prompt injection detection, minor protection, harassment detection, purpose documentation, identifier validation, sensitive data scanning)
+2. **Safety Verifier** (LLM-based) -- DeepSeek v4-pro evaluates the request for safety concerns, social engineering, and ethical compliance
+3. **Consistency Verifier** (LLM-based) -- DeepSeek v4-pro checks that the request is consistent with the stated intent
 
-A 2-of-3 consensus is required to pass. Failed outputs are either healed (automatically corrected) or rejected with an explanation. All decisions are logged in the ForgeChain audit trail.
+A 2-of-3 consensus is required to pass. Failed requests are either healed (automatically corrected) or rejected with an explanation. Investigation endpoints support `elevated_authorization` for privileged analysts handling sensitive cases (e.g., minor-adjacent investigations). All decisions are logged in the ForgeChain audit trail.
 
 ### Celery Beat Schedule
 
@@ -570,9 +627,11 @@ Fortis-Intelligence-Hub/
 |   |-- report_store.py          # SQLite report persistence
 |   |-- intel_graph.py           # Entity relationship graph
 |   |-- charts.py                # Server-side chart generation
-|   |-- feed_monitor.py          # Celery feed monitoring tasks
-|   |-- celery_app.py            # Celery configuration
+|   |-- feed_monitor.py          # Feed monitor management
+|   |-- tasks.py                 # Celery background tasks (poll, enrich)
+|   |-- celery_app.py            # Celery configuration + beat schedule
 |   |-- redis_store.py           # Monitor state store
+|   |-- gdrive_client.py         # Google Drive export client
 |   |-- constants.py             # Platform configs, endpoints
 |   |-- notifications.py         # Slack/email alerts
 |   |
@@ -594,8 +653,7 @@ Fortis-Intelligence-Hub/
 |-- static/
 |   |-- css/styles.css           # Black + purple cyberpunk theme
 |   +-- js/
-|       |-- app.js               # Application logic
-|       +-- map.js               # Leaflet.js map controller
+|       +-- app.js               # Application logic (SPA + Leaflet maps)
 |
 |-- data/                        # SQLite databases, GeoIP database
 |-- vectorstores/                # FAISS indices

@@ -1958,9 +1958,9 @@ small, .text-sm {
 
 .welcome-capabilities {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(2, 1fr);
   gap: 24px;
-  max-width: 900px;
+  max-width: 760px;
   width: 100%;
   margin-bottom: 48px;
 }
@@ -2156,7 +2156,7 @@ small, .text-sm {
   }
 
   .welcome-capabilities {
-    grid-template-columns: repeat(3, 1fr);
+    grid-template-columns: repeat(2, 1fr);
     gap: 16px;
   }
 }
