@@ -2,10 +2,13 @@
 
 import logging
 import os
+import re as _re
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from typing import Any
+
+import requests as _requests
 
 from app.constants import SOCIAL_PLATFORMS
 
@@ -163,6 +166,7 @@ class OSINTClient:
                     findings.errors.append(f"{key}: {str(exc)[:200]}")
 
         findings.geo_points = self._extract_geo(findings.posts)
+        findings.geo_points.extend(self._extract_media_geo(findings.posts))
 
         if findings.posts:
             posting_times = [
@@ -378,6 +382,66 @@ class OSINTClient:
             if gp.get("lat") is not None and gp.get("lon") is not None:
                 geo_points.append(gp)
         return geo_points
+
+    _IMAGE_EXT_RE = _re.compile(r"\.(jpe?g|png|tiff?|webp|heic)(\?.*)?$", _re.I)
+    _MAX_MEDIA_DOWNLOAD = 50
+    _MEDIA_DOWNLOAD_TIMEOUT = 10
+
+    def _extract_media_geo(self, posts: list[SocialPost]) -> list[dict[str, Any]]:
+        """Download images from posts' media_urls and extract EXIF GPS."""
+        image_urls: list[tuple[str, str]] = []
+        for p in posts:
+            for url in (p.media_urls or []):
+                if not url or not url.startswith("http"):
+                    continue
+                if self._IMAGE_EXT_RE.search(url) or "/photo/" in url:
+                    image_urls.append((url, p.platform))
+                if len(image_urls) >= self._MAX_MEDIA_DOWNLOAD:
+                    break
+            if len(image_urls) >= self._MAX_MEDIA_DOWNLOAD:
+                break
+
+        if not image_urls:
+            return []
+
+        log.info("Downloading %d media URLs for EXIF geo extraction", len(image_urls))
+        image_bytes_list: list[bytes] = []
+        url_metadata: list[dict[str, str]] = []
+
+        for url, platform in image_urls:
+            try:
+                resp = _requests.get(url, timeout=self._MEDIA_DOWNLOAD_TIMEOUT, stream=True)
+                if resp.status_code != 200:
+                    continue
+                ct = resp.headers.get("Content-Type", "")
+                if "image" not in ct and "octet-stream" not in ct:
+                    continue
+                data = resp.content
+                if len(data) < 100:
+                    continue
+                # Cap at 20 MB per image
+                if len(data) > 20 * 1024 * 1024:
+                    continue
+                image_bytes_list.append(data)
+                url_metadata.append({"url": url, "platform": platform})
+            except Exception as exc:
+                log.debug("Failed to download media %s: %s", url[:80], exc)
+
+        if not image_bytes_list:
+            return []
+
+        geo_results = self._extractor.extract_geo_from_images(image_bytes_list)
+
+        for i, gp in enumerate(geo_results):
+            if i < len(url_metadata):
+                gp["media_url"] = url_metadata[i]["url"]
+                gp["platform"] = url_metadata[i]["platform"]
+                gp["source"] = "exif"
+                gp.setdefault("confidence", 0.95)
+
+        log.info("Extracted %d EXIF geo points from %d downloaded images",
+                 len(geo_results), len(image_bytes_list))
+        return geo_results
 
     def _gather_text(self, findings: OSINTFindings) -> str:
         parts: list[str] = []
