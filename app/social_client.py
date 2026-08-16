@@ -81,6 +81,20 @@ HAS_FACEBOOK = bool(os.getenv("FACEBOOK_ACCESS_TOKEN"))
 
 HAS_TIKTOK = bool(os.getenv("TIKTOK_API_KEY"))
 
+HAS_PYKTOK = False
+try:
+    import pyktok as pyk  # noqa: F401
+    HAS_PYKTOK = True
+except ImportError:
+    pass
+
+HAS_MASTO_LIB = False
+try:
+    from masto import Masto as _MastoClient  # noqa: F401
+    HAS_MASTO_LIB = True
+except ImportError:
+    _MastoClient = None  # type: ignore[assignment,misc]
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -123,9 +137,9 @@ class SocialClient:
         "telegram": HAS_TELETHON,
         "instagram": HAS_INSTALOADER,
         "youtube": HAS_YOUTUBE,
-        "mastodon": HAS_MASTODON,
+        "mastodon": HAS_MASTODON or HAS_MASTO_LIB,
         "facebook": HAS_FACEBOOK,
-        "tiktok": HAS_TIKTOK,
+        "tiktok": HAS_TIKTOK or HAS_PYKTOK,
     }
 
     # ------------------------------------------------------------------
@@ -142,6 +156,7 @@ class SocialClient:
         self._mastodon_token: str | None = None
         self._facebook_token: str | None = None
         self._tiktok_api_key: str | None = None
+        self._tiktok_pyktok: bool = False
         self._telegram_api_id: int | None = None
         self._telegram_api_hash: str | None = None
         self._telegram_session_path: str | None = None
@@ -233,12 +248,15 @@ class SocialClient:
     def _init_mastodon(self) -> None:
         base_url = os.getenv("MASTODON_INSTANCE_URL", "").rstrip("/")
         token = os.getenv("MASTODON_ACCESS_TOKEN")
-        if not (base_url and token):
-            log.debug("MASTODON_INSTANCE_URL / MASTODON_ACCESS_TOKEN not set; Mastodon disabled")
-            return
-        self._mastodon_base_url = base_url
-        self._mastodon_token = token
-        log.info("Mastodon client initialised (instance=%s, token=%s…)", base_url, token[:8] if token else "?")
+        if base_url and token:
+            self._mastodon_base_url = base_url
+            self._mastodon_token = token
+            extra = " + Masto cross-instance search" if HAS_MASTO_LIB else ""
+            log.info("Mastodon client initialised (instance=%s, token=%s…%s)", base_url, token[:8] if token else "?", extra)
+        elif HAS_MASTO_LIB:
+            log.info("Mastodon will use cross-instance search only (no MASTODON_ACCESS_TOKEN — limited to username lookup)")
+        else:
+            log.debug("MASTODON_INSTANCE_URL / MASTODON_ACCESS_TOKEN not set and masto not installed; Mastodon disabled")
 
     def _init_facebook(self) -> None:
         token = os.getenv("FACEBOOK_ACCESS_TOKEN")
@@ -250,11 +268,19 @@ class SocialClient:
 
     def _init_tiktok(self) -> None:
         api_key = os.getenv("TIKTOK_API_KEY")
-        if not api_key:
-            log.debug("TIKTOK_API_KEY not set; TikTok disabled")
+        if api_key:
+            self._tiktok_api_key = api_key
+            log.info("TikTok Research API client initialised")
             return
-        self._tiktok_api_key = api_key
-        log.info("TikTok Research API client initialised")
+        if HAS_PYKTOK:
+            self._tiktok_pyktok = True
+            try:
+                pyk.specify_browser("chrome")
+            except Exception:
+                pass
+            log.info("TikTok will use Pyktok scraper (no API key — slower, content search only)")
+            return
+        log.debug("TIKTOK_API_KEY not set and pyktok not installed; TikTok disabled")
 
     def _init_telegram(self) -> None:
         if not HAS_TELETHON:
@@ -290,9 +316,9 @@ class SocialClient:
             "reddit": self._reddit_client is not None,
             "instagram": self._instaloader is not None,
             "youtube": self._youtube_client is not None,
-            "mastodon": self._mastodon_base_url is not None,
+            "mastodon": self._mastodon_base_url is not None or HAS_MASTO_LIB,
             "facebook": self._facebook_token is not None,
-            "tiktok": self._tiktok_api_key is not None,
+            "tiktok": self._tiktok_api_key is not None or self._tiktok_pyktok,
             "telegram": self._telegram_api_id is not None,
         }.get(platform, False)
 
@@ -818,29 +844,83 @@ class SocialClient:
         return resp.json()
 
     def _mastodon_search_username(self, username: str) -> list[dict[str, Any]]:
-        if not self._mastodon_base_url:
-            return []
+        results: list[dict[str, Any]] = []
+        seen_ids: set[str] = set()
+
+        # Layer 1: token-based instance API (single instance)
+        if self._mastodon_base_url:
+            try:
+                url = f"{self._mastodon_base_url}/api/v2/search"
+                resp = requests.get(
+                    url,
+                    params={"q": username, "type": "accounts", "limit": 5},
+                    headers=self._mastodon_headers(),
+                    timeout=15,
+                )
+                resp.raise_for_status()
+                data = self._mastodon_json(resp)
+                if data is not None:
+                    for acct in data.get("accounts", []):
+                        uid = str(acct.get("id", ""))
+                        if uid in seen_ids:
+                            continue
+                        seen_ids.add(uid)
+                        results.append(self._normalise_profile(
+                            platform="mastodon",
+                            user_id=uid,
+                            username=acct.get("acct", ""),
+                            display_name=acct.get("display_name", ""),
+                            bio=acct.get("note", ""),
+                            url=acct.get("url", ""),
+                            followers=acct.get("followers_count", 0),
+                            following=acct.get("following_count", 0),
+                            post_count=acct.get("statuses_count", 0),
+                            created_at=acct.get("created_at"),
+                            verified=bool(acct.get("locked", False)),
+                            profile_image_url=acct.get("avatar", ""),
+                        ))
+            except Exception as exc:
+                log.warning("Mastodon API search_username(%r) failed: %s", username, exc)
+
+        # Layer 2: Masto library — cross-instance search (no token needed)
+        if HAS_MASTO_LIB:
+            try:
+                masto_results = self._masto_lib_search_username(username)
+                for profile in masto_results:
+                    uid = profile.get("user_id", "")
+                    acct = profile.get("username", "")
+                    dedup_key = f"{acct}@{uid}"
+                    if dedup_key not in seen_ids:
+                        seen_ids.add(dedup_key)
+                        results.append(profile)
+            except Exception as exc:
+                log.warning("Masto lib search_username(%r) failed: %s", username, exc)
+
+        if not results:
+            log.info("Mastodon search_username(%r): no results from API or Masto lib", username)
+        return results
+
+    def _masto_lib_search_username(self, username: str) -> list[dict[str, Any]]:
+        """Search for a Mastodon user across multiple instances using the Masto library."""
         try:
-            url = f"{self._mastodon_base_url}/api/v2/search"
-            resp = requests.get(
-                url,
-                params={"q": username, "type": "accounts", "limit": 5},
-                headers=self._mastodon_headers(),
-                timeout=15,
+            import subprocess
+            import json as _json
+            result = subprocess.run(
+                ["python", "-m", "masto", "-user", username, "--json"],
+                capture_output=True, text=True, timeout=30,
             )
-            resp.raise_for_status()
-            data = self._mastodon_json(resp)
-            if data is None:
-                return []
-            accounts = data.get("accounts", [])
-            results: list[dict[str, Any]] = []
-            for acct in accounts:
-                results.append(self._normalise_profile(
+            if result.returncode != 0:
+                # Masto CLI may not support --json; fall back to API-based cross-instance scan
+                return self._masto_cross_instance_search(username)
+            data = _json.loads(result.stdout)
+            profiles: list[dict[str, Any]] = []
+            for acct in data if isinstance(data, list) else [data]:
+                profiles.append(self._normalise_profile(
                     platform="mastodon",
                     user_id=str(acct.get("id", "")),
-                    username=acct.get("acct", ""),
+                    username=acct.get("username", username),
                     display_name=acct.get("display_name", ""),
-                    bio=acct.get("note", ""),
+                    bio=acct.get("note", acct.get("bio", "")),
                     url=acct.get("url", ""),
                     followers=acct.get("followers_count", 0),
                     following=acct.get("following_count", 0),
@@ -849,10 +929,59 @@ class SocialClient:
                     verified=bool(acct.get("locked", False)),
                     profile_image_url=acct.get("avatar", ""),
                 ))
-            return results
+            return profiles
         except Exception as exc:
-            log.error("Mastodon search_username(%r) failed: %s", username, exc)
-            return []
+            log.debug("Masto CLI search failed, trying cross-instance: %s", exc)
+            return self._masto_cross_instance_search(username)
+
+    def _masto_cross_instance_search(self, username: str) -> list[dict[str, Any]]:
+        """Search for a user across popular Mastodon instances (no token needed)."""
+        instances = [
+            "https://mastodon.social",
+            "https://mastodon.online",
+            "https://mstdn.social",
+            "https://infosec.exchange",
+            "https://hachyderm.io",
+            "https://fosstodon.org",
+        ]
+        results: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        for base in instances:
+            if self._mastodon_base_url and base.rstrip("/") == self._mastodon_base_url.rstrip("/"):
+                continue
+            try:
+                resp = requests.get(
+                    f"{base}/api/v2/search",
+                    params={"q": username, "type": "accounts", "limit": 3, "resolve": "true"},
+                    timeout=8,
+                )
+                if resp.status_code != 200:
+                    continue
+                data = resp.json()
+                if not isinstance(data, dict):
+                    continue
+                for acct in data.get("accounts", []):
+                    acct_name = acct.get("acct", "")
+                    if acct_name in seen:
+                        continue
+                    seen.add(acct_name)
+                    results.append(self._normalise_profile(
+                        platform="mastodon",
+                        user_id=str(acct.get("id", "")),
+                        username=acct_name,
+                        display_name=acct.get("display_name", ""),
+                        bio=acct.get("note", ""),
+                        url=acct.get("url", ""),
+                        followers=acct.get("followers_count", 0),
+                        following=acct.get("following_count", 0),
+                        post_count=acct.get("statuses_count", 0),
+                        created_at=acct.get("created_at"),
+                        verified=bool(acct.get("locked", False)),
+                        profile_image_url=acct.get("avatar", ""),
+                    ))
+            except Exception:
+                continue
+        return results
 
     def _mastodon_get_user_posts(
         self, user_id: str, limit: int, since: str | None,
@@ -1101,12 +1230,17 @@ class SocialClient:
             return []
 
     # ==================================================================
-    # TIKTOK  (Research API via requests)
+    # TIKTOK  (Research API + Pyktok fallback)
     # ==================================================================
 
     def _tiktok_search_username(self, username: str) -> list[dict[str, Any]]:
-        if not self._tiktok_api_key:
-            return []
+        if self._tiktok_api_key:
+            return self._tiktok_search_username_api(username)
+        if self._tiktok_pyktok:
+            return self._tiktok_search_username_pyktok(username)
+        return []
+
+    def _tiktok_search_username_api(self, username: str) -> list[dict[str, Any]]:
         try:
             url = "https://open.tiktokapis.com/v2/research/user/info/"
             headers = {
@@ -1132,14 +1266,51 @@ class SocialClient:
                 profile_image_url=data.get("avatar_url", ""),
             )]
         except Exception as exc:
-            log.error("TikTok search_username(%r) failed: %s", username, exc)
+            log.error("TikTok API search_username(%r) failed: %s", username, exc)
+            return []
+
+    def _tiktok_search_username_pyktok(self, username: str) -> list[dict[str, Any]]:
+        """Scrape a TikTok user profile page via Pyktok."""
+        try:
+            data = pyk.alt_get_tiktok_json(
+                f"https://www.tiktok.com/@{username}", browser_name="chrome",
+            )
+            if not data:
+                return []
+            user_info = data.get("UserModule", {}).get("users", {}).get(username, {})
+            stats = data.get("UserModule", {}).get("stats", {}).get(username, {})
+            if not user_info:
+                return []
+            return [self._normalise_profile(
+                platform="tiktok",
+                user_id=str(user_info.get("id", "")),
+                username=user_info.get("uniqueId", username),
+                display_name=user_info.get("nickname", ""),
+                bio=user_info.get("signature", ""),
+                url=f"https://www.tiktok.com/@{user_info.get('uniqueId', username)}",
+                followers=stats.get("followerCount", 0),
+                following=stats.get("followingCount", 0),
+                post_count=stats.get("videoCount", 0),
+                created_at=None,
+                verified=user_info.get("verified", False),
+                profile_image_url=user_info.get("avatarLarger", ""),
+            )]
+        except Exception as exc:
+            log.error("TikTok Pyktok search_username(%r) failed: %s", username, exc)
             return []
 
     def _tiktok_search_content(
         self, query: str, limit: int = 50,
     ) -> list[dict[str, Any]]:
-        if not self._tiktok_api_key:
-            return []
+        if self._tiktok_api_key:
+            return self._tiktok_search_content_api(query, limit)
+        if self._tiktok_pyktok:
+            return self._tiktok_search_content_pyktok(query, limit)
+        return []
+
+    def _tiktok_search_content_api(
+        self, query: str, limit: int = 50,
+    ) -> list[dict[str, Any]]:
         try:
             url = "https://open.tiktokapis.com/v2/research/video/query/"
             headers = {
@@ -1174,15 +1345,79 @@ class SocialClient:
                 ))
             return posts
         except Exception as exc:
-            log.error("TikTok search_content(%r) failed: %s", query, exc)
+            log.error("TikTok API search_content(%r) failed: %s", query, exc)
+            return []
+
+    def _tiktok_search_content_pyktok(
+        self, query: str, limit: int = 30,
+    ) -> list[dict[str, Any]]:
+        """Scrape TikTok search results via Pyktok (no API key needed)."""
+        try:
+            import tempfile
+            import json as _json
+            cap = min(limit, 30)
+            with tempfile.TemporaryDirectory() as tmpdir:
+                csv_path = os.path.join(tmpdir, "tiktok_data.csv")
+                pyk.save_tiktok_multi_page(
+                    query, ent_type="search", save_video=False,
+                    browser_name="chrome",
+                )
+                json_path = os.path.join(tmpdir, "tiktok_data.json")
+                data = pyk.alt_get_tiktok_json(
+                    f"https://www.tiktok.com/search?q={query}",
+                    browser_name="chrome",
+                )
+                if not data:
+                    log.info("Pyktok search_content(%r): no data returned", query)
+                    return []
+
+                items = []
+                item_list = data.get("ItemModule", {})
+                if isinstance(item_list, dict):
+                    items = list(item_list.values())[:cap]
+
+                posts: list[dict[str, Any]] = []
+                for item in items:
+                    desc = item.get("desc", "")
+                    hashtags, mentions = _extract_tags(desc)
+                    video_id = str(item.get("id", ""))
+                    author = item.get("author", "")
+                    stats = item.get("stats", {})
+                    posts.append(self._normalise_post(
+                        platform="tiktok",
+                        post_id=video_id,
+                        author_username=author,
+                        content=desc,
+                        url=f"https://www.tiktok.com/@{author}/video/{video_id}",
+                        timestamp=_iso(datetime.fromtimestamp(
+                            int(item["createTime"]), tz=timezone.utc,
+                        )) if item.get("createTime") else None,
+                        likes=stats.get("diggCount", 0),
+                        shares=stats.get("shareCount", 0),
+                        replies=stats.get("commentCount", 0),
+                        hashtags=hashtags or [
+                            c.get("hashtagName", "") for c in item.get("challenges", [])
+                        ],
+                        mentions=mentions,
+                    ))
+                return posts
+        except Exception as exc:
+            log.error("TikTok Pyktok search_content(%r) failed: %s", query, exc)
             return []
 
     def _tiktok_get_user_posts(
         self, user_id: str, limit: int, since: str | None,
     ) -> list[dict[str, Any]]:
+        if self._tiktok_api_key:
+            return self._tiktok_get_user_posts_api(user_id, limit, since)
+        if self._tiktok_pyktok:
+            return self._tiktok_get_user_posts_pyktok(user_id, limit, since)
+        return []
+
+    def _tiktok_get_user_posts_api(
+        self, user_id: str, limit: int, since: str | None,
+    ) -> list[dict[str, Any]]:
         """Fetch recent videos by a TikTok user via the Research API."""
-        if not self._tiktok_api_key:
-            return []
         try:
             url = "https://open.tiktokapis.com/v2/research/video/query/"
             headers = {
@@ -1219,7 +1454,57 @@ class SocialClient:
                 ))
             return posts
         except Exception as exc:
-            log.error("TikTok get_user_posts(%r) failed: %s", user_id, exc)
+            log.error("TikTok API get_user_posts(%r) failed: %s", user_id, exc)
+            return []
+
+    def _tiktok_get_user_posts_pyktok(
+        self, user_id: str, limit: int, since: str | None,
+    ) -> list[dict[str, Any]]:
+        """Scrape a TikTok user's recent videos via Pyktok."""
+        try:
+            data = pyk.alt_get_tiktok_json(
+                f"https://www.tiktok.com/@{user_id}", browser_name="chrome",
+            )
+            if not data:
+                return []
+            item_list = data.get("ItemModule", {})
+            if isinstance(item_list, dict):
+                items = list(item_list.values())[:min(limit, 30)]
+            else:
+                return []
+
+            posts: list[dict[str, Any]] = []
+            for item in items:
+                desc = item.get("desc", "")
+                hashtags, mentions = _extract_tags(desc)
+                video_id = str(item.get("id", ""))
+                author = item.get("author", user_id)
+                stats = item.get("stats", {})
+                ts = None
+                if item.get("createTime"):
+                    ts = _iso(datetime.fromtimestamp(
+                        int(item["createTime"]), tz=timezone.utc,
+                    ))
+                if since and ts and ts < since:
+                    continue
+                posts.append(self._normalise_post(
+                    platform="tiktok",
+                    post_id=video_id,
+                    author_username=author,
+                    content=desc,
+                    url=f"https://www.tiktok.com/@{author}/video/{video_id}",
+                    timestamp=ts,
+                    likes=stats.get("diggCount", 0),
+                    shares=stats.get("shareCount", 0),
+                    replies=stats.get("commentCount", 0),
+                    hashtags=hashtags or [
+                        c.get("hashtagName", "") for c in item.get("challenges", [])
+                    ],
+                    mentions=mentions,
+                ))
+            return posts
+        except Exception as exc:
+            log.error("TikTok Pyktok get_user_posts(%r) failed: %s", user_id, exc)
             return []
 
     # ==================================================================
