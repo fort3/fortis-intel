@@ -980,9 +980,8 @@ async function runBatchInvestigation() {
         };
         // Show tabs and views
         showResults();
-        if (renderData.map_data) renderMap(renderData.map_data);
 
-        var hasMap = !!renderData.map_data;
+        var hasMap = !!(renderData.map_data && ((renderData.map_data.markers && renderData.map_data.markers.length > 0) || renderData.map_data.triangulation));
         var hasGraph = !!renderData.graph_data;
         var hasCharts = !!renderData.chart_data;
 
@@ -997,6 +996,15 @@ async function runBatchInvestigation() {
         if (renderData.chart_data) renderCharts(renderData.chart_data);
 
         switchResultTab('analysis');
+
+        if (hasMap) {
+            setTimeout(function () {
+                renderMap(renderData.map_data);
+                if (mapInstance) {
+                    setTimeout(function () { mapInstance.invalidateSize(); }, 100);
+                }
+            }, 60);
+        }
 
     } catch (error) {
         showToast('Batch investigation failed: ' + error.message, 'error');
@@ -1492,9 +1500,8 @@ function renderAnalysis(data) {
             renderMarkdown(data.analysis) + '</div>';
     }
 
-    // Render map if present (only if it has markers or triangulation)
+    // Check for map data (defer rendering until pane is visible)
     if (data.map_data && (data.map_data.markers && data.map_data.markers.length > 0 || data.map_data.triangulation)) {
-        renderMap(data.map_data);
         hasMap = true;
     }
 
@@ -1524,6 +1531,16 @@ function renderAnalysis(data) {
         switchResultTab('map');
     } else {
         switchResultTab('analysis');
+    }
+
+    // Render map AFTER pane is visible so Leaflet has real dimensions
+    if (hasMap) {
+        setTimeout(function () {
+            renderMap(data.map_data);
+            if (mapInstance) {
+                setTimeout(function () { mapInstance.invalidateSize(); }, 100);
+            }
+        }, 60);
     }
 }
 

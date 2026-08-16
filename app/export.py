@@ -1,11 +1,7 @@
 """PDF and Markdown export for Fortis Intelligence Hub OSINT reports using PyMuPDF.
 
-Dark cyberpunk theme matching the app's visual design. Reports include:
-- Branded title page with sensitivity classification
-- Analysis content with proper dark-theme contrast
-- Inline map snapshots and entity relationship graphs
-- Visual analytics charts in 2-column layout
-- Sensitivity banners and branded footers
+Dark theme matching the app's welcome page design: deep purple-black gradient
+background with HUD SVG overlay, clean typography, minimal decorative lines.
 """
 
 import base64
@@ -20,8 +16,11 @@ import markdown
 from PIL import Image
 
 
-_FAVICON_PATH = Path(__file__).resolve().parent / "data" / "favicon.ico"
+_APP_DIR = Path(__file__).resolve().parent
+_FAVICON_PATH = _APP_DIR / "data" / "favicon.ico"
+_HUD_SVG_PATH = _APP_DIR.parent / "static" / "img" / "bg-hud.svg"
 _logo_b64: str | None = None
+_hud_png_cache: bytes | None = None
 
 SENSITIVITY_COLORS_RGB = {
     "PUBLIC": (0.133, 0.545, 0.133),
@@ -44,24 +43,24 @@ SENSITIVITY_DESCRIPTIONS = {
     "CONFIDENTIAL": "Confidential - Eyes only. Named recipients only. Do NOT share.",
 }
 
-# Theme colors matching the app's CSS variables
-BG_DEEP = "#08081a"
-BG_CARD = "#10101e"
-BG_ELEVATED = "#1a1a28"
-SURFACE = "#222233"
-BORDER = "#2a2a3d"
+# Welcome page gradient stops
+BG_GRAD_1 = "#0d0520"  # deep purple-black
+BG_GRAD_2 = "#080818"  # near-black navy
+BG_GRAD_3 = "#06061a"  # deep navy
+BG_GRAD_4 = "#0a0320"  # dark purple
+BG_DEEP = "#080818"     # fallback solid
+
+# Theme accents — kept minimal
 PURPLE_PRIMARY = "#9b59b6"
 PURPLE_BRIGHT = "#bb6bd9"
-PURPLE_NEON = "#d946ef"
 PURPLE_DARK = "#6b3fa0"
 PURPLE_SUBTLE = "#2d1f4e"
 TEXT_PRIMARY = "#e8e6f0"
 TEXT_SECONDARY = "#9a97a8"
 TEXT_MUTED = "#5c5a6a"
 TEXT_BRIGHT = "#ffffff"
-SUCCESS = "#22c55e"
-WARNING = "#f59e0b"
-DANGER = "#ef4444"
+BORDER = "#2a2a3d"
+CARD_BG = "#0e0e1c"
 
 
 def _get_logo_b64() -> str:
@@ -79,6 +78,28 @@ def _get_logo_b64() -> str:
     return _logo_b64
 
 
+def _get_hud_png() -> bytes | None:
+    """Render the HUD SVG to a PNG for page background overlay."""
+    global _hud_png_cache
+    if _hud_png_cache is not None:
+        return _hud_png_cache if _hud_png_cache else None
+    try:
+        if not _HUD_SVG_PATH.exists():
+            _hud_png_cache = b""
+            return None
+        svg_data = _HUD_SVG_PATH.read_bytes()
+        svg_doc = fitz.open(stream=svg_data, filetype="svg")
+        page = svg_doc[0]
+        mat = fitz.Matrix(612 / page.rect.width, 792 / page.rect.height)
+        pix = page.get_pixmap(matrix=mat, alpha=True)
+        _hud_png_cache = pix.tobytes("png")
+        svg_doc.close()
+        return _hud_png_cache
+    except Exception:
+        _hud_png_cache = b""
+        return None
+
+
 def _extract_report_name(session_id: str) -> str:
     if not session_id:
         return "N/A"
@@ -94,8 +115,63 @@ def _normalize_section_headers(text: str) -> str:
     return text
 
 
+def _paint_gradient_bg(page, mediabox):
+    """Paint the welcome-page gradient background on a PDF page.
+
+    Approximates: linear-gradient(160deg, #0d0520, #080818, #06061a, #0a0320)
+    using horizontal band fills blended from top to bottom.
+    """
+    w = mediabox.width
+    h = mediabox.height
+    bands = 40
+    band_h = h / bands
+
+    colors = [
+        (0.051, 0.020, 0.125),  # #0d0520
+        (0.039, 0.024, 0.106),  # blend
+        (0.031, 0.031, 0.094),  # #080818
+        (0.027, 0.027, 0.098),  # blend
+        (0.024, 0.024, 0.102),  # #06061a
+        (0.035, 0.016, 0.118),  # blend
+        (0.039, 0.012, 0.125),  # #0a0320
+    ]
+
+    for i in range(bands):
+        t = i / max(bands - 1, 1)
+        idx = t * (len(colors) - 1)
+        lo = int(idx)
+        hi = min(lo + 1, len(colors) - 1)
+        frac = idx - lo
+        r = colors[lo][0] + (colors[hi][0] - colors[lo][0]) * frac
+        g = colors[lo][1] + (colors[hi][1] - colors[lo][1]) * frac
+        b = colors[lo][2] + (colors[hi][2] - colors[lo][2]) * frac
+
+        y0 = i * band_h
+        y1 = y0 + band_h + 0.5
+        page.draw_rect(fitz.Rect(0, y0, w, y1), color=None, fill=(r, g, b), overlay=False)
+
+
+def _overlay_hud(page, mediabox):
+    """Overlay the HUD SVG as a semi-transparent background element."""
+    hud_png = _get_hud_png()
+    if not hud_png:
+        return
+    try:
+        page.insert_image(
+            mediabox,
+            stream=hud_png,
+            overlay=True,
+            keep_proportion=False,
+        )
+    except Exception:
+        pass
+
+
+# ---------------------------------------------------------------------------
+# HTML section builders
+# ---------------------------------------------------------------------------
+
 def _build_geo_summary_html(map_data: dict | None) -> str:
-    """Build a tabular summary of geospatial data points."""
     if not map_data:
         return ""
     markers = map_data.get("markers", [])
@@ -114,7 +190,7 @@ def _build_geo_summary_html(map_data: dict | None) -> str:
     for m in markers[:20]:
         lat = m.get("lat", 0)
         lng = m.get("lng", 0)
-        label = html_escape(str(m.get("label", ""))[:40]) or "—"
+        label = html_escape(str(m.get("label", ""))[:40]) or "&mdash;"
         src = m.get("source_type", "osint")
         src_label = source_labels.get(src, src.replace("_", " ").title())
         conf = m.get("confidence", 0)
@@ -123,7 +199,7 @@ def _build_geo_summary_html(map_data: dict | None) -> str:
         rows += (
             f'<tr>'
             f'<td>{label}</td>'
-            f'<td>{lat:.5f}, {lng:.5f}</td>'
+            f'<td class="mono">{lat:.5f}, {lng:.5f}</td>'
             f'<td><span class="src-badge">{html_escape(src_label)}</span></td>'
             f'<td>{conf_pct}</td>'
             f'<td class="desc-cell">{desc}</td>'
@@ -151,7 +227,7 @@ def _build_geo_summary_html(map_data: dict | None) -> str:
 
     return (
         f'<div class="section-block">'
-        f'<h2>Geospatial Data Points</h2>'
+        f'<div class="section-heading">Geospatial Data Points</div>'
         f'{tri_html}'
         f'<table class="data-table">'
         f'<tr><th>Label</th><th>Coordinates</th><th>Source</th><th>Conf.</th><th>Details</th></tr>'
@@ -164,7 +240,6 @@ def _build_geo_summary_html(map_data: dict | None) -> str:
 def _build_chart_html(charts: dict) -> str:
     if not charts:
         return ""
-
     items = list(charts.items())
     rows_html = ""
     for i in range(0, len(items), 2):
@@ -183,10 +258,9 @@ def _build_chart_html(charts: dict) -> str:
         if len(row_items) == 1:
             cells += '<td class="chart-cell"></td>'
         rows_html += f"<tr>{cells}</tr>"
-
     return (
         f'<div class="section-block">'
-        f'<h2>Visual Analytics</h2>'
+        f'<div class="section-heading">Visual Analytics</div>'
         f'<table class="chart-grid">{rows_html}</table>'
         f'</div>'
     )
@@ -199,9 +273,9 @@ def _build_map_html(map_snapshot_b64: str | None) -> str:
         map_snapshot_b64 = f"data:image/png;base64,{map_snapshot_b64}"
     return (
         f'<div class="section-block">'
-        f'<h2>Geographic Overview</h2>'
-        f'<div class="map-frame">'
-        f'<img src="{html_escape(map_snapshot_b64)}" class="map-img">'
+        f'<div class="section-heading">Geographic Overview</div>'
+        f'<div class="media-frame">'
+        f'<img src="{html_escape(map_snapshot_b64)}" class="media-img">'
         f'</div>'
         f'</div>'
     )
@@ -214,9 +288,9 @@ def _build_graph_html(graph_b64: str | None) -> str:
         graph_b64 = f"data:image/png;base64,{graph_b64}"
     return (
         f'<div class="section-block">'
-        f'<h2>Entity Relationship Graph</h2>'
-        f'<div class="graph-frame">'
-        f'<img src="{html_escape(graph_b64)}" class="graph-img">'
+        f'<div class="section-heading">Entity Relationship Graph</div>'
+        f'<div class="media-frame">'
+        f'<img src="{html_escape(graph_b64)}" class="media-img">'
         f'</div>'
         f'</div>'
     )
@@ -228,7 +302,6 @@ def _build_title_page_html(
     sensitivity_level: str,
     timestamp: str,
 ) -> str:
-    """Build a full-page title/cover page."""
     logo_b64 = _get_logo_b64()
     logo_html = (
         f'<img src="data:image/png;base64,{logo_b64}" class="title-logo">'
@@ -243,7 +316,6 @@ def _build_title_page_html(
 
     return f"""
 <div class="title-page">
-    <div class="title-top-bar"></div>
     <div class="title-content">
         {logo_html}
         <div class="title-brand">FORTIS INTELLIGENCE HUB</div>
@@ -262,10 +334,6 @@ def _build_title_page_html(
         </div>
         <div class="title-sens-desc">{sens_desc}</div>
     </div>
-    <div class="title-footer">
-        <div class="title-footer-line"></div>
-        <div class="title-footer-text">FORTIS INTELLIGENCE HUB &mdash; CLASSIFIED REPORT</div>
-    </div>
 </div>
 """
 
@@ -276,7 +344,6 @@ def _build_html(content: str, title: str, session_id: str,
                 map_data: dict | None = None,
                 entity_graph_b64: str | None = None,
                 sensitivity_level: str = "INTERNAL") -> str:
-    """Build dark-themed HTML for PDF rendering with title page and inline visuals."""
     sens_pattern = r'^#\s*(PUBLIC|INTERNAL|RESTRICTED|CONFIDENTIAL)\s*\n+'
     content = re.sub(sens_pattern, '', content, count=1,
                      flags=re.IGNORECASE | re.MULTILINE)
@@ -286,7 +353,6 @@ def _build_html(content: str, title: str, session_id: str,
     )
 
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-    sens_color = SENSITIVITY_COLORS_HEX.get(sensitivity_level, PURPLE_PRIMARY)
 
     title_page = _build_title_page_html(
         title, session_id, sensitivity_level, timestamp,
@@ -296,6 +362,8 @@ def _build_html(content: str, title: str, session_id: str,
     graph_section = _build_graph_html(entity_graph_b64)
     chart_section = _build_chart_html(charts) if charts else ""
 
+    # CSS uses transparent backgrounds — PyMuPDF paints the gradient + HUD
+    # underneath via draw calls, so HTML content floats on top.
     return f"""<!DOCTYPE html>
 <html>
 <head>
@@ -308,7 +376,7 @@ body {{
     font-size: 9.5pt;
     line-height: 1.6;
     color: {TEXT_PRIMARY};
-    background: {BG_DEEP};
+    background: transparent;
     margin: 0;
     padding: 0;
 }}
@@ -318,22 +386,15 @@ body {{
     page-break-after: always;
     min-height: 700px;
     text-align: center;
-    padding: 40px 60px;
-    position: relative;
-}}
-.title-top-bar {{
-    width: 100%;
-    height: 4px;
-    background: {PURPLE_NEON};
-    margin-bottom: 80px;
+    padding: 60px 60px 40px 60px;
 }}
 .title-content {{
-    margin-top: 40px;
+    margin-top: 100px;
 }}
 .title-logo {{
     width: 64px;
     height: 64px;
-    margin-bottom: 16px;
+    margin-bottom: 20px;
 }}
 .title-brand {{
     font-size: 11pt;
@@ -343,24 +404,24 @@ body {{
     margin-bottom: 10px;
 }}
 .title-divider {{
-    width: 80px;
-    height: 2px;
-    background: {PURPLE_NEON};
-    margin: 16px auto;
+    width: 60px;
+    height: 1px;
+    background: {PURPLE_DARK};
+    margin: 20px auto;
 }}
 .title-main {{
     font-size: 22pt;
     font-weight: 700;
     color: {TEXT_BRIGHT};
-    margin: 20px 0 8px 0;
+    margin: 24px 0 8px 0;
     line-height: 1.2;
 }}
 .title-subtitle {{
-    font-size: 10pt;
+    font-size: 9pt;
     font-weight: 700;
-    color: {PURPLE_PRIMARY};
+    color: {TEXT_SECONDARY};
     letter-spacing: 3px;
-    margin-bottom: 40px;
+    margin-bottom: 50px;
 }}
 .title-meta {{
     margin: 30px auto;
@@ -389,71 +450,41 @@ body {{
 }}
 .title-sens-badge {{
     display: inline-block;
-    padding: 6px 24px;
-    font-size: 10pt;
+    padding: 5px 20px;
+    font-size: 9pt;
     font-weight: 700;
     color: {TEXT_BRIGHT};
     letter-spacing: 2px;
     margin: 20px auto 8px auto;
+    border-radius: 4px;
 }}
 .title-sens-desc {{
     font-size: 7.5pt;
     color: {TEXT_MUTED};
-    max-width: 400px;
+    max-width: 380px;
     margin: 0 auto;
-}}
-.title-footer {{
-    position: absolute;
-    bottom: 30px;
-    left: 60px;
-    right: 60px;
-    text-align: center;
-}}
-.title-footer-line {{
-    width: 100%;
-    height: 1px;
-    background: {BORDER};
-    margin-bottom: 8px;
-}}
-.title-footer-text {{
-    font-size: 7pt;
-    color: {TEXT_MUTED};
-    letter-spacing: 2px;
 }}
 
 /* ========== CONTENT PAGES ========== */
-.content-header {{
-    border-bottom: 2px solid {PURPLE_PRIMARY};
-    padding-bottom: 8px;
-    margin-bottom: 16px;
-}}
-.content-brand {{
-    font-size: 7pt;
-    font-weight: 700;
-    color: {PURPLE_PRIMARY};
-    letter-spacing: 2px;
-    text-transform: uppercase;
-}}
-.content-title {{
-    font-size: 13pt;
+.section-heading {{
+    font-size: 10.5pt;
     font-weight: 700;
     color: {TEXT_BRIGHT};
-    margin: 4px 0 0 0;
+    margin-bottom: 8px;
+    letter-spacing: 0.5px;
 }}
 
 .section-block {{
-    margin: 16px 0;
-    padding: 12px 14px;
-    background: {BG_CARD};
-    border: 1px solid {BORDER};
-    border-left: 3px solid {PURPLE_PRIMARY};
+    margin: 14px 0;
+    padding: 12px 16px;
+    background: {CARD_BG};
+    border-radius: 6px;
 }}
 
 h1 {{
     font-size: 13pt;
-    color: {PURPLE_BRIGHT};
-    border-bottom: 2px solid {PURPLE_DARK};
-    padding-bottom: 4px;
+    color: {TEXT_BRIGHT};
+    padding-bottom: 2px;
     margin-top: 22px;
     margin-bottom: 10px;
     font-weight: 700;
@@ -461,17 +492,16 @@ h1 {{
 }}
 h2 {{
     font-size: 11pt;
-    color: {PURPLE_BRIGHT};
+    color: {TEXT_BRIGHT};
     font-weight: 700;
     margin-top: 16px;
     margin-bottom: 8px;
-    border-bottom: 1px solid {BORDER};
-    padding-bottom: 3px;
+    padding-bottom: 2px;
     page-break-after: avoid;
 }}
 h3 {{
     font-size: 10pt;
-    color: {TEXT_BRIGHT};
+    color: {TEXT_PRIMARY};
     font-weight: 700;
     margin-top: 12px;
     margin-bottom: 6px;
@@ -493,7 +523,8 @@ strong {{
     color: {TEXT_BRIGHT};
 }}
 em {{
-    color: {PURPLE_BRIGHT};
+    color: {TEXT_PRIMARY};
+    font-style: italic;
 }}
 a {{
     color: {PURPLE_BRIGHT};
@@ -504,14 +535,15 @@ code {{
     padding: 1px 4px;
     font-family: "Courier New", Courier, monospace;
     font-size: 8.5pt;
+    border-radius: 3px;
 }}
 pre {{
-    background: {BG_ELEVATED};
-    border-left: 3px solid {PURPLE_PRIMARY};
+    background: {CARD_BG};
     padding: 10px;
     font-size: 8pt;
     margin: 8px 0;
     color: {TEXT_PRIMARY};
+    border-radius: 4px;
 }}
 pre code {{
     background: none;
@@ -527,34 +559,27 @@ hr {{
 table {{
     border-collapse: collapse;
     width: 100%;
-    margin: 10px 0;
+    margin: 8px 0;
     font-size: 8.5pt;
 }}
 th {{
     background: {PURPLE_SUBTLE};
     color: {TEXT_BRIGHT};
-    padding: 6px 8px;
+    padding: 5px 8px;
     text-align: left;
     font-weight: 700;
-    border-bottom: 2px solid {PURPLE_PRIMARY};
-    font-size: 8pt;
+    font-size: 7.5pt;
     text-transform: uppercase;
     letter-spacing: 0.5px;
 }}
 td {{
-    padding: 5px 8px;
+    padding: 4px 8px;
     border-bottom: 1px solid {BORDER};
     color: {TEXT_PRIMARY};
 }}
-tr:nth-child(even) td {{
-    background: {BG_CARD};
-}}
-
-.data-table {{
-    margin: 8px 0;
-}}
-.data-table th {{
-    background: {PURPLE_SUBTLE};
+.mono {{
+    font-family: "Courier New", Courier, monospace;
+    font-size: 8pt;
 }}
 .desc-cell {{
     color: {TEXT_SECONDARY};
@@ -567,20 +592,20 @@ tr:nth-child(even) td {{
     padding: 1px 6px;
     font-size: 7pt;
     font-weight: 700;
-    letter-spacing: 0.3px;
+    border-radius: 3px;
 }}
 
 .tri-box {{
     background: {PURPLE_SUBTLE};
-    border: 1px solid {PURPLE_DARK};
     padding: 6px 10px;
-    margin-bottom: 8px;
+    margin-bottom: 6px;
     font-size: 8pt;
     color: {TEXT_PRIMARY};
+    border-radius: 4px;
 }}
 .tri-label {{
     font-weight: 700;
-    color: {PURPLE_NEON};
+    color: {PURPLE_BRIGHT};
     letter-spacing: 1px;
     font-size: 7.5pt;
 }}
@@ -605,44 +630,29 @@ tr:nth-child(even) td {{
     letter-spacing: 0.5px;
 }}
 .chart-img {{
-    width: 240px;
-    max-width: 100%;
+    width: 220px;
+    max-width: 90%;
+    border-radius: 6px;
 }}
 
 /* Map & Graph */
-.map-frame, .graph-frame {{
-    background: {BG_ELEVATED};
-    border: 1px solid {BORDER};
-    padding: 8px;
+.media-frame {{
     text-align: center;
-    margin: 6px 0;
+    margin: 10px auto;
+    padding: 8px;
+    background: {PURPLE_SUBTLE};
+    border-radius: 8px;
 }}
-.map-img {{
-    width: 100%;
-    max-width: 500px;
-}}
-.graph-img {{
-    width: 100%;
-    max-width: 500px;
-}}
-
-/* Sensitivity indicator */
-.sens-strip {{
-    width: 100%;
-    height: 3px;
-    margin-bottom: 12px;
+.media-img {{
+    width: 92%;
+    max-width: 460px;
+    border-radius: 6px;
 }}
 </style>
 </head>
 <body>
 
 {title_page}
-
-<div class="content-header">
-    <div class="content-brand">FORTIS INTELLIGENCE HUB</div>
-    <div class="content-title">{html_escape(title)}</div>
-</div>
-<div class="sens-strip" style="background:{sens_color};"></div>
 
 {map_section}
 
@@ -666,22 +676,16 @@ def generate_markdown(content: str, title: str, session_id: str) -> bytes:
         session_ref = re.sub(r"\.pdf$", "", session_ref).replace("_", " ")
     else:
         session_ref = "N/A"
-
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
-
     md_lines = [
-        f"# {title}",
-        "",
-        "---",
-        "",
+        f"# {title}", "",
+        "---", "",
         "| Field | Value |",
         "|-------|-------|",
         f"| **Platform** | Fortis Intelligence Hub |",
         f"| **Generated** | {timestamp} |",
         f"| **Source** | {session_ref} |",
-        "",
-        "---",
-        "",
+        "", "---", "",
         content,
     ]
     return "\n".join(md_lines).encode("utf-8")
@@ -693,7 +697,6 @@ def generate_pdf(content: str, title: str, session_id: str,
                  map_snapshot_b64: str | None = None,
                  map_data: dict | None = None,
                  entity_graph_b64: str | None = None) -> bytes:
-    """Generate a dark-themed PDF report with title page and inline visuals."""
     if sensitivity_level:
         sensitivity_level = sensitivity_level.upper()
     else:
@@ -739,66 +742,42 @@ def generate_pdf(content: str, title: str, session_id: str,
     doc = fitz.open(stream=raw_pdf, filetype="pdf")
     total = len(doc)
 
-    bg_color_rgb = (0.031, 0.031, 0.102)  # #08081a
-    accent_rgb = (0.608, 0.349, 0.714)    # #9b59b6
-    border_rgb = (0.165, 0.165, 0.239)    # #2a2a3d
+    accent_rgb = (0.608, 0.349, 0.714)
+    border_rgb = (0.165, 0.165, 0.239)
     text_muted_rgb = (0.361, 0.353, 0.416)
-    text_secondary_rgb = (0.604, 0.592, 0.659)
 
     for i, page in enumerate(doc):
-        # Dark background fill for every page
-        page.draw_rect(
-            mediabox,
-            color=None,
-            fill=bg_color_rgb,
-            overlay=False,
-        )
+        # Paint gradient background (underneath all content)
+        _paint_gradient_bg(page, mediabox)
+
+        # Overlay HUD SVG
+        _overlay_hud(page, mediabox)
 
         if i == 0:
-            # Title page — neon accent line at top
-            page.draw_rect(
-                fitz.Rect(54, 54, 558, 58),
-                color=None,
-                fill=(0.851, 0.275, 0.937),  # #d946ef neon
-            )
+            # Title page — just the background, no extra decorations
             continue
 
-        # Content pages — header line + sensitivity strip
-        page.draw_rect(
-            fitz.Rect(54, 38, 558, 40),
-            color=None,
-            fill=accent_rgb,
-        )
-        # Sensitivity micro-badge top-right
-        page.insert_text(
-            fitz.Point(480, 35),
-            sensitivity_level,
-            fontsize=6,
-            color=sens_color_rgb,
-            fontname="helv",
-        )
-
-        # Footer
+        # Content pages — minimal footer only
         page.draw_line(
-            fitz.Point(54, 738),
-            fitz.Point(558, 738),
+            fitz.Point(54, 740),
+            fitz.Point(558, 740),
             color=border_rgb,
-            width=0.5,
+            width=0.3,
         )
         page.insert_text(
-            fitz.Point(54, 752),
-            f"FORTIS INTELLIGENCE HUB",
+            fitz.Point(54, 754),
+            "FORTIS INTELLIGENCE HUB",
             fontsize=6,
             color=accent_rgb,
         )
         page.insert_text(
-            fitz.Point(250, 752),
-            f"—  {sensitivity_level}  —",
+            fitz.Point(280, 754),
+            sensitivity_level,
             fontsize=6,
             color=sens_color_rgb,
         )
         page.insert_text(
-            fitz.Point(500, 752),
+            fitz.Point(506, 754),
             f"Page {i + 1} of {total}",
             fontsize=6,
             color=text_muted_rgb,

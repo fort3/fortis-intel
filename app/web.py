@@ -422,7 +422,8 @@ def create_app():
             "font-src 'self' https://fonts.gstatic.com; "
             "img-src 'self' data: https://*.basemaps.cartocdn.com "
             "https://*.tile.openstreetmap.org https://server.arcgisonline.com; "
-            "connect-src 'self'; "
+            "connect-src 'self' https://*.basemaps.cartocdn.com "
+            "https://*.tile.openstreetmap.org https://server.arcgisonline.com; "
             "form-action 'self'; "
             "base-uri 'self'"
         )
