@@ -2514,12 +2514,30 @@ async function exportResults(format) {
             if (lastAnalysisData.charts) {
                 exportPayload.chart_data = lastAnalysisData.charts;
             }
+            if (lastAnalysisData.map_data) {
+                exportPayload.map_data = lastAnalysisData.map_data;
+            }
+            if (lastAnalysisData.entity_graph) {
+                exportPayload.entity_graph = lastAnalysisData.entity_graph;
+            }
             if (lastAnalysisData.identifier || lastAnalysisData.identifier_type) {
                 exportPayload.investigation = {
                     identifier: lastAnalysisData.identifier || '',
                     identifier_type: lastAnalysisData.identifier_type || '',
                     sensitivity_level: lastAnalysisData.sensitivity_level || 'INTERNAL'
                 };
+            }
+            // Capture map snapshot if map is visible
+            if (format === 'pdf' && mapInstance) {
+                try {
+                    var mapEl = document.getElementById('map');
+                    if (mapEl && typeof html2canvas !== 'undefined') {
+                        var canvas = await html2canvas(mapEl, {
+                            useCORS: true, backgroundColor: '#08081a', scale: 2
+                        });
+                        exportPayload.map_snapshot = canvas.toDataURL('image/png');
+                    }
+                } catch (e) { /* map snapshot optional */ }
             }
         }
 

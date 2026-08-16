@@ -970,6 +970,8 @@ def create_app():
             "sensitivity_level": sensitivity,
             "identifier": clean_id,
             "chart_data": charts,
+            "map_data": map_data,
+            "entity_graph": graph_json,
             "user_email": g.user_session.email if hasattr(g, "user_session") else "unknown",
             "created_at": datetime.now(tz=timezone.utc),
         }
@@ -1581,6 +1583,10 @@ def create_app():
                     data["title"] = f"Fortis Report — {identifier}"
             if not data.get("chart_data"):
                 data["chart_data"] = cached.get("chart_data")
+            if not data.get("map_data"):
+                data["map_data"] = cached.get("map_data")
+            if not data.get("entity_graph"):
+                data["entity_graph"] = cached.get("entity_graph")
             if not data.get("investigation"):
                 data["investigation"] = {
                     "identifier": cached.get("identifier", ""),
@@ -1592,13 +1598,15 @@ def create_app():
     @login_required
     @limiter.limit("30 per hour")
     def export_pdf():
-        """Generate a styled PDF from analysis text, charts, and map snapshot."""
+        """Generate a styled PDF from analysis text, charts, map, and graph."""
         data = _resolve_export_data(request.get_json(silent=True) or {})
         content = data.get("content", "")
         title = data.get("title", "Fortis Intelligence Report")
         export_session_id = data.get("session_id", "")
         sensitivity_level = data.get("sensitivity_level", "INTERNAL")
         map_snapshot_b64 = data.get("map_snapshot")
+        map_data = data.get("map_data")
+        entity_graph = data.get("entity_graph")
 
         if not content or not content.strip():
             return jsonify({"error": "No content provided"}), 400
@@ -1607,7 +1615,6 @@ def create_app():
 
         title = re.sub(r"[^\w\s\-]", "", title)[:100] or "Fortis Intelligence Report"
 
-        # Build charts from chart_data if provided
         charts = None
         chart_data = data.get("chart_data")
         if chart_data and isinstance(chart_data, dict):
@@ -1619,12 +1626,22 @@ def create_app():
             except Exception as exc:
                 print(f"[WARN] Chart generation for PDF failed (non-fatal): {exc}")
 
+        graph_b64 = None
+        if entity_graph and isinstance(entity_graph, dict):
+            try:
+                from app.charts import chart_entity_graph
+                graph_b64 = chart_entity_graph(entity_graph)
+            except Exception as exc:
+                print(f"[WARN] Graph rendering for PDF failed (non-fatal): {exc}")
+
         try:
             pdf_bytes = generate_pdf(
                 content, title, export_session_id,
                 charts=charts,
                 sensitivity_level=sensitivity_level,
                 map_snapshot_b64=map_snapshot_b64,
+                map_data=map_data,
+                entity_graph_b64=graph_b64,
             )
         except Exception as exc:
             print(f"[ERROR] PDF export failed: {exc}")
@@ -1772,6 +1789,8 @@ def create_app():
             title = data.get("title", "Fortis Intelligence Report")
             export_session_id = data.get("session_id", "")
             map_snapshot_b64 = data.get("map_snapshot")
+            map_data = data.get("map_data")
+            entity_graph = data.get("entity_graph")
 
             if not content or not content.strip():
                 return jsonify({"error": "No content provided"}), 400
@@ -1791,12 +1810,22 @@ def create_app():
                 except Exception:
                     pass
 
+            graph_b64 = None
+            if entity_graph and isinstance(entity_graph, dict):
+                try:
+                    from app.charts import chart_entity_graph
+                    graph_b64 = chart_entity_graph(entity_graph)
+                except Exception:
+                    pass
+
             try:
                 file_bytes = generate_pdf(
                     content, title, export_session_id,
                     charts=charts,
                     sensitivity_level=sensitivity,
                     map_snapshot_b64=map_snapshot_b64,
+                    map_data=map_data,
+                    entity_graph_b64=graph_b64,
                 )
             except Exception as exc:
                 print(f"[ERROR] Drive PDF generation failed: {exc}")

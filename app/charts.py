@@ -378,6 +378,117 @@ def generate_geo_heatmap_data(entities: list[dict]) -> list[dict]:
     return points
 
 
+# -- Entity Relationship Graph (server-side) ------------------------------
+
+GRAPH_NODE_COLORS = {
+    "person": "#9b59b6",
+    "organization": "#8b5cf6",
+    "location": "#22c55e",
+    "account": "#bb6bd9",
+    "domain": "#6b3fa0",
+    "event": "#f59e0b",
+    "media": "#d946ef",
+    "ip": "#6366f1",
+    "email": "#ec4899",
+    "platform": "#14b8a6",
+    "threat_actor": "#ef4444",
+}
+
+
+def chart_entity_graph(entity_graph: dict, width: int = 8, height: int = 6) -> str | None:
+    """Render Cytoscape-format entity graph as a PNG using networkx + matplotlib.
+
+    Args:
+        entity_graph: Cytoscape.js JSON dict with 'nodes' and 'edges' lists.
+        width: Figure width in inches.
+        height: Figure height in inches.
+
+    Returns:
+        Base64 PNG data URI, or None if graph is empty.
+    """
+    nodes = entity_graph.get("nodes", [])
+    edges = entity_graph.get("edges", [])
+    if not nodes:
+        return None
+
+    try:
+        import networkx as nx
+    except ImportError:
+        return None
+
+    G = nx.DiGraph()
+    node_colors = []
+    node_sizes = []
+    labels = {}
+
+    for n in nodes[:80]:
+        data = n.get("data", {})
+        nid = data.get("id", "")
+        if not nid:
+            continue
+        ntype = data.get("type", "default")
+        label = data.get("label", nid)
+        G.add_node(nid)
+        node_colors.append(GRAPH_NODE_COLORS.get(ntype, "#9b59b6"))
+        node_sizes.append(350 if ntype in ("person", "organization") else 200)
+        labels[nid] = label[:18] + "..." if len(label) > 18 else label
+
+    for e in edges[:120]:
+        data = e.get("data", {})
+        src = data.get("source", "")
+        tgt = data.get("target", "")
+        if src in G and tgt in G:
+            G.add_edge(src, tgt, label=data.get("label", ""))
+
+    if len(G.nodes) == 0:
+        return None
+
+    fig, ax = plt.subplots(figsize=(width, height), facecolor=CHART_BG)
+    ax.set_facecolor(CHART_BG)
+    ax.set_title("Entity Relationship Graph", fontsize=11, fontweight="bold",
+                 color=CHART_TEXT, pad=12)
+
+    try:
+        pos = nx.spring_layout(G, k=2.5, iterations=60, seed=42)
+    except Exception:
+        pos = nx.circular_layout(G)
+
+    nx.draw_networkx_edges(
+        G, pos, ax=ax, edge_color=(0.608, 0.349, 0.714, 0.35),
+        arrows=True, arrowsize=10, width=0.8,
+        connectionstyle="arc3,rad=0.1",
+    )
+
+    ordered_nodes = list(G.nodes())
+    colors_ordered = [node_colors[list(G.nodes()).index(n)] if n in list(G.nodes()) else "#9b59b6"
+                      for n in ordered_nodes]
+    sizes_ordered = [node_sizes[list(G.nodes()).index(n)] if n in list(G.nodes()) else 200
+                     for n in ordered_nodes]
+
+    nx.draw_networkx_nodes(
+        G, pos, ax=ax, nodelist=ordered_nodes,
+        node_color=colors_ordered, node_size=sizes_ordered,
+        edgecolors="#1a1a2e", linewidths=1.0,
+    )
+
+    nx.draw_networkx_labels(
+        G, pos, ax=ax, labels=labels,
+        font_size=6, font_color="#e0e0e0", font_weight="bold",
+    )
+
+    edge_labels = {(u, v): d.get("label", "")[:12]
+                   for u, v, d in G.edges(data=True) if d.get("label")}
+    if edge_labels:
+        nx.draw_networkx_edge_labels(
+            G, pos, ax=ax, edge_labels=edge_labels,
+            font_size=5, font_color="#9a97a8",
+        )
+
+    ax.axis("off")
+    fig.tight_layout(pad=0.5)
+    return _fig_to_b64(fig)
+
+
 # -- Aggregate Chart Generation ------------------------------------------
 
 def generate_investigation_charts(findings: list[dict],

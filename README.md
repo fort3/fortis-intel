@@ -576,12 +576,19 @@ Manage and search across all indexed reports. Archive old reports based on reten
 
 Export reports in multiple formats:
 
-- **PDF** -- Styled report with purple accent theme and optional map snapshots
-- **Markdown** -- Portable text format
+- **PDF** -- Dark cyberpunk-themed report matching the app's visual design:
+  - **Title page** with Fortis branding, report metadata, and sensitivity classification badge
+  - **Geographic overview** with embedded map snapshot (auto-captured from Leaflet) and geospatial data table listing all geo signals with source type, coordinates, and confidence
+  - **Entity relationship graph** rendered server-side (networkx + matplotlib) with color-coded nodes and labeled edges
+  - **Visual analytics** charts in 2-column grid (platform distribution, activity timeline, entity types, confidence breakdown, location frequency)
+  - **Analysis content** with dark background, purple accent headings, and proper light-on-dark text contrast
+  - Sensitivity banner and branded footer on every page
+  - Triangulation summary (center, method, radius, confidence) when available
+- **Markdown** -- Portable text format with metadata table
 - **STIX 2.1** -- Structured threat intelligence standard for entity sharing
 - **CSV** -- Tabular entity and finding data
 - **JSON** -- Full structured data
-- **Google Drive** -- Direct export to a configured Drive folder
+- **Google Drive** -- Direct export to a configured Drive folder (all formats)
 
 ---
 
