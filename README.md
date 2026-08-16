@@ -40,7 +40,7 @@ An OSINT-driven intelligence and analysis platform for open-source intelligence 
 | Component | Technology |
 |-----------|-----------|
 | UI | Vanilla JS single-page application |
-| Maps | Leaflet.js with CartoDB Dark Matter tiles |
+| Maps | Leaflet.js with CartoDB Voyager tiles |
 | Graphs | Cytoscape.js entity relationship visualization |
 | Charts | Chart.js + Matplotlib (server-side) |
 | Theme | Black and purple cyberpunk aesthetic |
@@ -549,7 +549,7 @@ Triangulate locations from multiple data points:
 - Paste social media posts with geotags or location mentions
 - Enter coordinates manually
 
-The interactive map (CartoDB Dark Matter tiles) shows markers with confidence radii, DBSCAN cluster analysis, and a triangulated probable location.
+The interactive map (CartoDB Voyager tiles) shows markers with confidence radii, DBSCAN cluster analysis, and a triangulated probable location.
 
 ### Q&A
 
@@ -616,6 +616,84 @@ The platform is designed to run with minimal configuration. Core features that w
 - All export formats
 - ForgeChain governance
 
+### API-Free Fallbacks
+
+Several platforms can operate without official API keys using optional scraper libraries:
+
+| Platform | API Path | No-API Fallback | Install |
+|---|---|---|---|
+| TikTok | `TIKTOK_API_KEY` (Research API) | **Pyktok** -- Playwright-based scraping of public search/profile pages | `pip install pyktok && playwright install chromium` |
+| Mastodon | `MASTODON_ACCESS_TOKEN` | **Cross-instance search** -- Queries 6 major instances directly (mastodon.social, mastodon.online, mstdn.social, infosec.exchange, hachyderm.io, fosstodon.org) | Built-in (no extra deps) |
+| Mastodon | `MASTODON_ACCESS_TOKEN` | **Masto library** -- Cross-instance user OSINT (optional) | `pip install masto` |
+| Instagram | (none needed) | **Instaloader** -- Scrapes public profiles and posts | Included in requirements.txt |
+
+When an API key is configured, it is always preferred (faster, richer data). Fallbacks activate automatically when keys are absent.
+
+### News Enrichment (RSS)
+
+Investigation enrichment automatically queries curated RSS feeds from major news sources alongside NewsAPI:
+
+- **BBC News** and **BBC World**
+- **CNN Top Stories** and **CNN World**
+- **Reuters**
+- **AP News**
+- **Al Jazeera**
+
+When `NEWSAPI_KEY` is configured, both NewsAPI results and RSS results are merged and deduplicated. When it is not configured, RSS feeds provide free news enrichment with no API key required.
+
+### Mastodon Content Search
+
+Mastodon content search uses a multi-layer approach because the `/api/v2/search` endpoint only returns posts the authenticated user has interacted with:
+
+1. **Hashtag timeline** (`/api/v1/timelines/tag/:tag`) -- Public posts across the fediverse matching query terms
+2. **Search API** (`/api/v2/search?type=statuses`) -- Posts from the user's own interactions
+3. **Public timeline** (feed monitor only) -- Federated timeline filtered by keyword for background monitoring
+
+Results are deduplicated across all layers.
+
+### Image EXIF Triangulation
+
+The geolocation card supports direct image uploads for GPS triangulation. Upload JPEG/TIFF images with embedded EXIF geolocation data, and the platform will:
+
+1. Extract GPS coordinates from each image's EXIF metadata
+2. Plot all extracted locations on the interactive map
+3. Run DBSCAN clustering and triangulation to identify probable areas of interest
+4. Generate an AI analysis of the geographic pattern
+
+---
+
+## Roadmap: Media Geolocation Enrichment
+
+The following capabilities are planned for future development:
+
+### Automatic Media Geo-Extraction
+
+Every OSINT enrichment already captures `media_urls` from social media posts. The planned enhancement will:
+
+1. **Download media from enrichment results** -- Automatically fetch images referenced in `media_urls` from each platform's normalised post data
+2. **Run EXIF extraction on all collected media** -- Feed downloaded images through `MetadataExtractor.extract_geo_from_images()` to extract GPS coordinates
+3. **Inject extracted coordinates into the geospatial pipeline** -- EXIF-derived locations from investigation media join the existing data flow (social geotags, IP geolocation, text-mentioned places) for triangulation and mapping
+
+### Video Frame Geolocation
+
+A new capability for estimating location from video content:
+
+1. **Frame extraction** -- Extract key frames from video files or video URLs collected during investigation
+2. **Landmark recognition** -- Use reverse image / landmark detection to estimate the filming location from visual features (buildings, signs, terrain)
+3. **Aggregate into triangulation** -- Video-derived location estimates feed into the same geospatial pipeline as EXIF, geotags, and IP data
+
+### Unified Geo Signal Aggregation
+
+All geolocation signals from an investigation will be aggregated onto a single map:
+
+- EXIF GPS coordinates from uploaded and enrichment-sourced images
+- Social media geotags and check-ins
+- IP address geolocation
+- Text-mentioned place names (NER + geocoding)
+- Video-derived location estimates
+
+Each signal carries a confidence score and source attribution, enabling weighted triangulation across heterogeneous data sources.
+
 ---
 
 ## Project Structure
@@ -635,7 +713,8 @@ Fortis-Intelligence-Hub/
 |   |-- chains.py                # LLM prompt templates
 |   |-- llm.py                   # DeepSeek LLM factory
 |   |-- osint_client.py          # OSINT aggregator
-|   |-- social_client.py         # Social media API integrations
+|   |-- social_client.py         # Social media API integrations (+ Pyktok/Masto fallbacks)
+|   |-- telegram_auth.py         # One-time Telegram session setup (python -m app.telegram_auth)
 |   |-- geo_client.py            # Geolocation + triangulation
 |   |-- metadata_extractor.py    # EXIF, NER, language detection
 |   |-- web_scraper.py           # News, WHOIS, DNS, RSS

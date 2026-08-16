@@ -1071,10 +1071,49 @@ def create_app():
     @limiter.limit("30 per hour")
     def triangulate():
         """Geolocation triangulation from multiple data points."""
-        data = request.get_json(silent=True) or {}
-        data_points = data.get("data_points", [])
-        subject_context = data.get("subject_context", "").strip()
-        investigation_purpose = data.get("investigation_purpose", "").strip()
+
+        # Handle image uploads (multipart/form-data from the Images tab)
+        uploaded_images = request.files.getlist("images")
+        if uploaded_images:
+            from app.metadata_extractor import MetadataExtractor
+            from app.geo_client import GeoDataPoint as _GeoDP
+
+            extractor = MetadataExtractor()
+            image_bytes_list = []
+            for f in uploaded_images:
+                img_data = f.read()
+                if img_data:
+                    image_bytes_list.append(img_data)
+
+            if not image_bytes_list:
+                return jsonify({"error": "No valid image data received"}), 400
+
+            geo_results = extractor.extract_geo_from_images(image_bytes_list)
+            if not geo_results:
+                return jsonify({
+                    "error": "No GPS coordinates found in the uploaded images. "
+                    "Ensure the images contain EXIF geolocation data."
+                }), 400
+
+            data_points = []
+            for gp in geo_results:
+                data_points.append({
+                    "type": "coordinates",
+                    "lat": gp["lat"],
+                    "lon": gp["lon"],
+                    "label": f"EXIF ({gp.get('gps_date', '')})".strip(),
+                    "source": "exif",
+                    "confidence": 0.95,
+                })
+
+            data = {"data_points": data_points}
+            subject_context = ""
+            investigation_purpose = ""
+        else:
+            data = request.get_json(silent=True) or {}
+            data_points = data.get("data_points", [])
+            subject_context = data.get("subject_context", "").strip()
+            investigation_purpose = data.get("investigation_purpose", "").strip()
 
         if not data_points or not isinstance(data_points, list):
             return jsonify({"error": "data_points (list) is required"}), 400
