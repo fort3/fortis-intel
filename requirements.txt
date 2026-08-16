@@ -44,6 +44,10 @@ exifread>=3.0.0
 langdetect>=1.0.9
 spacy>=3.7.0
 
+# === Video Geo (optional -- enables video frame analysis) ===
+opencv-python>=4.9.0
+imagehash>=4.3.0
+
 # === Data Processing ===
 PyMuPDF>=1.24.0
 pypdf>=4.0.0

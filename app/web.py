@@ -852,12 +852,20 @@ def create_app():
                     lon = gp.get("lon") or gp.get("lng")
                     if lat is None or lon is None:
                         continue
+                    desc_parts = []
+                    if gp.get("method"):
+                        desc_parts.append(gp["method"].replace("_", " "))
+                    if gp.get("platform"):
+                        desc_parts.append(f"via {gp['platform']}")
+                    if gp.get("detected_text"):
+                        desc_parts.append(f'text: "{gp["detected_text"][:60]}"')
                     markers.append({
                         "lat": float(lat),
                         "lng": float(lon),
                         "label": gp.get("label") or gp.get("name", ""),
                         "source_type": gp.get("source", "osint"),
                         "confidence": gp.get("confidence", 0.5),
+                        "description": " | ".join(desc_parts) if desc_parts else "",
                     })
                 if markers:
                     lats = [m["lat"] for m in markers]
@@ -870,6 +878,29 @@ def create_app():
                             [max(lats), max(lngs)],
                         ) if len(markers) > 1 else 10,
                     }
+                    if len(markers) >= 2:
+                        try:
+                            from app.geo_client import GeoDataPoint as GeoDP
+                            tri_points = [
+                                GeoDP(
+                                    lat=m["lat"], lon=m["lng"],
+                                    label=m.get("label", ""),
+                                    source=m.get("source_type", "osint"),
+                                    confidence=m.get("confidence", 0.5),
+                                )
+                                for m in markers
+                            ]
+                            tri_result = GeoClient().triangulate(tri_points)
+                            if tri_result and tri_result.center_lat:
+                                map_data["triangulation"] = {
+                                    "center": {"lat": tri_result.center_lat, "lng": tri_result.center_lon},
+                                    "confidence_radius": tri_result.radius_m,
+                                    "source_points": [{"lat": m["lat"], "lng": m["lng"]} for m in markers],
+                                    "method": tri_result.method,
+                                    "confidence": tri_result.confidence,
+                                }
+                        except Exception as tri_exc:
+                            print(f"[DEBUG] Auto-triangulation skipped: {tri_exc}")
         except Exception as exc:
             print(f"[WARN] Map data construction failed (non-fatal): {exc}")
 

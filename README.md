@@ -668,31 +668,44 @@ The following capabilities are planned for future development:
 
 ### Automatic Media Geo-Extraction
 
-Every OSINT enrichment already captures `media_urls` from social media posts. The planned enhancement will:
+Every OSINT enrichment captures `media_urls` from social media posts. The pipeline automatically:
 
-1. **Download media from enrichment results** -- Automatically fetch images referenced in `media_urls` from each platform's normalised post data
-2. **Run EXIF extraction on all collected media** -- Feed downloaded images through `MetadataExtractor.extract_geo_from_images()` to extract GPS coordinates
-3. **Inject extracted coordinates into the geospatial pipeline** -- EXIF-derived locations from investigation media join the existing data flow (social geotags, IP geolocation, text-mentioned places) for triangulation and mapping
+1. **Downloads media from enrichment results** -- Fetches images referenced in `media_urls` from each platform's normalised post data (up to 50 images per investigation)
+2. **Runs EXIF extraction on all collected media** -- Feeds downloaded images through `MetadataExtractor.extract_geo_from_images()` to extract GPS coordinates (confidence: 0.95)
+3. **Injects extracted coordinates into the geospatial pipeline** -- EXIF-derived locations join geotags, IP geolocation, text-mentioned places for triangulation and mapping
 
 ### Video Frame Geolocation
 
-A new capability for estimating location from video content:
+Estimates location from video content using OpenCV keyframe analysis (`app/video_geo.py`):
 
-1. **Frame extraction** -- Extract key frames from video files or video URLs collected during investigation
-2. **Landmark recognition** -- Use reverse image / landmark detection to estimate the filming location from visual features (buildings, signs, terrain)
-3. **Aggregate into triangulation** -- Video-derived location estimates feed into the same geospatial pipeline as EXIF, geotags, and IP data
+1. **Frame extraction** -- Extracts keyframes at 2-second intervals from video URLs (up to 30 frames per video, 10 videos per investigation)
+2. **Perceptual deduplication** -- Uses imagehash (pHash) to skip near-duplicate frames (hamming distance < 8)
+3. **EXIF from video frames** -- Extracts GPS metadata embedded in video frame headers (source: `video_exif`, confidence: 0.90)
+4. **OCR + geocoding** -- When pytesseract is installed, detects text in frames (signs, banners, watermarks) and geocodes location mentions via spaCy NER + Nominatim (source: `video_landmark`, confidence: 0.50-0.55)
+5. **Text region detection** -- OpenCV MSER detects text-heavy regions in frames for targeted OCR analysis
+
+**Optional dependencies**: `opencv-python>=4.9.0`, `imagehash>=4.3.0`, `pytesseract` (for OCR). The system degrades gracefully — without OpenCV, video analysis is skipped entirely.
 
 ### Unified Geo Signal Aggregation
 
-All geolocation signals from an investigation will be aggregated onto a single map:
+All geolocation signals from an investigation are aggregated onto a single map with automatic triangulation:
 
-- EXIF GPS coordinates from uploaded and enrichment-sourced images
-- Social media geotags and check-ins
-- IP address geolocation
-- Text-mentioned place names (NER + geocoding)
-- Video-derived location estimates
+| Signal Source | Method | Confidence | Source Type |
+|---|---|---|---|
+| Image EXIF GPS | `MetadataExtractor.extract_geo_from_images()` | 0.95 | `exif` |
+| Video frame EXIF | `VideoGeoExtractor` keyframe analysis | 0.90 | `video_exif` |
+| Video OCR landmarks | Frame OCR + NER geocoding | 0.50-0.55 | `video_landmark` |
+| Social geotags | Platform check-ins and place objects | 0.85 | `geotag` |
+| NLP location mentions | spaCy GPE/LOC entities + Nominatim geocoding | 0.55 | `nlp_mention` |
+| IP geolocation | GeoIP2 / MaxMind | varies | `ip` |
 
-Each signal carries a confidence score and source attribution, enabling weighted triangulation across heterogeneous data sources.
+Each signal carries confidence scores and source attribution. When 2+ geo points exist, automatic weighted-centroid triangulation (with DBSCAN clustering for 5+ points) computes a confidence radius and center point. The map legend dynamically shows only the source types present in each investigation.
+
+The investigation pipeline (`OSINTClient.investigate()`) runs geo extraction in this order:
+1. `_extract_geo()` -- Social geotags from post metadata
+2. `_extract_media_geo()` -- EXIF GPS from downloaded images
+3. `_extract_video_geo()` -- Video keyframe analysis (requires OpenCV)
+4. `_geocode_entity_locations()` -- NLP-extracted place names geocoded to coordinates
 
 ---
 
@@ -712,7 +725,8 @@ Fortis-Intelligence-Hub/
 |   |-- web.py                   # Flask app factory + all routes
 |   |-- chains.py                # LLM prompt templates
 |   |-- llm.py                   # DeepSeek LLM factory
-|   |-- osint_client.py          # OSINT aggregator
+|   |-- osint_client.py          # OSINT aggregator (unified geo pipeline)
+|   |-- video_geo.py             # Video keyframe extraction + landmark geolocation
 |   |-- social_client.py         # Social media API integrations (+ Pyktok/Masto fallbacks)
 |   |-- telegram_auth.py         # One-time Telegram session setup (python -m app.telegram_auth)
 |   |-- geo_client.py            # Geolocation + triangulation

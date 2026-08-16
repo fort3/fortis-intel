@@ -116,6 +116,25 @@ class OSINTClient:
         self._social = SocialClient()
         self._scraper = WebScraper()
         self._extractor = MetadataExtractor()
+
+        self._video_geo = None
+        try:
+            from app.video_geo import VideoGeoExtractor, HAS_CV2
+            if HAS_CV2:
+                self._video_geo = VideoGeoExtractor()
+                log.info("VideoGeoExtractor loaded (OpenCV available)")
+            else:
+                log.info("VideoGeoExtractor skipped — OpenCV not installed")
+        except ImportError:
+            log.info("VideoGeoExtractor not available")
+
+        self._geo_client = None
+        try:
+            from app.geo_client import GeoClient
+            self._geo_client = GeoClient()
+        except ImportError:
+            log.info("GeoClient not available for NLP geocoding")
+
         log.info("OSINTClient initialised — social, web, metadata modules loaded")
 
     def investigate(
@@ -167,6 +186,7 @@ class OSINTClient:
 
         findings.geo_points = self._extract_geo(findings.posts)
         findings.geo_points.extend(self._extract_media_geo(findings.posts))
+        findings.geo_points.extend(self._extract_video_geo(findings.posts))
 
         if findings.posts:
             posting_times = [
@@ -197,6 +217,10 @@ class OSINTClient:
                             enrichment_sources=["nlp"],
                         )
                     )
+
+        findings.geo_points.extend(
+            self._geocode_entity_locations(findings.entities)
+        )
 
         findings.timeline = self._build_timeline(findings)
         findings.sensitivity_level = self._assess_sensitivity(findings)
@@ -442,6 +466,82 @@ class OSINTClient:
         log.info("Extracted %d EXIF geo points from %d downloaded images",
                  len(geo_results), len(image_bytes_list))
         return geo_results
+
+    _VIDEO_EXT_RE = _re.compile(
+        r"\.(mp4|avi|mov|mkv|webm|flv|wmv|m4v|3gp)(\?.*)?$", _re.I
+    )
+    _VIDEO_URL_HINTS = ("/video/", "/videos/", ".mp4", ".webm")
+
+    def _extract_video_geo(self, posts: list[SocialPost]) -> list[dict[str, Any]]:
+        """Extract geo signals from video URLs in posts."""
+        if self._video_geo is None:
+            return []
+
+        video_urls: list[tuple[str, str]] = []
+        for p in posts:
+            for url in (p.media_urls or []):
+                if not url or not url.startswith("http"):
+                    continue
+                if self._VIDEO_EXT_RE.search(url) or any(
+                    h in url.lower() for h in self._VIDEO_URL_HINTS
+                ):
+                    video_urls.append((url, p.platform))
+                if len(video_urls) >= 10:
+                    break
+            if len(video_urls) >= 10:
+                break
+
+        if not video_urls:
+            return []
+
+        log.info("Processing %d video URLs for geo extraction", len(video_urls))
+        try:
+            return self._video_geo.extract_from_urls(video_urls)
+        except Exception as exc:
+            log.error("Video geo extraction failed: %s", exc)
+            return []
+
+    def _geocode_entity_locations(
+        self, entities: list[EnrichedEntity]
+    ) -> list[dict[str, Any]]:
+        """Geocode GPE/LOC entities from NLP extraction into geo points."""
+        if self._geo_client is None:
+            return []
+
+        location_names: list[str] = []
+        for ent in entities:
+            if ent.entity_type in ("GPE", "LOC") and ent.entity_value:
+                location_names.append(ent.entity_value)
+
+        if not location_names:
+            return []
+
+        log.info("Geocoding %d NLP-extracted location entities", len(location_names))
+        geo_points: list[dict[str, Any]] = []
+        seen: set[str] = set()
+
+        for loc_name in location_names[:20]:
+            try:
+                point = self._geo_client.geocode(loc_name)
+                if point is None:
+                    continue
+                loc_key = f"{point.lat:.4f},{point.lon:.4f}"
+                if loc_key in seen:
+                    continue
+                seen.add(loc_key)
+                geo_points.append({
+                    "lat": point.lat,
+                    "lon": point.lon,
+                    "label": loc_name,
+                    "source": "nlp_mention",
+                    "confidence": 0.55,
+                    "method": "nlp_entity_geocode",
+                })
+            except Exception as exc:
+                log.debug("Failed to geocode entity %r: %s", loc_name, exc)
+
+        log.info("Geocoded %d/%d location entities", len(geo_points), len(location_names))
+        return geo_points
 
     def _gather_text(self, findings: OSINTFindings) -> str:
         parts: list[str] = []

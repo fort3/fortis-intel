@@ -1589,6 +1589,9 @@ function renderMap(mapData) {
     // Color mapping by source type
     var sourceColors = {
         exif: '#16a34a',
+        video_exif: '#15803d',
+        video_landmark: '#f59e0b',
+        nlp_mention: '#dc2626',
         ip_geolocation: '#2563eb',
         ip: '#2563eb',
         geotag: '#7c3aed',
@@ -1753,6 +1756,40 @@ function renderMap(mapData) {
     // Layer control
     if (Object.keys(overlayLayers).length > 1) {
         L.control.layers(null, overlayLayers, { collapsed: false, position: 'topright' }).addTo(mapInstance);
+    }
+
+    // Geo signal legend
+    if (mapData.markers && mapData.markers.length > 0) {
+        var usedSources = {};
+        mapData.markers.forEach(function (m) {
+            var st = m.source_type || m.type || 'default';
+            usedSources[st] = sourceColors[st] || sourceColors.default;
+        });
+        var sourceLabels = {
+            exif: 'EXIF GPS', video_exif: 'Video EXIF', video_landmark: 'Video Landmark',
+            nlp_mention: 'NLP Location', ip_geolocation: 'IP Geolocation', ip: 'IP',
+            geotag: 'Social Geotag', social: 'Social', geocoding: 'Geocoded',
+            address: 'Address', mention: 'Mention', manual: 'Manual',
+            user_input: 'User Input', osint: 'OSINT'
+        };
+        var LegendControl = L.Control.extend({
+            options: { position: 'bottomright' },
+            onAdd: function () {
+                var div = L.DomUtil.create('div', 'leaflet-bar leaflet-control');
+                div.style.cssText = 'background:#0f172a;padding:8px 12px;border-radius:6px;font-size:11px;color:#94a3b8;border:1px solid #1e293b;';
+                var html = '<div style="font-weight:600;margin-bottom:4px;color:#e2e8f0;">Signal Sources</div>';
+                Object.keys(usedSources).forEach(function (src) {
+                    var label = sourceLabels[src] || src.replace(/_/g, ' ');
+                    html += '<div style="display:flex;align-items:center;gap:6px;margin:2px 0;">' +
+                        '<span style="width:10px;height:10px;border-radius:50%;background:' + usedSources[src] + ';display:inline-block;"></span>' +
+                        '<span>' + label + '</span></div>';
+                });
+                div.innerHTML = html;
+                L.DomEvent.disableClickPropagation(div);
+                return div;
+            }
+        });
+        mapInstance.addControl(new LegendControl());
     }
 
     // Fit bounds
