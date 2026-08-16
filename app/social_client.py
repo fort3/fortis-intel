@@ -148,6 +148,14 @@ class SocialClient:
 
     def __init__(self) -> None:
         log.info("SocialClient initialising (Phase 1)")
+        self._http = requests.Session()
+        self._http.headers.update({"User-Agent": "FortisIntelHub/1.0"})
+        adapter = requests.adapters.HTTPAdapter(
+            pool_connections=6, pool_maxsize=10, max_retries=1,
+        )
+        self._http.mount("https://", adapter)
+        self._http.mount("http://", adapter)
+
         self._twitter_client: Any | None = None
         self._reddit_client: Any | None = None
         self._instaloader: Any | None = None
@@ -851,7 +859,7 @@ class SocialClient:
         if self._mastodon_base_url:
             try:
                 url = f"{self._mastodon_base_url}/api/v2/search"
-                resp = requests.get(
+                resp = self._http.get(
                     url,
                     params={"q": username, "type": "accounts", "limit": 5},
                     headers=self._mastodon_headers(),
@@ -950,7 +958,7 @@ class SocialClient:
             if self._mastodon_base_url and base.rstrip("/") == self._mastodon_base_url.rstrip("/"):
                 continue
             try:
-                resp = requests.get(
+                resp = self._http.get(
                     f"{base}/api/v2/search",
                     params={"q": username, "type": "accounts", "limit": 3, "resolve": "true"},
                     timeout=8,
@@ -993,7 +1001,7 @@ class SocialClient:
             params: dict[str, Any] = {"limit": min(limit, 40)}
             if since:
                 params["since_id"] = since  # Mastodon uses snowflake-like IDs, caller may pass id
-            resp = requests.get(
+            resp = self._http.get(
                 url,
                 params=params,
                 headers=self._mastodon_headers(),
@@ -1045,7 +1053,7 @@ class SocialClient:
         tags = [w.lstrip("#") for w in query.split() if len(w.lstrip("#")) >= 2]
         for tag in tags[:3]:
             try:
-                resp = requests.get(
+                resp = self._http.get(
                     f"{self._mastodon_base_url}/api/v1/timelines/tag/{tag}",
                     params={"limit": cap},
                     headers=self._mastodon_headers(),
@@ -1064,7 +1072,7 @@ class SocialClient:
 
         # Layer 2: interaction-based search (returns posts you interacted with)
         try:
-            resp = requests.get(
+            resp = self._http.get(
                 f"{self._mastodon_base_url}/api/v2/search",
                 params={"q": query, "type": "statuses", "limit": cap},
                 headers=self._mastodon_headers(),
@@ -1097,7 +1105,7 @@ class SocialClient:
             params: dict[str, Any] = {"limit": min(limit, 40)}
             if since_id:
                 params["since_id"] = since_id
-            resp = requests.get(
+            resp = self._http.get(
                 f"{self._mastodon_base_url}/api/v1/timelines/public",
                 params=params,
                 headers=self._mastodon_headers(),
@@ -1121,7 +1129,7 @@ class SocialClient:
             return []
         try:
             url = f"https://graph.facebook.com/v19.0/{username}"
-            resp = requests.get(
+            resp = self._http.get(
                 url,
                 params={
                     "fields": "id,name,about,link,followers_count,fan_count,category",
@@ -1156,7 +1164,7 @@ class SocialClient:
             return []
         try:
             url = "https://graph.facebook.com/v19.0/search"
-            resp = requests.get(
+            resp = self._http.get(
                 url,
                 params={
                     "q": query,
@@ -1204,7 +1212,7 @@ class SocialClient:
             }
             if since:
                 params["since"] = since
-            resp = requests.get(url, params=params, timeout=15)
+            resp = self._http.get(url, params=params, timeout=15)
             resp.raise_for_status()
             items = resp.json().get("data", [])
             posts: list[dict[str, Any]] = []
@@ -1248,7 +1256,7 @@ class SocialClient:
                 "Content-Type": "application/json",
             }
             payload = {"username": username}
-            resp = requests.post(url, json=payload, headers=headers, timeout=15)
+            resp = self._http.post(url, json=payload, headers=headers, timeout=15)
             resp.raise_for_status()
             data = resp.json().get("data", {})
             return [self._normalise_profile(
@@ -1321,7 +1329,7 @@ class SocialClient:
                 "query": {"and": [{"operation": "IN", "field_name": "keyword", "field_values": [query]}]},
                 "max_count": min(limit, 50),
             }
-            resp = requests.post(url, json=payload, headers=headers, timeout=15)
+            resp = self._http.post(url, json=payload, headers=headers, timeout=15)
             resp.raise_for_status()
             videos = resp.json().get("data", {}).get("videos", [])
             posts: list[dict[str, Any]] = []
@@ -1430,7 +1438,7 @@ class SocialClient:
             }
             if since:
                 payload["start_date"] = since[:10]  # YYYY-MM-DD
-            resp = requests.post(url, json=payload, headers=headers, timeout=15)
+            resp = self._http.post(url, json=payload, headers=headers, timeout=15)
             resp.raise_for_status()
             videos = resp.json().get("data", {}).get("videos", [])
             posts: list[dict[str, Any]] = []
@@ -1536,9 +1544,20 @@ class SocialClient:
                 await client.disconnect()
 
         try:
-            loop = asyncio.new_event_loop()
-            result = loop.run_until_complete(_wrapper())
-            loop.close()
+            import sys
+            if sys.platform == "win32":
+                loop = asyncio.SelectorEventLoop()
+            else:
+                loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                result = loop.run_until_complete(_wrapper())
+            finally:
+                try:
+                    loop.run_until_complete(loop.shutdown_asyncgens())
+                except Exception:
+                    pass
+                loop.close()
             return result
         except Exception as exc:
             log.error("Telegram async bridge failed: %s", exc)

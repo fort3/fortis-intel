@@ -3,10 +3,13 @@
 import logging
 import os
 import re as _re
+import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field, asdict
 from datetime import datetime, timezone
 from typing import Any
+
+_IS_WIN32 = sys.platform == "win32"
 
 import requests as _requests
 
@@ -153,7 +156,8 @@ class OSINTClient:
         )
 
         tasks = {}
-        with ThreadPoolExecutor(max_workers=4) as executor:
+        workers = 2 if _IS_WIN32 else 4
+        with ThreadPoolExecutor(max_workers=workers) as executor:
             tasks["profiles"] = executor.submit(
                 self._collect_profiles, identifier, resolved_platforms
             )
@@ -171,7 +175,7 @@ class OSINTClient:
 
             for key, future in tasks.items():
                 try:
-                    result = future.result(timeout=30)
+                    result = future.result(timeout=45)
                     if key == "profiles":
                         findings.profiles = result
                     elif key == "content":

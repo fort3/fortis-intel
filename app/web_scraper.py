@@ -52,6 +52,14 @@ class WebScraper:
         else:
             log.info("VirusTotal API NOT configured (VIRUSTOTAL_API_KEY not set)")
 
+        self._http = requests.Session()
+        self._http.headers.update({"User-Agent": "FortisIntelHub/1.0"})
+        adapter = requests.adapters.HTTPAdapter(
+            pool_connections=4, pool_maxsize=6, max_retries=1,
+        )
+        self._http.mount("https://", adapter)
+        self._http.mount("http://", adapter)
+
     def parse_rss_feed(self, feed_url: str) -> list[dict[str, Any]]:
         try:
             feed = feedparser.parse(feed_url)
@@ -243,7 +251,7 @@ class WebScraper:
         try:
             parsed = urlparse(url)
             robots_url = f"{parsed.scheme}://{parsed.netloc}/robots.txt"
-            resp = requests.get(robots_url, timeout=10)
+            resp = self._http.get(robots_url, timeout=10)
             if resp.status_code != 200:
                 log.warning("robots.txt returned HTTP %d for %r", resp.status_code, robots_url)
                 return empty
@@ -396,14 +404,14 @@ class WebScraper:
 
         try:
             if indicator_type == "domain":
-                resp = requests.get(f"{base}/domains/{indicator}", headers=headers, timeout=15)
+                resp = self._http.get(f"{base}/domains/{indicator}", headers=headers, timeout=15)
             elif indicator_type == "ip":
-                resp = requests.get(f"{base}/ip_addresses/{indicator}", headers=headers, timeout=15)
+                resp = self._http.get(f"{base}/ip_addresses/{indicator}", headers=headers, timeout=15)
             elif indicator_type == "hash":
-                resp = requests.get(f"{base}/files/{indicator}", headers=headers, timeout=15)
+                resp = self._http.get(f"{base}/files/{indicator}", headers=headers, timeout=15)
             elif indicator_type == "url":
                 # URL analysis requires a POST first, then a GET on the analysis
-                submit_resp = requests.post(
+                submit_resp = self._http.post(
                     f"{base}/urls",
                     headers=headers,
                     data={"url": indicator},
@@ -411,7 +419,7 @@ class WebScraper:
                 )
                 submit_resp.raise_for_status()
                 analysis_id = submit_resp.json()["data"]["id"]
-                resp = requests.get(
+                resp = self._http.get(
                     f"{base}/analyses/{analysis_id}",
                     headers=headers,
                     timeout=15,

@@ -197,6 +197,8 @@ class GeoClient:
             else:
                 log.info("MaxMind DB not found at %s — will use ip-api fallback", db_path)
 
+        self._http = requests.Session()
+        self._http.headers.update({"User-Agent": "FortisIntelHub/1.0"})
         log.info("GeoClient initialised (Phase 1)")
 
     # ------------------------------------------------------------------
@@ -379,7 +381,7 @@ class GeoClient:
 
         # --- Fallback to ip-api.com ---
         try:
-            resp = requests.get(
+            resp = self._http.get(
                 f"http://ip-api.com/json/{ip_address}",
                 timeout=10,
                 params={"fields": "status,message,lat,lon,city,country,regionName,isp,query"},

@@ -17,7 +17,9 @@ from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-# Windows UTF-8 encoding fix
+_IS_WIN32 = sys.platform == "win32"
+
+# Windows fixes
 if sys.platform == "win32":
     for stream in (sys.stdout, sys.stderr):
         if hasattr(stream, "reconfigure"):
@@ -1388,7 +1390,8 @@ def create_app():
         platforms = list(SOCIAL_PLATFORMS.keys())
 
         elevated = _is_admin()
-        with ThreadPoolExecutor(max_workers=min(8, len(valid_items))) as executor:
+        max_batch_workers = min(3, len(valid_items)) if _IS_WIN32 else min(8, len(valid_items))
+        with ThreadPoolExecutor(max_workers=max_batch_workers) as executor:
             futures = {
                 executor.submit(
                     _process_single_identifier,
