@@ -416,11 +416,17 @@ class GeoClient:
 
         return None
 
+    TRIANGULATION_CONFIDENCE_FLOOR = 0.6
+
     def triangulate(
         self,
         data_points: list[GeoDataPoint],
     ) -> TriangulationResult:
         """Triangulate a probable location from multiple data points.
+
+        Points below ``TRIANGULATION_CONFIDENCE_FLOOR`` are discarded as
+        likely false positives before computation.  If every point falls
+        below the threshold the full set is used as a fallback.
 
         Computes a weighted centroid (weighted by confidence). If more than
         five points are provided and scikit-learn is available, DBSCAN
@@ -436,13 +442,26 @@ class GeoClient:
         if not data_points:
             return TriangulationResult()
 
+        credible = [p for p in data_points
+                    if p.confidence >= self.TRIANGULATION_CONFIDENCE_FLOOR]
+        if not credible:
+            credible = list(data_points)
+
         try:
             # --- Weighted centroid ---
             weights = np.array(
-                [max(p.confidence, 0.01) for p in data_points], dtype=float,
+                [max(p.confidence, 0.01) for p in credible], dtype=float,
             )
-            lats = np.array([p.lat for p in data_points], dtype=float)
-            lons = np.array([p.lon for p in data_points], dtype=float)
+            lats = np.array([p.lat for p in credible], dtype=float)
+            lons = np.array([p.lon for p in credible], dtype=float)
+
+            dropped = len(data_points) - len(credible)
+            if dropped:
+                log.info(
+                    "Triangulation: filtered %d/%d points below %.0f%% confidence",
+                    dropped, len(data_points),
+                    self.TRIANGULATION_CONFIDENCE_FLOOR * 100,
+                )
 
             total_weight = weights.sum()
             center_lat = float(np.dot(weights, lats) / total_weight)
@@ -450,7 +469,7 @@ class GeoClient:
 
             # --- Confidence radius (max distance from centroid to any point) ---
             max_dist_km = 0.0
-            for pt in data_points:
+            for pt in credible:
                 d = self._haversine_km(center_lat, center_lon, pt.lat, pt.lon)
                 if d > max_dist_km:
                     max_dist_km = d
@@ -459,11 +478,11 @@ class GeoClient:
             avg_confidence = float(weights.mean())
 
             method = "weighted_centroid"
-            cluster_points: list[GeoDataPoint] = list(data_points)
+            cluster_points: list[GeoDataPoint] = list(credible)
             outliers: list[GeoDataPoint] = []
 
             # --- DBSCAN clustering for >5 points ---
-            if len(data_points) > 5 and HAS_SKLEARN:
+            if len(credible) > 5 and HAS_SKLEARN:
                 try:
                     coords = np.column_stack([lats, lons])
                     # eps=0.01 roughly corresponds to ~1 km at mid-latitudes
@@ -474,7 +493,7 @@ class GeoClient:
                     cluster_points = []
                     outliers = []
 
-                    for pt, label in zip(data_points, labels):
+                    for pt, label in zip(credible, labels):
                         if label == -1:
                             outliers.append(pt)
                         else:
@@ -524,7 +543,7 @@ class GeoClient:
                 center_lon=center_lon,
                 radius_m=radius_m,
                 confidence=avg_confidence,
-                point_count=len(data_points),
+                point_count=len(credible),
                 method=method,
                 cluster_points=cluster_points,
                 outliers=outliers,

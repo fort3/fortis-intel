@@ -7,6 +7,12 @@ from email.mime.text import MIMEText
 from urllib.parse import urlparse
 
 import requests
+from requests.adapters import HTTPAdapter
+
+_notify_http = requests.Session()
+_notify_adapter = HTTPAdapter(pool_connections=1, pool_maxsize=2, max_retries=1)
+_notify_http.mount("https://", _notify_adapter)
+_notify_http.mount("http://", _notify_adapter)
 
 
 def send_slack_notification(message: str, finding_id: str | None = None) -> bool:
@@ -61,7 +67,7 @@ def send_slack_notification(message: str, finding_id: str | None = None) -> bool
                 ]
             })
 
-        response = requests.post(
+        response = _notify_http.post(
             webhook_url,
             json=payload,
             timeout=5,

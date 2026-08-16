@@ -13,8 +13,14 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import requests as _requests
+from requests.adapters import HTTPAdapter as _HTTPAdapter
 
 log = logging.getLogger(__name__)
+
+_video_http = _requests.Session()
+_video_adapter = _HTTPAdapter(pool_connections=2, pool_maxsize=4, max_retries=1)
+_video_http.mount("https://", _video_adapter)
+_video_http.mount("http://", _video_adapter)
 
 # ---------------------------------------------------------------------------
 # Optional library availability
@@ -240,7 +246,7 @@ class VideoGeoExtractor:
 
     def _download_video(self, url: str) -> bytes | None:
         try:
-            resp = _requests.get(
+            resp = _video_http.get(
                 url, timeout=self._DOWNLOAD_TIMEOUT, stream=True
             )
             if resp.status_code != 200:

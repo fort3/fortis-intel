@@ -380,13 +380,28 @@ class MetadataExtractor:
                 MetadataExtractor._nlp = spacy.load("en_core_web_sm")
 
             doc = MetadataExtractor._nlp(text)
-            entities: list[dict[str, Any]] = []
+
+            freq: dict[tuple[str, str], int] = {}
             for ent in doc.ents:
+                key = (ent.label_, ent.text.strip())
+                freq[key] = freq.get(key, 0) + 1
+
+            entities: list[dict[str, Any]] = []
+            seen: set[tuple[str, str]] = set()
+            for ent in doc.ents:
+                key = (ent.label_, ent.text.strip())
+                if key in seen:
+                    continue
+                seen.add(key)
+                count = freq[key]
+                token_len = len(ent.text.split())
+                score = min(0.4 + 0.1 * count + 0.05 * token_len, 0.95)
                 entities.append({
                     "type": ent.label_,
                     "value": ent.text,
                     "start": ent.start_char,
                     "end": ent.end_char,
+                    "confidence": round(score, 2),
                 })
             return entities
         except Exception as exc:

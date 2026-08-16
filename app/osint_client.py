@@ -12,6 +12,7 @@ from typing import Any
 _IS_WIN32 = sys.platform == "win32"
 
 import requests as _requests
+from requests.adapters import HTTPAdapter as _HTTPAdapter
 
 from app.constants import SOCIAL_PLATFORMS
 
@@ -138,6 +139,11 @@ class OSINTClient:
         except ImportError:
             log.info("GeoClient not available for NLP geocoding")
 
+        self._http = _requests.Session()
+        _adapter = _HTTPAdapter(pool_connections=4, pool_maxsize=6, max_retries=1)
+        self._http.mount("https://", _adapter)
+        self._http.mount("http://", _adapter)
+
         log.info("OSINTClient initialised — social, web, metadata modules loaded")
 
     def investigate(
@@ -217,7 +223,7 @@ class OSINTClient:
                         EnrichedEntity(
                             entity_type=ent["type"],
                             entity_value=ent["value"],
-                            confidence=0.7,
+                            confidence=ent.get("confidence", 0.5),
                             enrichment_sources=["nlp"],
                         )
                     )
@@ -438,7 +444,7 @@ class OSINTClient:
 
         for url, platform in image_urls:
             try:
-                resp = _requests.get(url, timeout=self._MEDIA_DOWNLOAD_TIMEOUT, stream=True)
+                resp = self._http.get(url, timeout=self._MEDIA_DOWNLOAD_TIMEOUT, stream=True)
                 if resp.status_code != 200:
                     continue
                 ct = resp.headers.get("Content-Type", "")
@@ -512,19 +518,19 @@ class OSINTClient:
         if self._geo_client is None:
             return []
 
-        location_names: list[str] = []
+        location_ents: list[tuple[str, float]] = []
         for ent in entities:
             if ent.entity_type in ("GPE", "LOC") and ent.entity_value:
-                location_names.append(ent.entity_value)
+                location_ents.append((ent.entity_value, ent.confidence))
 
-        if not location_names:
+        if not location_ents:
             return []
 
-        log.info("Geocoding %d NLP-extracted location entities", len(location_names))
+        log.info("Geocoding %d NLP-extracted location entities", len(location_ents))
         geo_points: list[dict[str, Any]] = []
         seen: set[str] = set()
 
-        for loc_name in location_names[:20]:
+        for loc_name, nlp_conf in location_ents[:20]:
             try:
                 point = self._geo_client.geocode(loc_name)
                 if point is None:
@@ -538,7 +544,7 @@ class OSINTClient:
                     "lon": point.lon,
                     "label": loc_name,
                     "source": "nlp_mention",
-                    "confidence": 0.55,
+                    "confidence": round(nlp_conf * 0.85, 2),
                     "method": "nlp_entity_geocode",
                 })
             except Exception as exc:
