@@ -550,7 +550,7 @@ class OSINTClient:
             except Exception as exc:
                 log.debug("Failed to geocode entity %r: %s", loc_name, exc)
 
-        log.info("Geocoded %d/%d location entities", len(geo_points), len(location_names))
+        log.info("Geocoded %d/%d location entities", len(geo_points), len(location_ents))
         return geo_points
 
     def _gather_text(self, findings: OSINTFindings) -> str:
