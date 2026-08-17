@@ -1181,8 +1181,6 @@ def create_app():
         # Validate and filter platforms
         if isinstance(platforms, list):
             platforms = [p for p in platforms if p in SOCIAL_PLATFORMS]
-        if not platforms:
-            platforms = list(SOCIAL_PLATFORMS.keys())
 
         # Sanitize identifier
         try:
@@ -1194,6 +1192,8 @@ def create_app():
         user_hash = _get_user_hash()
 
         # ── Phase 1: Initial Dorking (Collection) ─────────────────────
+        # Runs BEFORE platform backfill so the LLM sees the user's actual
+        # platform selection (empty = broad web sweep with recommendations).
         web_search_enabled = data.get("web_search", DORK_VALIDATION_ENABLED)
         initial_dork_data = None
         initial_dork_context = ""
@@ -1212,6 +1212,10 @@ def create_app():
                     print(f"[DORK] Initial collection: {initial_dork_data['queries_run']} queries executed")
             except Exception as exc:
                 print(f"[WARN] Initial dorking failed (non-fatal): {exc}")
+
+        # Backfill platforms for OSINT collection if none were selected
+        if not platforms:
+            platforms = list(SOCIAL_PLATFORMS.keys())
 
         # ── Phase 2: OSINT Collection ─────────────────────────────────
         osint_client = _get_osint_client()

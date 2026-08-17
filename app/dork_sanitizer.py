@@ -26,7 +26,7 @@ MAX_QUERY_LENGTH = 256
 _EMBEDDED_URL_RE = re.compile(r"https?://", re.IGNORECASE)
 _BASE64_RE = re.compile(r"[A-Za-z0-9+/]{20,}={0,2}")
 _LONG_HEX_RE = re.compile(r"[0-9a-f]{32,}", re.IGNORECASE)
-_SHELL_META_RE = re.compile(r"[;&|`$(){}]")
+_SHELL_DANGEROUS_RE = re.compile(r"[;&`]")
 
 
 def sanitize_dork_query(query: str) -> tuple[str, list[str]]:
@@ -60,8 +60,8 @@ def sanitize_dork_query(query: str) -> tuple[str, list[str]]:
         warnings.append("Long hex string detected")
         return "", warnings
 
-    if _SHELL_META_RE.search(query):
-        warnings.append("Shell metacharacter detected")
+    if _SHELL_DANGEROUS_RE.search(query):
+        warnings.append("Dangerous shell character detected")
         return "", warnings
 
     return query.strip(), warnings
