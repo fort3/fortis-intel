@@ -131,6 +131,7 @@ FORTIS_TRUSTED_KEYS = {
     "metadata_summary",
     "subject_identifier",
     "identifier_type",
+    "investigation_purpose",
 }
 
 DORK_CHAIN_NAMES = {

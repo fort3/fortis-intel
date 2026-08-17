@@ -1,8 +1,8 @@
-"""DuckDuckGo-backed dork search engine for Fortis Intelligence Hub.
+"""Multi-backend web search engine for Fortis Intelligence Hub.
 
-Executes sanitised Google-dork-style queries via DuckDuckGo (no API key
-required) and returns structured results.  Rate-limited globally to avoid
-upstream throttling.
+Uses the ``ddgs`` package (or legacy ``duckduckgo-search``) to query
+DuckDuckGo, Google, Bing, Brave and others — no API key required.
+Rate-limited globally to avoid upstream throttling.
 """
 
 import logging
@@ -14,9 +14,11 @@ from dataclasses import dataclass, field
 
 log = logging.getLogger(__name__)
 
-DORK_MAX_QUERIES = int(os.environ.get("DORK_MAX_QUERIES", "10"))
-DORK_RATE_PER_MINUTE = int(os.environ.get("DORK_RATE_PER_MINUTE", "10"))
-DORK_RATE_PER_HOUR = int(os.environ.get("DORK_RATE_PER_HOUR", "30"))
+DORK_MAX_QUERIES = int(os.environ.get("DORK_MAX_QUERIES", "20"))
+DORK_RATE_PER_MINUTE = int(os.environ.get("DORK_RATE_PER_MINUTE", "20"))
+DORK_RATE_PER_HOUR = int(os.environ.get("DORK_RATE_PER_HOUR", "60"))
+DORK_SEARCH_REGION = os.environ.get("DORK_SEARCH_REGION", "wt-wt")
+DORK_SEARCH_BACKEND = os.environ.get("DORK_SEARCH_BACKEND", "auto")
 
 # ---------------------------------------------------------------------------
 # Data classes
@@ -123,17 +125,28 @@ class DorkSearchClient:
     def __init__(self):
         self._limiter = _RateLimiter(DORK_RATE_PER_MINUTE, DORK_RATE_PER_HOUR)
 
-    def search(self, query: str, max_results: int = 5) -> list[DorkResult]:
+    def search(self, query: str, max_results: int = 10) -> list[DorkResult]:
         if not self._limiter.acquire():
             log.warning("Dork search rate limit exceeded, skipping query: %s", query[:80])
             return []
 
         try:
-            from duckduckgo_search import DDGS
+            try:
+                from ddgs import DDGS
+            except ImportError:
+                from duckduckgo_search import DDGS
 
             results: list[DorkResult] = []
+            search_kwargs: dict = {
+                "keywords": query,
+                "region": DORK_SEARCH_REGION,
+                "max_results": max_results,
+            }
+            if DORK_SEARCH_BACKEND != "auto":
+                search_kwargs["backend"] = DORK_SEARCH_BACKEND
+
             with DDGS() as ddgs:
-                for r in ddgs.text(query, max_results=max_results):
+                for r in ddgs.text(**search_kwargs):
                     results.append(DorkResult(
                         title=r.get("title", ""),
                         url=r.get("href", ""),
@@ -143,8 +156,28 @@ class DorkSearchClient:
             return results
 
         except ImportError:
-            log.error("duckduckgo-search package not installed")
+            log.error("ddgs / duckduckgo-search package not installed")
             return []
+        except TypeError:
+            # Older package version may not support backend/keywords kwargs —
+            # fall back to positional call.
+            try:
+                try:
+                    from ddgs import DDGS
+                except ImportError:
+                    from duckduckgo_search import DDGS
+                results = []
+                with DDGS() as ddgs:
+                    for r in ddgs.text(query, max_results=max_results):
+                        results.append(DorkResult(
+                            title=r.get("title", ""),
+                            url=r.get("href", ""),
+                            snippet=r.get("body", ""),
+                        ))
+                return results
+            except Exception as exc2:
+                log.error("Dork search fallback failed for %r: %s", query[:80], exc2)
+                return []
         except Exception as exc:
             log.error("Dork search failed for %r: %s", query[:80], exc)
             return []
@@ -152,7 +185,7 @@ class DorkSearchClient:
     def search_batch(
         self,
         queries: list[DorkQuery],
-        max_per_query: int = 5,
+        max_per_query: int = 10,
         delay: float = 0.2,
     ) -> dict[str, list[DorkResult]]:
         capped = queries[:DORK_MAX_QUERIES]

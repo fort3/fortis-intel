@@ -401,6 +401,7 @@ def _run_initial_dorking(
         "subject_identifier": subject_identifier,
         "identifier_type": identifier_type,
         "platforms": platforms_str,
+        "investigation_purpose": purpose,
         "purpose": purpose,
     }
     collection_result = gated_invoke(
@@ -410,7 +411,7 @@ def _run_initial_dorking(
         mode="osint",
         session_id=session_id,
         user_hash=user_hash,
-        trusted_keys={"subject_identifier", "identifier_type", "platforms"},
+        trusted_keys={"subject_identifier", "identifier_type", "platforms", "investigation_purpose"},
     )
     if not collection_result.success:
         print(f"[DORK] Initial collection blocked: {collection_result.reason}")
@@ -418,9 +419,59 @@ def _run_initial_dorking(
 
     collection_queries = parse_dork_queries(collection_result.content, "collection")
 
-    # Guaranteed baseline: always search the plain identifier in quotes first.
-    # DuckDuckGo returns best results for simple quoted queries — LLM-generated
-    # operator-heavy queries often return nothing on DDG.
+    # Deterministic queries: baseline + hardcoded platform-specific queries
+    # that always run regardless of what the LLM generates.  Search engines
+    # don't personalise API results, so we compensate by targeting the
+    # platforms most likely to have data for each identifier type.
+    PLATFORM_QUERIES = {
+        "name": [
+            ("site:linkedin.com", "LinkedIn professional profile"),
+            ("site:facebook.com", "Facebook profile"),
+            ("site:twitter.com OR site:x.com", "Twitter/X profile"),
+            ("site:instagram.com", "Instagram profile"),
+            ("site:github.com", "GitHub profile"),
+            ("site:medium.com OR site:substack.com", "Blog/publication profile"),
+        ],
+        "username": [
+            ("site:github.com", "GitHub account"),
+            ("site:reddit.com", "Reddit account"),
+            ("site:twitter.com OR site:x.com", "Twitter/X account"),
+            ("site:instagram.com", "Instagram account"),
+            ("site:tiktok.com", "TikTok account"),
+            ("site:linkedin.com", "LinkedIn profile"),
+            ("site:medium.com", "Blog posts"),
+        ],
+        "email": [
+            ("site:linkedin.com", "LinkedIn profile linked to email"),
+            ("site:facebook.com", "Facebook profile linked to email"),
+            ("forum OR registration OR profile", "Forum/service registrations"),
+        ],
+        "phone": [
+            ("site:truecaller.com", "Truecaller caller ID"),
+            ("site:facebook.com", "Facebook profile linked to phone"),
+            ("site:whocalledme.com OR site:whocallsme.com", "Caller reports"),
+            ("directory OR lookup OR owner", "Phone directory/lookup"),
+        ],
+        "domain": [
+            ("-site:{id}", "Mentions outside the domain itself"),
+            ("site:linkedin.com", "Organisation LinkedIn page"),
+            ("site:github.com", "Associated code repositories"),
+            ("site:crunchbase.com OR site:dnb.com", "Business intelligence"),
+        ],
+        "ip": [
+            ("site:shodan.io", "Shodan device intelligence"),
+            ("site:abuseipdb.com", "Abuse reports"),
+            ("site:virustotal.com", "Security analysis"),
+            ("abuse OR blocklist OR security", "Security references"),
+        ],
+        "keyword": [
+            ("site:reddit.com", "Reddit discussions"),
+            ("site:twitter.com OR site:x.com", "Twitter/X mentions"),
+            ("site:news.ycombinator.com", "Hacker News discussions"),
+            ("news OR article OR report", "News coverage"),
+        ],
+    }
+
     baseline_query = f'"{subject_identifier}"'
     baseline_dq = DorkQuery(
         query=baseline_query,
@@ -431,6 +482,21 @@ def _run_initial_dorking(
 
     all_queries = [baseline_dq]
     seen_queries = {baseline_query.lower()}
+
+    # Add hardcoded platform-specific queries for this identifier type
+    id_type_lower = identifier_type.lower()
+    for suffix, purpose_text in PLATFORM_QUERIES.get(id_type_lower, []):
+        if "{id}" in suffix:
+            suffix = suffix.replace("{id}", subject_identifier)
+        pq = f'"{subject_identifier}" {suffix}'
+        if pq.lower() not in seen_queries:
+            all_queries.append(DorkQuery(
+                query=pq, purpose=purpose_text,
+                finding_ref="platform_target", query_type="collection",
+            ))
+            seen_queries.add(pq.lower())
+
+    # Add LLM-generated queries (deduped against the deterministic set)
     for dq in collection_queries:
         cleaned, warnings = sanitize_dork_query(dq.query)
         if warnings:
@@ -445,7 +511,7 @@ def _run_initial_dorking(
         return result
 
     client = DorkSearchClient()
-    search_results = client.search_batch(all_queries, max_per_query=5, delay=0.2)
+    search_results = client.search_batch(all_queries, max_per_query=10, delay=0.2)
 
     collection_raw = []
     for dq in all_queries:
@@ -551,6 +617,7 @@ def _run_final_dorking(
         "analysis_text": analysis_text,
         "osint_summary": osint_summary,
         "entities_summary": entities_summary,
+        "investigation_purpose": purpose,
         "purpose": purpose,
     }
     gap_result = gated_invoke(
@@ -560,7 +627,7 @@ def _run_final_dorking(
         mode="osint",
         session_id=session_id,
         user_hash=user_hash,
-        trusted_keys={"analysis_text", "osint_summary", "entities_summary"},
+        trusted_keys={"analysis_text", "osint_summary", "entities_summary", "investigation_purpose"},
     )
     if not gap_result.success:
         print(f"[DORK] Gap analysis blocked: {gap_result.reason}")
@@ -573,6 +640,7 @@ def _run_final_dorking(
     val_input = {
         "analysis_text": analysis_text,
         "entities_summary": entities_summary,
+        "investigation_purpose": purpose,
         "purpose": purpose,
     }
     val_result = gated_invoke(
@@ -582,7 +650,7 @@ def _run_final_dorking(
         mode="osint",
         session_id=session_id,
         user_hash=user_hash,
-        trusted_keys={"analysis_text", "entities_summary"},
+        trusted_keys={"analysis_text", "entities_summary", "investigation_purpose"},
     )
     if not val_result.success:
         print(f"[DORK] Validation generation blocked: {val_result.reason}")

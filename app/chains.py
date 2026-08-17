@@ -318,6 +318,14 @@ Your task is to generate targeted search queries to discover publicly available 
 SUBJECT IDENTIFIER: {subject_identifier}
 IDENTIFIER TYPE: {identifier_type}
 TARGET PLATFORMS: {platforms}
+INVESTIGATION PURPOSE: {investigation_purpose}
+
+Use the INVESTIGATION PURPOSE to focus your queries. For example:
+- If the purpose mentions fraud, focus on financial profiles, court records, business registries, complaints
+- If the purpose mentions background check, focus on professional profiles, news, public records, education
+- If the purpose mentions threat intel, focus on security forums, paste sites, dark web mentions, breach data
+- If the purpose mentions social engineering, focus on social media presence, personal details, organisational links
+- If the purpose is generic or empty, perform a broad discovery sweep
 
 If TARGET PLATFORMS is "none" or empty, perform a BROAD WEB SWEEP — do not use platform-specific site: operators. Instead, search across the open web (forums, paste sites, news, public records, code repositories, professional profiles). After your queries, add a PLATFORM RECOMMENDATIONS section suggesting which social media platforms the OSINT tools should check based on what the identifier type suggests.
 
@@ -373,6 +381,10 @@ COLLECTION QUERIES:"""
 
 DORK_GAP_ANALYSIS_SYSTEM_PROMPT = """You are an OSINT analyst reviewing an investigation report to identify intelligence gaps that can be filled by searching the public web.
 
+INVESTIGATION PURPOSE: {investigation_purpose}
+
+Use the investigation purpose to prioritise which gaps matter most. For example, a fraud investigation should prioritise financial and legal gaps over social media presence gaps.
+
 Analyse the investigation report and raw OSINT data. Identify:
 - Platforms that returned no data or very thin results
 - Unanswered questions about the subject's affiliations, history, or connections
@@ -397,6 +409,10 @@ DORK: <query> | PURPOSE: <what this query aims to find> | GAP: <which intelligen
 GAP-FILLING QUERIES:"""
 
 DORK_VALIDATION_SYSTEM_PROMPT = """You are an OSINT analyst generating search queries to cross-reference and validate key findings from an investigation report.
+
+INVESTIGATION PURPOSE: {investigation_purpose}
+
+Use the investigation purpose to focus validation on the findings most relevant to the stated purpose. Prioritise validating claims that directly support or undermine the investigation's central question.
 
 Review the investigation report and identify the most important claims and findings that should be validated against independent public sources.
 

@@ -506,11 +506,12 @@ Configure either Slack, email, or both. Feed monitor findings will be sent as al
 | Env Variable | Description | Default |
 |---|---|---|
 | `DORK_VALIDATION_ENABLED` | Master toggle for web intelligence feature | `true` |
-| `DORK_MAX_QUERIES` | Max dork queries per investigation (gap-fill + validation) | `10` |
-| `DORK_RATE_PER_MINUTE` | Global rate limit for DuckDuckGo queries | `10` |
-| `DORK_RATE_PER_HOUR` | Global hourly rate limit | `30` |
+| `DORK_MAX_QUERIES` | Max dork queries per investigation (baseline + platform + LLM-generated) | `20` |
+| `DORK_RATE_PER_MINUTE` | Global rate limit for search queries | `20` |
+| `DORK_RATE_PER_HOUR` | Global hourly rate limit | `60` |
 | `DORK_MAX_SCRAPE_URLS` | Max URLs to deep-scrape per investigation (HIGH + MODERATE only) | `5` |
-| `SERPAPI_API_KEY` | Optional -- SerpAPI key for Google search results instead of DuckDuckGo | (none) |
+| `DORK_SEARCH_REGION` | Search region code (e.g. `us-en`, `uk-en`, `ng-en`, `wt-wt` for worldwide) | `wt-wt` |
+| `DORK_SEARCH_BACKEND` | Search backend: `auto`, `google`, `bing`, `brave`, `duckduckgo`, or `all` | `auto` |
 
 ### Data Protection & Compliance Settings
 
