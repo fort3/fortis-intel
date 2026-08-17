@@ -377,7 +377,7 @@ body {{
     padding: 60px 100px;
 }}
 .title-card {{
-    background: {CARD_BG};
+    background: rgba(16, 16, 30, 0.75);
     border: 1px solid {BORDER};
     border-radius: 6px;
     padding: 50px 40px 30px 40px;
@@ -451,11 +451,12 @@ body {{
 
 /* ========== CARDS (welcome-capability style) ========== */
 .card {{
-    background: {CARD_BG};
+    background: rgba(16, 16, 30, 0.78);
     border: 1px solid {BORDER};
     border-radius: 4px;
-    padding: 16px 20px;
-    margin: 12px 0;
+    padding: 24px 24px;
+    margin: 14px 0;
+    page-break-inside: avoid;
 }}
 .card-title {{
     font-size: 9pt;
@@ -467,10 +468,11 @@ body {{
 }}
 .media-card {{
     text-align: center;
-    padding: 16px;
+    padding: 24px;
 }}
 .body-card {{
-    padding: 20px 28px;
+    padding: 28px 32px;
+    page-break-inside: auto;
 }}
 
 /* ========== CONTENT TYPOGRAPHY ========== */
@@ -504,19 +506,19 @@ h3 {{
 }}
 p {{
     margin: 5px 0;
-    color: {TEXT_SECONDARY};
+    color: {TEXT_PRIMARY};
 }}
 ul, ol {{
     padding-left: 20px;
     margin: 5px 0;
-    color: {TEXT_SECONDARY};
+    color: {TEXT_PRIMARY};
 }}
 li {{
     margin: 2px 0;
-    color: {TEXT_SECONDARY};
+    color: {TEXT_PRIMARY};
 }}
 strong {{
-    color: {TEXT_PRIMARY};
+    color: {TEXT_BRIGHT};
 }}
 em {{
     color: {TEXT_SECONDARY};
@@ -573,7 +575,7 @@ th {{
 td {{
     padding: 4px 8px;
     border-bottom: 1px solid {BORDER};
-    color: {TEXT_SECONDARY};
+    color: {TEXT_PRIMARY};
 }}
 .mono {{
     font-family: "Courier New", Courier, monospace;
@@ -722,7 +724,7 @@ def generate_pdf(content: str, title: str, session_id: str,
     )
 
     mediabox = fitz.Rect(0, 0, PAGE_W, PAGE_H)
-    content_rect = fitz.Rect(48, 44, PAGE_W - 48, PAGE_H - 48)
+    content_rect = fitz.Rect(48, 48, PAGE_W - 48, PAGE_H - 52)
 
     buf = io.BytesIO()
     writer = fitz.DocumentWriter(buf)

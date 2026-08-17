@@ -9,6 +9,7 @@ credentials are missing or a library is not installed.
 import logging
 import os
 import re
+import time
 from datetime import datetime, timezone
 from typing import Any
 
@@ -142,6 +143,10 @@ class SocialClient:
         "tiktok": HAS_TIKTOK or HAS_PYKTOK,
     }
 
+    _INSTA_MIN_DELAY = 3.0
+    _INSTA_POST_DELAY = 1.8
+    _INSTA_POST_CAP = 12
+
     # ------------------------------------------------------------------
     # Initialisation
     # ------------------------------------------------------------------
@@ -155,6 +160,8 @@ class SocialClient:
         )
         self._http.mount("https://", adapter)
         self._http.mount("http://", adapter)
+
+        self._insta_last_req: float = 0.0
 
         self._twitter_client: Any | None = None
         self._reddit_client: Any | None = None
