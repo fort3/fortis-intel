@@ -7,22 +7,24 @@ An OSINT-driven intelligence and analysis platform for open-source intelligence 
 ## Key Features
 
 - **Multi-Platform OSINT** -- Investigate usernames, emails, domains, and IPs across Twitter/X, Reddit, YouTube, Instagram, Mastodon, Facebook, TikTok, and Telegram
-- **Domain & IP Intelligence** -- First-class domain/IP investigations with WHOIS, DNS records, DNSdumpster subdomain enumeration, reverse DNS, reverse IP (co-hosted domains), and HTTP header probing via HackerTarget API
+- **Domain & IP Intelligence** -- First-class domain/IP investigations with WHOIS, DNS records, DNSdumpster subdomain enumeration, reverse DNS, reverse IP (co-hosted domains), HTTP header probing via HackerTarget API, and Wayback Machine historical enrichment
+- **Wayback Machine / Archive.org** -- Domain enrichment via CDX API: historical snapshot timeline, archived subdomain discovery, content change detection (digest comparison), and robots.txt policy history. No API key required
 - **Anti-Detection HTTP** -- All outbound HTTP uses curl_cffi with Chrome TLS fingerprinting to bypass bot detection; thread-safe per-thread session isolation for Windows COM compatibility
 - **API-Free Scrape Fallbacks** -- Every platform works without API keys via curl_cffi-powered scrape fallbacks (Reddit .json endpoints, Twitter syndication API, TikTok embedded JSON, Facebook mbasic)
 - **Geospatial Triangulation** -- Triangulate locations from EXIF data, social geotags, IP addresses, check-ins, video landmarks, and text mentions with interactive Leaflet.js maps
 - **Media Geo-Extraction** -- Automatic EXIF GPS extraction from social media images and video keyframe analysis (OCR + landmark geocoding via OpenCV)
 - **AI-Powered Analysis** -- DeepSeek LLM generates investigation reports, pattern-of-life analyses, network mapping, and influence assessments
-- **Web Intelligence** -- LLM autonomously searches the public web via Google dork queries (DuckDuckGo) to fill intelligence gaps and validate findings, with confidence-gated deep scraping of high-value results
+- **Web Intelligence** -- LLM autonomously searches the public web via Google dork queries (DuckDuckGo) to fill intelligence gaps and validate findings, with confidence-gated deep scraping of high-value results. Expanded passive recon cheatsheets for domain, IP, and email identifiers. Improved circuit breaker that correctly distinguishes "no results" from actual failures
+- **Civilian Harm Classifier** -- Bellingcat-inspired semantic similarity scoring using sentence-transformers with multilingual conflict keyword density. Automatically flags CRITICAL/HIGH/MODERATE content across all investigation flows (investigation, batch, scenario, Q&A, feed monitor). Distribution bar, flagged item cards, and concept badges in the UI
 - **Separated LLM Pipeline** -- RAG (FAISS vectorstore) for document Q&A only; Knowledge Graph (NetworkX entity relationships) for OSINT multi-source enrichment -- no token waste from parallel injection
 - **RAG Knowledge Base** -- Upload PDF and Markdown reports, index them with FAISS vectorstore, and ask natural-language questions with automatic KB feedback from previous analyses
 - **Analytical Scenarios** -- Generate pattern-of-life, network mapping, location prediction, and influence analysis from collected OSINT data with entity graph context
-- **Feed Monitoring** -- Set up keyword, username, and hashtag monitors with Celery background tasks and automatic enrichment
+- **Feed Monitoring** -- Set up keyword, username, and hashtag monitors with Celery background tasks, automatic enrichment, and civilian harm scoring on new findings
 - **GDPR & NIST CSF 2.0 Compliance** -- Tiered data retention, right to erasure (Art. 17), GDPR Art. 30 processing records, NIST CSF function mapping, system credential leak detection (subject PII is never blocked)
 - **ForgeChain Governance** -- Every LLM request passes through a 3-verifier consensus gate (rule, safety, consistency) before execution
 - **Elevated Authorization** -- Investigation endpoints support elevated authorization for privileged analysts handling sensitive cases
 - **Entity Relationship Graphs** -- Cytoscape.js-powered interactive graphs with click-to-drill-down entity detail popups; graph context fed directly to LLM for entity-aware analysis
-- **Multi-Format Export** -- PDF, Markdown, STIX 2.1, CSV, JSON, and Google Drive export with map snapshots
+- **Professional Export** -- PDF with section-aware layout, TLP classification banner, table of contents, and executive summary highlighting. Also Markdown (with TLP metadata), STIX 2.1, CSV, JSON, and Google Drive export with map snapshots
 - **Docker Ready** -- Dockerfile and docker-compose.yml for containerized deployment with Redis, Celery worker, and Celery beat
 
 ---
@@ -41,7 +43,8 @@ An OSINT-driven intelligence and analysis platform for open-source intelligence 
 | Database | SQLite (reports, ForgeChain audit trail, entity relationships) |
 | Task Queue | Celery + Redis (feed monitoring, background enrichment) |
 | NLP | spaCy (NER), langdetect (language detection) |
-| Domain/IP Intel | python-whois, dnspython, HackerTarget API (DNSdumpster, reverse DNS/IP) |
+| Civilian Harm | sentence-transformers (paraphrase-multilingual-MiniLM-L12-v2), Bellingcat methodology |
+| Domain/IP Intel | python-whois, dnspython, HackerTarget API (DNSdumpster, reverse DNS/IP), Wayback Machine CDX API |
 | Web Intelligence | duckduckgo-search (Google dork queries, no API key required) |
 | Geolocation | geopy, MaxMind GeoLite2, DBSCAN clustering |
 | Video Analysis | OpenCV keyframe extraction, imagehash deduplication, pytesseract OCR |
@@ -525,6 +528,17 @@ Configure either Slack, email, or both. Feed monitor findings will be sent as al
 | `DORK_SEARCH_REGION` | Search region code (e.g. `us-en`, `uk-en`, `ng-en`, `wt-wt` for worldwide) | `wt-wt` |
 | `DORK_SEARCH_BACKEND` | Search backend: `auto`, `google`, `bing`, `brave`, `duckduckgo`, or `all` | `auto` |
 
+### Civilian Harm Classifier Settings
+
+| Env Variable | Description | Default |
+|---|---|---|
+| `CIVILIAN_HARM_ENABLED` | Master toggle for Bellingcat-inspired civilian harm scoring | `true` |
+| `HARM_MODEL_NAME` | Sentence-transformer model for semantic similarity scoring | `paraphrase-multilingual-MiniLM-L12-v2` |
+
+The classifier uses semantic similarity against 15 civilian harm concepts (Bellingcat's strongest predictive feature) combined with multilingual conflict keyword density (English, Ukrainian, Russian, Arabic, French). Scores are computed for all posts and web mentions during investigations, batch runs, scenarios, Q&A, and feed monitor polls. The model (~400MB) downloads automatically on first use. No API key required.
+
+---
+
 ### Data Protection & Compliance Settings
 
 | Env Variable | Description | Default |
@@ -590,7 +604,7 @@ Upload PDF or Markdown files for AI-powered analysis. The platform extracts text
 Enter a username, email address, domain, IP address, or keyword. The identifier type is auto-detected and routes to the appropriate intel pipeline:
 
 - **Username/email** -- Social media profiles, posts, web mentions, news, entity extraction
-- **Domain** -- WHOIS registration data, DNS records (A/AAAA/MX/NS/TXT/SOA/CNAME), DNSdumpster subdomain enumeration, HTTP header probe, IP geolocation for all resolved addresses
+- **Domain** -- WHOIS registration data, DNS records (A/AAAA/MX/NS/TXT/SOA/CNAME), DNSdumpster subdomain enumeration, HTTP header probe, IP geolocation for all resolved addresses, Wayback Machine historical enrichment (snapshot timeline, archived subdomains, content changes, robots.txt history)
 - **IP address** -- Geolocation, reverse DNS (PTR), reverse IP (co-hosted domains), DNSdumpster on resolved hostname
 
 Investigation depth:
@@ -599,7 +613,7 @@ Investigation depth:
 - **Standard** -- API + web scraping (social media, WHOIS, DNS, DNSdumpster, news)
 - **Deep** -- All sources including metadata analysis, entity extraction, and full DNSdumpster enumeration
 
-Results include a structured report, entity relationship graph with LLM-aware context, interactive map, domain/IP intel cards, and a Web Intelligence section.
+Results include a structured report with civilian harm assessment, entity relationship graph with LLM-aware context, interactive map, domain/IP intel cards, Web Intelligence section, and civilian harm distribution analysis.
 
 **Web Intelligence** (enabled by default, toggle per investigation):
 
@@ -647,15 +661,19 @@ All analysis results (investigations, enrichments, scenarios, triangulations, Q&
 
 Export reports in multiple formats:
 
-- **PDF** -- Dark cyberpunk-themed report matching the app's visual design:
-  - **Title page** with Fortis branding, report metadata, and sensitivity classification badge
-  - **Geographic overview** with embedded map snapshot (auto-captured from Leaflet) and geospatial data table listing all geo signals with source type, coordinates, and confidence
+- **PDF** -- Professional dark-themed intelligence report:
+  - **Title page** with Fortis branding, report metadata, TLP classification banner, and sensitivity badge
+  - **Table of contents** with numbered section references
+  - **Section-aware layout** -- Markdown parsed at `## ` boundaries, each section wrapped in styled cards with numbered headers
+  - **Executive summary highlighting** -- Key findings section with accent border and "KEY FINDINGS" label
+  - **TLP classification** -- Full-width TLP 2.0 bar (RED/AMBER+STRICT/AMBER/GREEN/CLEAR) with Admiralty/NATO source reliability ratings
+  - **Contextual visual placement** -- Geographic overview near Geolocation section, entity graph near Entity Relationships, charts near OSINT Source Analysis
+  - **Geographic overview** with embedded map snapshot and geospatial data table listing all geo signals with source type, coordinates, and confidence
   - **Entity relationship graph** rendered server-side (networkx + matplotlib) with color-coded nodes and labeled edges
   - **Visual analytics** charts in 2-column grid (platform distribution, activity timeline, entity types, confidence breakdown, location frequency)
-  - **Analysis content** with dark background, purple accent headings, and proper light-on-dark text contrast
+  - CSS2-compatible styling (PyMuPDF Story class), dark backgrounds, solid hex colors, block-level layout
   - Sensitivity banner and branded footer on every page
-  - Triangulation summary (center, method, radius, confidence) when available
-- **Markdown** -- Portable text format with metadata table
+- **Markdown** -- Portable text format with metadata table and TLP classification banner
 - **STIX 2.1** -- Structured threat intelligence standard for entity sharing
 - **CSV** -- Tabular entity and finding data
 - **JSON** -- Full structured data
@@ -716,6 +734,36 @@ The pipeline uses 5 LLM chains total: `dork_collection_chain`, `dork_gap_analysi
 - Global rate limiting: 10 queries/investigation, 10/min, 30/hour
 - Feature toggle: set `DORK_VALIDATION_ENABLED=false` to disable entirely
 
+### Civilian Harm Analysis (Bellingcat Methodology)
+
+The platform includes a civilian harm classifier inspired by [Bellingcat's June 2026 research](https://www.bellingcat.com/resources/2026/06/25/how-to-use-ai-to-help-find-civilian-harm/) on using machine learning to detect civilian harm indicators in social media content.
+
+**Architecture:** Bellingcat's production system uses XGBoost with 893 features trained on 54K labeled Telegram posts. Their trained model is not open-sourced, but their core insight -- that semantic similarity to harm concepts was the strongest predictive feature -- is reproducible. The Fortis implementation uses:
+
+1. **Semantic similarity scoring** (70% weight) -- `paraphrase-multilingual-MiniLM-L12-v2` encodes text and computes cosine similarity against 15 civilian harm concept anchors (casualties, hospital attacks, displacement, infrastructure destruction, etc.). Blends max similarity with top-3 average for stable scoring.
+2. **Multilingual keyword density** (30% weight) -- Conflict-domain keyword matching across English, Ukrainian, Russian, Arabic, and French. Covers military actions, civilian impacts, war crimes, and humanitarian terms.
+3. **Composite classification** -- Combined score mapped to CRITICAL (75%+), HIGH (55%+), MODERATE (35%+), LOW (15%+), NONE.
+
+**Integration points:**
+- `/investigate` -- Scores all posts and web mentions (Phase 2d), feeds flagged content into LLM context for the Civilian Harm Assessment report section
+- `/batch-investigate` -- Scores consolidated analysis text
+- `/scenario` -- Scores OSINT data input
+- `/ask` -- Scores context, displays inline alert for harm-relevant content
+- Feed monitor (`poll_monitor` task) -- Scores new findings, stores harm metadata in Redis for analyst review
+
+**UI:** Distribution bar with colored segments, flagged content cards with classification badges and matched harm concepts, collapsible section in investigation results.
+
+### Wayback Machine Integration
+
+Domain investigations automatically enrich via the Wayback Machine CDX API (`app/wayback_client.py`):
+
+1. **Historical snapshots** -- Timeline of archived captures, first/last seen dates (collapsed by day)
+2. **Subdomain discovery** -- Extracts unique subdomains from all archived URLs (`*.domain` pattern)
+3. **Content change detection** -- Compares content digests across snapshots to identify when pages changed
+4. **robots.txt history** -- Distinct versions of robots.txt over time (may reveal hidden paths or policy changes)
+
+Rate limited at 1 request per 2 seconds (archive.org policy), with 5-second backoff on 429. No API key required. Findings are merged into `web_mentions` and appear in the investigation report under OSINT Source Analysis.
+
 ### FAISS Vectorstore
 
 Documents are embedded using `BAAI/bge-base-en-v1.5` (768 dimensions) and stored in a FAISS index. The RAG pipeline uses similarity search to retrieve relevant chunks for document Q&A. Analysis results from all routes are automatically indexed into the KB after completion.
@@ -726,12 +774,14 @@ The platform is designed to run with minimal configuration. Core features that w
 
 - PDF/Markdown upload and RAG Q&A
 - Domain/IP investigation (WHOIS, DNS, DNSdumpster -- no API key needed)
+- Wayback Machine domain enrichment via CDX API (no API key needed)
 - Web intelligence dork search via DuckDuckGo (no API key needed)
 - All 8 social platforms via curl_cffi scrape fallbacks (no API keys needed)
+- Civilian harm analysis via sentence-transformers (no API key needed, model downloads automatically)
 - Manual EXIF extraction from uploaded images
 - Manual coordinate entry for triangulation
 - Knowledge Base management
-- All export formats
+- All export formats (PDF with TLP classification, Markdown, STIX, CSV, JSON)
 - ForgeChain governance
 
 ### API-Free Fallbacks
@@ -891,7 +941,7 @@ Fortis-Intelligence-Hub/
 |-- app/
 |   |-- __init__.py
 |   |-- web.py                   # Flask app factory + all routes
-|   |-- chains.py                # LLM prompt templates (13 chains: 8 OSINT + 5 web intelligence)
+|   |-- chains.py                # LLM prompt templates (13 chains: 8 OSINT + 5 web intel, with civilian harm assessment)
 |   |-- llm.py                   # DeepSeek LLM factory
 |   |-- http_client.py           # Thread-safe HTTP session factory (curl_cffi / requests)
 |   |-- osint_client.py          # OSINT aggregator (unified geo pipeline, domain/IP intel)
@@ -902,6 +952,8 @@ Fortis-Intelligence-Hub/
 |   |-- metadata_extractor.py    # EXIF, NER, language detection
 |   |-- dork_search.py            # DuckDuckGo dork search client + rate limiter
 |   |-- dork_sanitizer.py         # Query/result sanitization + anti-exfiltration
+|   |-- wayback_client.py         # Wayback Machine CDX API client (domain history, subdomains)
+|   |-- civilian_harm.py          # Bellingcat-inspired civilian harm classifier
 |   |-- compliance.py            # GDPR/NIST compliance: retention, erasure, processing records
 |   |-- web_scraper.py           # News, WHOIS, DNS, DNSdumpster, reverse DNS/IP, RSS
 |   |-- export.py                # PDF/Markdown export

@@ -137,6 +137,31 @@ def _is_timeout(exc: Exception) -> bool:
     return "timeout" in type(exc).__name__.lower()
 
 
+def _is_no_results(exc: Exception) -> bool:
+    """Return True if the exception means the query simply had no matches.
+
+    DuckDuckGo can raise exceptions for queries that return zero results
+    (e.g. very specific dork queries).  These are false positives — the
+    search engine is working fine, the query just didn't match anything.
+    """
+    err_str = str(exc).lower()
+    exc_name = type(exc).__name__.lower()
+
+    no_result_signals = (
+        "no results",
+        "no result",
+        "ratelimit",
+        "rate limit",
+        "429",
+        "202",
+    )
+    for signal in no_result_signals:
+        if signal in err_str or signal in exc_name:
+            return True
+
+    return False
+
+
 def _make_ddgs():
     """Import and instantiate DDGS with the configured timeout."""
     try:
@@ -206,6 +231,8 @@ class DorkSearchClient:
             except Exception as exc2:
                 if _is_timeout(exc2):
                     log.warning("Dork search fallback timed out for %r (continuing): %s", query[:80], exc2)
+                elif _is_no_results(exc2):
+                    log.info("Dork search fallback no results for %r: %s", query[:80], exc2)
                 else:
                     log.error("Dork search fallback failed for %r: %s", query[:80], exc2)
                     self._consecutive_failures += 1
@@ -213,6 +240,8 @@ class DorkSearchClient:
         except Exception as exc:
             if _is_timeout(exc):
                 log.warning("Dork search timed out for %r (continuing): %s", query[:80], exc)
+            elif _is_no_results(exc):
+                log.info("Dork search returned no results for %r: %s", query[:80], exc)
             else:
                 log.error("Dork search failed for %r: %s", query[:80], exc)
                 self._consecutive_failures += 1
@@ -224,13 +253,15 @@ class DorkSearchClient:
         queries: list[DorkQuery],
         max_per_query: int = 10,
         delay: float = 1.0,
+        circuit_breaker_threshold: int = 5,
     ) -> dict[str, list[DorkResult]]:
         capped = queries[:DORK_MAX_QUERIES]
         results: dict[str, list[DorkResult]] = {}
         for i, dq in enumerate(capped):
-            if self._consecutive_failures >= 3:
+            if self._consecutive_failures >= circuit_breaker_threshold:
                 log.warning(
-                    "Aborting batch after %d consecutive failures (%d/%d queries done)",
+                    "Aborting batch: %d consecutive REAL failures "
+                    "(not timeouts or empty results) — %d/%d queries done",
                     self._consecutive_failures, i, len(capped),
                 )
                 break
@@ -238,4 +269,5 @@ class DorkSearchClient:
             if i < len(capped) - 1:
                 backoff = delay * (1 + self._consecutive_failures)
                 time.sleep(backoff)
+        self._consecutive_failures = 0
         return results

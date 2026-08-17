@@ -90,6 +90,7 @@ from app.forge.replay import get_session_replay
 from app.osint_client import OSINTClient
 from app.geo_client import GeoClient
 from app.feed_monitor import FeedMonitor
+from app.civilian_harm import get_civilian_harm_classifier, CIVILIAN_HARM_ENABLED
 from app.gdrive_client import get_gdrive_client
 from app.utils import create_session_id, safe_storage_path, validate_session_id
 from app.utils.pdf_reader import extract_pdf_text
@@ -232,6 +233,80 @@ def _rebuild_kb_from_store() -> int:
     except Exception as exc:
         print(f"[ERROR] KB rebuild failed: {exc}")
         return 0
+
+
+def _run_civilian_harm_analysis(findings_dict: dict) -> dict | None:
+    """Score posts and web mentions for civilian harm likelihood.
+
+    Returns a summary dict or None if disabled / no scoreable content.
+    """
+    if not CIVILIAN_HARM_ENABLED:
+        return None
+
+    posts = findings_dict.get("posts", [])
+    mentions = findings_dict.get("web_mentions", [])
+
+    scoreable = []
+    for p in posts:
+        text = p.get("content", "") or ""
+        if len(text.strip()) >= 20:
+            scoreable.append({
+                "content": text,
+                "platform": p.get("platform", ""),
+                "url": p.get("url", ""),
+                "author": p.get("author_username", ""),
+                "timestamp": p.get("timestamp", ""),
+                "language": p.get("language", ""),
+                "item_type": "post",
+            })
+    for m in mentions:
+        text = m.get("snippet", "") or m.get("description", "") or ""
+        if len(text.strip()) >= 20:
+            scoreable.append({
+                "content": text,
+                "platform": m.get("platform", m.get("source", "")),
+                "url": m.get("source_url", m.get("url", "")),
+                "author": m.get("domain", ""),
+                "timestamp": m.get("discovered_at", ""),
+                "language": "",
+                "item_type": "web_mention",
+            })
+
+    if not scoreable:
+        return None
+
+    try:
+        classifier = get_civilian_harm_classifier()
+        scored = classifier.score_batch(scoreable)
+        summary = classifier.summarize(scored)
+        print(
+            f"[HARM] Scored {summary['total_scored']} items: "
+            f"{summary.get('flagged_count', 0)} flagged, "
+            f"max={summary.get('max_score', 0):.2f}"
+        )
+        return summary
+    except Exception as exc:
+        print(f"[WARN] Civilian harm analysis failed (non-fatal): {exc}")
+        return None
+
+
+def _score_text_for_harm(text: str) -> dict | None:
+    """Score a single text block for civilian harm (used by Q&A, scenario)."""
+    if not CIVILIAN_HARM_ENABLED or not text or len(text.strip()) < 30:
+        return None
+    try:
+        classifier = get_civilian_harm_classifier()
+        result = classifier.score_text(text)
+        if result.score < 0.15:
+            return None
+        return {
+            "score": result.score,
+            "classification": result.classification,
+            "matched_concepts": result.matched_concepts[:3],
+            "matched_keywords": result.matched_keywords[:5],
+        }
+    except Exception:
+        return None
 
 
 def _findings_to_context(findings_dict: dict) -> str:
@@ -473,6 +548,12 @@ def _run_initial_dorking(
             ("site:linkedin.com", "LinkedIn profile linked to email"),
             ("site:facebook.com", "Facebook profile linked to email"),
             ("forum OR registration OR profile", "Forum/service registrations"),
+            ("site:github.com", "GitHub account linked to email"),
+            ("site:gravatar.com", "Gravatar profile (passive)"),
+            ("site:keyserver.ubuntu.com OR site:keys.openpgp.org", "PGP key publication (passive)"),
+            ("site:haveibeenpwned.com", "Breach exposure check (passive)"),
+            ("site:hunter.io OR site:emailrep.io", "Email reputation and verification (passive)"),
+            ("site:pastebin.com OR site:paste.ee", "Paste site mentions (passive)"),
         ],
         "phone": [
             ("site:truecaller.com", "Truecaller caller ID"),
@@ -491,18 +572,34 @@ def _run_initial_dorking(
             ("site:{id} filetype:doc OR filetype:xlsx", "Indexed Office documents (passive)"),
             ("site:{id} filetype:xml OR filetype:json", "Exposed configuration files (passive)"),
             ("site:{id} filetype:log OR filetype:sql OR filetype:bak", "Exposed logs/backups (passive)"),
+            ("site:{id} filetype:env OR filetype:cfg", "Exposed environment/config files (passive)"),
             # Passive recon — API surface
             ("site:{id} inurl:api", "Indexed API endpoints (passive)"),
             ("site:{id} intitle:swagger OR intitle:\"api docs\"", "Exposed API documentation (passive)"),
+            ("site:{id} inurl:graphql", "GraphQL endpoint exposure (passive)"),
             # Passive recon — subdomains & DNS via passive aggregators
             ("site:crt.sh", "Certificate transparency — subdomain enumeration (passive)"),
             ("site:dnsdumpster.com", "DNS records and subdomains (passive)"),
             ("site:securitytrails.com", "Historical DNS and subdomain data (passive)"),
+            ("site:{id} -www", "Non-www subdomains via search index (passive)"),
             # Passive recon — infrastructure exposure
             ("site:{id} intitle:\"index of\"", "Exposed directory listings (passive)"),
             ("site:{id} intitle:login OR intitle:admin", "Login and admin panels (passive)"),
+            ("site:{id} inurl:wp-content", "WordPress installation detection (passive)"),
+            ("site:{id} inurl:.git", "Exposed Git repository (passive)"),
+            # Passive recon — cloud storage exposure
+            ("site:s3.amazonaws.com \"{id}\"", "AWS S3 bucket references (passive)"),
+            ("site:blob.core.windows.net \"{id}\"", "Azure Blob storage references (passive)"),
+            ("site:storage.googleapis.com \"{id}\"", "GCS bucket references (passive)"),
+            # Passive recon — error & debug disclosure
+            ("site:{id} intitle:\"error\" OR intitle:\"exception\"", "Error pages with stack traces (passive)"),
+            ("site:{id} inurl:debug OR inurl:phpinfo", "Debug/phpinfo exposure (passive)"),
+            # Passive recon — technology fingerprinting
+            ("site:builtwith.com", "Technology stack analysis (passive)"),
+            ("site:web.archive.org", "Wayback Machine historical snapshots (passive)"),
             # Leak/paste references
             ("site:pastebin.com OR site:paste.ee", "Paste site references (passive)"),
+            ("site:haveibeenpwned.com", "Breach exposure check (passive)"),
         ],
         "ip": [
             # General threat intel
@@ -514,14 +611,20 @@ def _run_initial_dorking(
             ("site:censys.io", "Censys certificate and host data (passive)"),
             ("site:greynoise.io", "Internet noise classification (passive)"),
             ("site:urlscan.io", "URL scan results and hosted content (passive)"),
+            ("site:threatcrowd.org", "ThreatCrowd IP intel (passive)"),
             # Passive recon — DNS & network
             ("site:securitytrails.com", "Historical DNS and hosting data (passive)"),
             ("site:viewdns.info", "Reverse DNS and hosting lookup (passive)"),
             ("\"reverse dns\" OR \"ptr record\"", "Reverse DNS / PTR records (passive)"),
             ("site:crt.sh", "Certificate transparency logs (passive)"),
+            ("site:dnslytics.com", "DNS analytics and hosting history (passive)"),
             # Passive recon — reputation & ASN
             ("site:ipinfo.io OR site:bgp.he.net", "Network and ASN intelligence (passive)"),
             ("blacklist OR reputation OR malicious", "IP reputation references"),
+            ("site:talosintelligence.com", "Cisco Talos IP reputation (passive)"),
+            # Passive recon — geolocation & hosting
+            ("site:iplocation.net OR site:ip-api.com", "IP geolocation data (passive)"),
+            ("\"hosted by\" OR \"hosting provider\"", "Hosting provider identification (passive)"),
         ],
         "keyword": [
             ("site:reddit.com", "Reddit discussions"),
@@ -1329,11 +1432,15 @@ def create_app():
                 "created_at": datetime.now(tz=timezone.utc),
             }
 
-        return jsonify({
+        qa_resp = {
             "answer": answer,
             "session_id": session_id,
             "kb_context": bool(kb_context),
-        })
+        }
+        qa_harm = _score_text_for_harm(context or kb_context)
+        if qa_harm:
+            qa_resp["civilian_harm"] = qa_harm
+        return jsonify(qa_resp)
 
     # ================================================================
     #  OSINT INVESTIGATION ROUTES (Phase 0)
@@ -1447,6 +1554,32 @@ def create_app():
                     print(f"[GEO] Added {len(upload_geo)} geo points from uploaded media")
             except Exception as exc:
                 print(f"[WARN] Uploaded media geo extraction failed (non-fatal): {exc}")
+
+        # ── Phase 2c: Wayback Machine enrichment (domains only) ───────
+        if identifier_type.lower() == "domain":
+            try:
+                from app.wayback_client import get_wayback_client
+                wb_client = get_wayback_client()
+                wb_report = wb_client.enrich_domain(clean_id)
+                wb_findings = wb_client.to_osint_findings(wb_report)
+                if wb_findings:
+                    existing_web = findings_dict.get("web_mentions", [])
+                    existing_web.extend(wb_findings)
+                    findings_dict["web_mentions"] = existing_web
+                    if "Wayback Machine" not in findings_dict.get("platforms_queried", []):
+                        findings_dict.setdefault("platforms_queried", []).append("Wayback Machine")
+                    print(f"[WAYBACK] Enriched {clean_id}: {len(wb_findings)} findings, "
+                          f"{wb_report.total_snapshots} snapshots, "
+                          f"{len(wb_report.subdomains)} subdomains")
+            except Exception as exc:
+                print(f"[WARN] Wayback Machine enrichment failed (non-fatal): {exc}")
+
+        # ── Phase 2d: Civilian harm scoring (Bellingcat methodology) ──
+        civilian_harm_data = None
+        try:
+            civilian_harm_data = _run_civilian_harm_analysis(findings_dict)
+        except Exception as exc:
+            print(f"[WARN] Civilian harm scoring failed (non-fatal): {exc}")
 
         # ── Phase 3: Context Preparation ──────────────────────────────
         osint_context = _findings_to_context(findings_dict)
@@ -1606,6 +1739,23 @@ def create_app():
                 "\n\n--- INITIAL WEB COLLECTION (pre-OSINT dorking) ---\n"
                 + initial_dork_context
             )
+        if civilian_harm_data and civilian_harm_data.get("flagged_count", 0) > 0:
+            harm_lines = [
+                "\n\n--- CIVILIAN HARM ANALYSIS (Bellingcat methodology) ---",
+                f"Scored {civilian_harm_data['total_scored']} items. "
+                f"{civilian_harm_data['flagged_count']} flagged "
+                f"(max score: {civilian_harm_data.get('max_score', 0):.2f}).",
+                "Distribution: " + ", ".join(
+                    f"{k}: {v}" for k, v in civilian_harm_data.get("distribution", {}).items()
+                ),
+            ]
+            for item in civilian_harm_data.get("flagged", [])[:5]:
+                hs = item.get("harm_score", {})
+                harm_lines.append(
+                    f"- [{hs.get('classification', '?')} {hs.get('score', 0):.2f}] "
+                    f"({item.get('platform', '?')}) {item.get('content', '')[:200]}"
+                )
+            full_osint_context += "\n".join(harm_lines)
 
         chain = get_investigation_chain()
         chain_input = {
@@ -1685,6 +1835,7 @@ def create_app():
             "entity_graph": graph_json,
             "user_email": g.user_session.email if hasattr(g, "user_session") else "unknown",
             "created_at": datetime.now(tz=timezone.utc),
+            "civilian_harm": civilian_harm_data,
         }
 
         response = {
@@ -1715,6 +1866,8 @@ def create_app():
             wi_data["final_queries_run"] = web_intelligence.get("queries_run", 0)
         if wi_data:
             response["web_intelligence"] = wi_data
+        if civilian_harm_data:
+            response["civilian_harm"] = civilian_harm_data
 
         return jsonify(response)
 
@@ -2244,7 +2397,11 @@ def create_app():
                 tags=["batch"],
             )
 
-        return jsonify({
+        batch_harm = None
+        if CIVILIAN_HARM_ENABLED and consolidated_analysis:
+            batch_harm = _score_text_for_harm(consolidated_analysis)
+
+        resp = {
             "report_id": report_id,
             "session_id": session_id,
             "consolidated_analysis": consolidated_analysis,
@@ -2255,7 +2412,10 @@ def create_app():
                 "failed": len(failed),
                 "invalid": invalid_items,
             },
-        })
+        }
+        if batch_harm:
+            resp["civilian_harm"] = batch_harm
+        return jsonify(resp)
 
     @app.route("/scenario", methods=["POST"])
     @login_required
@@ -2334,12 +2494,16 @@ def create_app():
             tags=[scenario_type, "scenario"],
         )
 
-        return jsonify({
+        scenario_resp = {
             "report_id": report_id,
             "session_id": scenario_session_id,
             "scenario": analysis,
             "scenario_type": scenario_type,
-        })
+        }
+        scenario_harm = _score_text_for_harm(osint_data)
+        if scenario_harm:
+            scenario_resp["civilian_harm"] = scenario_harm
+        return jsonify(scenario_resp)
 
     # ================================================================
     #  EXPORT ROUTES
@@ -2447,6 +2611,7 @@ def create_app():
         content = data.get("content", "")
         title = data.get("title", "Fortis Intelligence Report")
         export_session_id = data.get("session_id", "")
+        sensitivity_level = data.get("sensitivity_level", "INTERNAL")
 
         if not content or not content.strip():
             return jsonify({"error": "No content provided"}), 400
@@ -2456,7 +2621,8 @@ def create_app():
         title = re.sub(r"[^\w\s\-]", "", title)[:100] or "Fortis Intelligence Report"
 
         try:
-            md_bytes = generate_markdown(content, title, export_session_id)
+            md_bytes = generate_markdown(content, title, export_session_id,
+                                         sensitivity_level=sensitivity_level)
         except Exception as exc:
             print(f"[ERROR] Markdown export failed: {exc}")
             return jsonify({"error": "Markdown generation failed"}), 500
@@ -2631,7 +2797,8 @@ def create_app():
             title = re.sub(r"[^\w\s\-]", "", title)[:100] or "Fortis Report"
 
             try:
-                file_bytes = generate_markdown(content, title, export_session_id)
+                file_bytes = generate_markdown(content, title, export_session_id,
+                                               sensitivity_level=sensitivity)
             except Exception as exc:
                 print(f"[ERROR] Drive Markdown generation failed: {exc}")
                 return jsonify({"error": "Markdown generation failed"}), 500

@@ -218,8 +218,9 @@ def _build_geo_summary_html(map_data: dict | None) -> str:
         )
 
     return (
-        f'<div class="card">'
-        f'<h3 class="card-title">Geospatial Data Points</h3>'
+        f'<div class="section">'
+        f'<h2 class="section-title">Geospatial Data Points</h2>'
+        f'<div class="section-rule"></div>'
         f'{tri_html}'
         f'<table>'
         f'<tr><th>Label</th><th>Coordinates</th><th>Source</th><th>Conf.</th><th>Details</th></tr>'
@@ -252,8 +253,9 @@ def _build_chart_html(charts: dict) -> str:
             row_items.append(None)
         rows_html += f"<tr>{cells}</tr>"
     return (
-        f'<div class="card">'
-        f'<h3 class="card-title">Visual Analytics</h3>'
+        f'<div class="section">'
+        f'<h2 class="section-title">Visual Analytics</h2>'
+        f'<div class="section-rule"></div>'
         f'<table class="chart-grid">{rows_html}</table>'
         f'</div>'
     )
@@ -265,8 +267,9 @@ def _build_map_html(map_snapshot_b64: str | None) -> str:
     if not map_snapshot_b64.startswith("data:image/"):
         map_snapshot_b64 = f"data:image/png;base64,{map_snapshot_b64}"
     return (
-        f'<div class="card media-card">'
-        f'<h3 class="card-title">Geographic Overview</h3>'
+        f'<div class="section" style="text-align:center;">'
+        f'<h2 class="section-title">Geographic Overview</h2>'
+        f'<div class="section-rule"></div>'
         f'<div class="media-frame">'
         f'<img src="{html_escape(map_snapshot_b64)}" class="media-img">'
         f'</div>'
@@ -280,8 +283,9 @@ def _build_graph_html(graph_b64: str | None) -> str:
     if not graph_b64.startswith("data:image/"):
         graph_b64 = f"data:image/png;base64,{graph_b64}"
     return (
-        f'<div class="card media-card">'
-        f'<h3 class="card-title">Entity Relationship Graph</h3>'
+        f'<div class="section" style="text-align:center;">'
+        f'<h2 class="section-title">Entity Relationship Graph</h2>'
+        f'<div class="section-rule"></div>'
         f'<div class="media-frame">'
         f'<img src="{html_escape(graph_b64)}" class="media-img">'
         f'</div>'
@@ -307,6 +311,10 @@ def _build_title_page_html(
         SENSITIVITY_DESCRIPTIONS.get(sensitivity_level, "")
     )
 
+    tlp_label, tlp_color = _TLP_MAP.get(
+        sensitivity_level, ("TLP:AMBER", "#f59e0b")
+    )
+
     return f"""
 <div class="title-page">
     <div class="title-card">
@@ -320,11 +328,120 @@ def _build_title_page_html(
             <tr><td class="meta-key">Source</td><td class="meta-val">{report_name}</td></tr>
             <tr><td class="meta-key">Platform</td><td class="meta-val">Fortis Intelligence Hub</td></tr>
             <tr><td class="meta-key">Classification</td><td class="meta-val"><span class="title-sens-inline" style="color:{sens_color};">{sensitivity_level}</span></td></tr>
+            <tr><td class="meta-key">TLP</td><td class="meta-val"><span class="title-sens-inline" style="color:{tlp_color};">{tlp_label}</span></td></tr>
         </table>
         <div class="title-sens-footer">{sens_desc}</div>
     </div>
 </div>
 """
+
+
+_GEO_KEYS = {"geolocation assessment", "geolocation", "geographic overview"}
+_ENTITY_KEYS = {"entity relationships", "entity relationship graph"}
+_SOURCE_KEYS = {"osint source analysis", "source analysis"}
+
+_TLP_MAP = {
+    "PUBLIC": ("TLP:CLEAR", "#22c55e"),
+    "INTERNAL": ("TLP:AMBER", "#f59e0b"),
+    "RESTRICTED": ("TLP:AMBER+STRICT", "#f97316"),
+    "CONFIDENTIAL": ("TLP:RED", "#ef4444"),
+}
+
+
+def _parse_sections(content: str) -> list[tuple[str, str]]:
+    """Split markdown content at ## boundaries into (heading, body) pairs."""
+    content = _normalize_section_headers(content)
+    sens_pattern = r'^#\s*(PUBLIC|INTERNAL|RESTRICTED|CONFIDENTIAL)\s*\n+'
+    content = re.sub(sens_pattern, '', content, count=1,
+                     flags=re.IGNORECASE | re.MULTILINE)
+
+    parts = re.split(r'^(##\s+.+)$', content, flags=re.MULTILINE)
+    sections: list[tuple[str, str]] = []
+
+    if parts[0].strip():
+        sections.append(("", parts[0].strip()))
+
+    for i in range(1, len(parts), 2):
+        heading = re.sub(r'^##\s+', '', parts[i]).strip()
+        body = parts[i + 1].strip() if i + 1 < len(parts) else ""
+        sections.append((heading, body))
+
+    return sections
+
+
+def _build_section_html(heading: str, body_md: str, section_num: int,
+                        is_executive: bool = False) -> str:
+    """Render a report section as HTML with PyMuPDF-compatible CSS."""
+    body_html = markdown.markdown(body_md, extensions=["tables", "fenced_code"])
+    heading_escaped = html_escape(heading)
+    num_str = f"{section_num:02d}" if section_num > 0 else ""
+
+    if is_executive:
+        return (
+            f'<div class="section exec-section">'
+            f'<div class="exec-label">KEY FINDINGS</div>'
+            f'<div class="section-num-line">'
+            f'<span class="section-num">{num_str}</span>'
+            f'</div>'
+            f'<h2 class="section-title exec-title">{heading_escaped}</h2>'
+            f'<div class="exec-rule"></div>'
+            f'<div class="exec-body">{body_html}</div>'
+            f'</div>'
+        )
+
+    return (
+        f'<div class="section">'
+        f'<div class="section-num-line">'
+        f'<span class="section-num">{num_str}</span>'
+        f'</div>'
+        f'<h2 class="section-title">{heading_escaped}</h2>'
+        f'<div class="section-rule"></div>'
+        f'{body_html}'
+        f'</div>'
+    )
+
+
+def _build_toc_html(sections: list[tuple[str, str]]) -> str:
+    """Build a table-of-contents using a simple table layout."""
+    if len(sections) < 3:
+        return ""
+    rows = ""
+    num = 0
+    for heading, _ in sections:
+        if not heading:
+            continue
+        num += 1
+        rows += (
+            f'<tr>'
+            f'<td class="toc-num">{num:02d}</td>'
+            f'<td class="toc-text">{html_escape(heading)}</td>'
+            f'</tr>'
+        )
+    return (
+        f'<div class="toc-section">'
+        f'<h2 class="toc-heading">CONTENTS</h2>'
+        f'<div class="toc-rule"></div>'
+        f'<table class="toc-table">{rows}</table>'
+        f'</div>'
+    )
+
+
+def _build_tlp_bar(sensitivity_level: str) -> str:
+    """Build a full-width TLP classification bar."""
+    tlp_label, tlp_color = _TLP_MAP.get(
+        sensitivity_level, ("TLP:AMBER", "#f59e0b")
+    )
+    sens_color = SENSITIVITY_COLORS_HEX.get(sensitivity_level, PURPLE_BRIGHT)
+    return (
+        f'<div class="tlp-bar">'
+        f'<table class="tlp-table">'
+        f'<tr>'
+        f'<td class="tlp-left" style="color:{tlp_color};">{tlp_label}</td>'
+        f'<td class="tlp-right" style="color:{sens_color};">{sensitivity_level}</td>'
+        f'</tr>'
+        f'</table>'
+        f'</div>'
+    )
 
 
 def _build_html(content: str, title: str, session_id: str,
@@ -333,23 +450,73 @@ def _build_html(content: str, title: str, session_id: str,
                 map_data: dict | None = None,
                 entity_graph_b64: str | None = None,
                 sensitivity_level: str = "INTERNAL") -> str:
-    sens_pattern = r'^#\s*(PUBLIC|INTERNAL|RESTRICTED|CONFIDENTIAL)\s*\n+'
-    content = re.sub(sens_pattern, '', content, count=1,
-                     flags=re.IGNORECASE | re.MULTILINE)
-    content = _normalize_section_headers(content)
-    body_html = markdown.markdown(
-        content, extensions=["tables", "fenced_code"],
-    )
-
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
 
     title_page = _build_title_page_html(
         title, session_id, sensitivity_level, timestamp,
     )
+
+    tlp_bar = _build_tlp_bar(sensitivity_level)
     map_section = _build_map_html(map_snapshot_b64)
     geo_summary = _build_geo_summary_html(map_data)
     graph_section = _build_graph_html(entity_graph_b64)
     chart_section = _build_chart_html(charts) if charts else ""
+
+    sections = _parse_sections(content)
+    toc_html = _build_toc_html(sections)
+
+    body_parts: list[str] = [tlp_bar, toc_html]
+
+    geo_placed = False
+    graph_placed = False
+    charts_placed = False
+    section_num = 0
+
+    for heading, body_md in sections:
+        if not heading and not body_md:
+            continue
+
+        key = heading.lower().strip()
+        is_exec = key in ("executive summary", "enrichment summary")
+
+        if not heading:
+            body_html = markdown.markdown(
+                body_md, extensions=["tables", "fenced_code"],
+            )
+            body_parts.append(f'<div class="section">{body_html}</div>')
+            continue
+
+        section_num += 1
+        body_parts.append(
+            _build_section_html(heading, body_md, section_num, is_exec)
+        )
+
+        if key in _GEO_KEYS and not geo_placed:
+            if map_section:
+                body_parts.append(map_section)
+            if geo_summary:
+                body_parts.append(geo_summary)
+            geo_placed = True
+
+        if key in _ENTITY_KEYS and not graph_placed:
+            if graph_section:
+                body_parts.append(graph_section)
+            graph_placed = True
+
+        if key in _SOURCE_KEYS and not charts_placed:
+            if chart_section:
+                body_parts.append(chart_section)
+            charts_placed = True
+
+    if not geo_placed and (map_section or geo_summary):
+        body_parts.append(map_section)
+        body_parts.append(geo_summary)
+    if not graph_placed and graph_section:
+        body_parts.append(graph_section)
+    if not charts_placed and chart_section:
+        body_parts.append(chart_section)
+
+    body_content = "\n".join(body_parts)
 
     return f"""<!DOCTYPE html>
 <html>
@@ -359,10 +526,17 @@ def _build_html(content: str, title: str, session_id: str,
     size: {PAGE_W}pt {PAGE_H}pt;
     margin: 0;
 }}
+
+/* ================================================================
+   BASE — PyMuPDF Story supports CSS2 only: no border-radius,
+   no rgba(), no inline-block, no flexbox/grid.  All solid colors,
+   block layout, borders for separation.
+   ================================================================ */
+
 body {{
     font-family: Helvetica, Arial, sans-serif;
     font-size: 9pt;
-    line-height: 1.55;
+    line-height: 1.6;
     color: {TEXT_PRIMARY};
     background: transparent;
     margin: 0;
@@ -370,59 +544,59 @@ body {{
 }}
 
 /* ========== TITLE PAGE ========== */
+
 .title-page {{
     page-break-after: always;
     min-height: 500px;
     text-align: center;
-    padding: 60px 100px;
+    padding: 80px 100px 40px 100px;
 }}
 .title-card {{
-    background: rgba(16, 16, 30, 0.75);
+    background: {CARD_BG};
     border: 1px solid {BORDER};
-    border-radius: 6px;
     padding: 50px 40px 30px 40px;
-    margin-top: 40px;
+    margin-top: 30px;
 }}
 .title-logo {{
-    width: 56px;
-    height: 56px;
-    margin-bottom: 16px;
+    width: 48px;
+    height: 48px;
+    margin-bottom: 14px;
 }}
 .title-brand {{
-    font-size: 13pt;
+    font-size: 12pt;
     font-weight: 700;
     color: {PURPLE_BRIGHT};
     letter-spacing: 6px;
-    margin-bottom: 8px;
+    margin-bottom: 6px;
 }}
 .title-divider {{
     width: 80px;
     height: 1px;
     background: {PURPLE_DARK};
-    margin: 16px auto;
+    margin: 14px auto;
 }}
 .title-main {{
-    font-size: 20pt;
+    font-size: 18pt;
     font-weight: 700;
     color: {TEXT_BRIGHT};
-    margin: 20px 0 6px 0;
-    line-height: 1.2;
+    margin: 18px 0 4px 0;
+    line-height: 1.25;
 }}
 .title-subtitle {{
-    font-size: 8pt;
+    font-size: 7.5pt;
     font-weight: 700;
     color: {TEXT_SECONDARY};
     letter-spacing: 3px;
-    margin-bottom: 30px;
+    margin-bottom: 24px;
 }}
 .title-meta-table {{
-    margin: 16px auto;
+    margin: 14px auto;
     border-collapse: collapse;
     width: auto;
 }}
 .title-meta-table td {{
     padding: 3px 10px;
-    font-size: 8pt;
+    font-size: 7.5pt;
     border: none;
 }}
 .meta-key {{
@@ -439,51 +613,158 @@ body {{
 .title-sens-inline {{
     font-weight: 700;
     letter-spacing: 2px;
-    font-size: 8pt;
+    font-size: 7.5pt;
 }}
 .title-sens-footer {{
-    font-size: 7pt;
+    font-size: 6.5pt;
     color: {TEXT_MUTED};
-    margin-top: 16px;
-    padding-top: 10px;
+    margin-top: 14px;
+    padding-top: 8px;
     border-top: 1px solid {BORDER};
 }}
 
-/* ========== CARDS (welcome-capability style) ========== */
-.card {{
-    background: rgba(16, 16, 30, 0.78);
-    border: 1px solid {BORDER};
-    border-radius: 4px;
-    padding: 24px 24px;
-    margin: 14px 0;
-    page-break-inside: avoid;
+/* ========== TLP CLASSIFICATION BAR ========== */
+
+.tlp-bar {{
+    border-bottom: 1px solid {BORDER};
+    padding: 3px 0;
+    margin-bottom: 12px;
 }}
-.card-title {{
-    font-size: 9pt;
+.tlp-table {{
+    width: 100%;
+    border-collapse: collapse;
+}}
+.tlp-table td {{
+    padding: 2px 4px;
+    font-size: 7pt;
     font-weight: 700;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    border: none;
+}}
+.tlp-left {{
+    text-align: left;
+}}
+.tlp-right {{
+    text-align: right;
+}}
+
+/* ========== TABLE OF CONTENTS ========== */
+
+.toc-section {{
+    padding: 20px 0 10px 0;
+    page-break-after: always;
+}}
+.toc-heading {{
+    font-size: 10pt;
+    font-weight: 700;
+    color: {PURPLE_BRIGHT};
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    margin: 0 0 4px 0;
+}}
+.toc-rule {{
+    height: 1px;
+    background: {PURPLE_DARK};
+    margin-bottom: 10px;
+}}
+.toc-table {{
+    width: 100%;
+    border-collapse: collapse;
+}}
+.toc-table td {{
+    padding: 5px 6px;
+    border-bottom: 1px solid {BORDER};
+    font-size: 8.5pt;
+}}
+.toc-num {{
+    width: 30px;
+    color: {PURPLE_BRIGHT};
+    font-weight: 700;
+    font-size: 7.5pt;
+    font-family: "Courier New", Courier, monospace;
+}}
+.toc-text {{
+    color: {TEXT_PRIMARY};
+}}
+
+/* ========== REPORT SECTIONS ========== */
+
+.section {{
+    background: #181830;
+    border: 1px solid {BORDER};
+    padding: 20px 26px;
+    margin: 8px 0;
+    page-break-inside: auto;
+}}
+.section-num-line {{
+    margin-bottom: 2px;
+}}
+.section-num {{
+    font-family: "Courier New", Courier, monospace;
+    font-size: 7pt;
+    font-weight: 700;
+    color: {PURPLE_DARK};
+    letter-spacing: 1px;
+}}
+.section-title {{
+    font-size: 10pt;
+    font-weight: 700;
+    color: {PURPLE_BRIGHT};
     text-transform: uppercase;
     letter-spacing: 1px;
+    margin: 0 0 2px 0;
+    page-break-after: avoid;
+}}
+.section-rule {{
+    height: 1px;
+    background: {BORDER};
+    margin: 6px 0 12px 0;
+}}
+
+/* ========== EXECUTIVE SUMMARY ========== */
+
+.exec-section {{
+    border-left: 3px solid {PURPLE_DARK};
+}}
+.exec-label {{
+    font-size: 6pt;
+    font-weight: 700;
     color: {PURPLE_BRIGHT};
-    margin: 0 0 10px 0;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    margin-bottom: 4px;
+    padding: 2px 0;
+    border-bottom: 1px solid {PURPLE_DARK};
+    width: 100px;
 }}
-.media-card {{
-    text-align: center;
-    padding: 24px;
+.exec-title {{
+    font-size: 11pt;
+    color: {TEXT_BRIGHT};
 }}
-.body-card {{
-    padding: 28px 32px;
-    page-break-inside: auto;
+.exec-rule {{
+    height: 1px;
+    background: {PURPLE_DARK};
+    margin: 4px 0 12px 0;
+}}
+.exec-body {{
+    font-size: 9.5pt;
+    line-height: 1.7;
+}}
+.exec-body p {{
+    color: #f0eef5;
 }}
 
 /* ========== CONTENT TYPOGRAPHY ========== */
+
 h1 {{
-    font-size: 12pt;
+    font-size: 11pt;
     color: {PURPLE_BRIGHT};
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 1px;
-    margin-top: 18px;
-    margin-bottom: 8px;
+    margin-top: 12px;
+    margin-bottom: 6px;
     page-break-after: avoid;
 }}
 h2 {{
@@ -492,8 +773,8 @@ h2 {{
     font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.5px;
-    margin-top: 14px;
-    margin-bottom: 6px;
+    margin-top: 10px;
+    margin-bottom: 5px;
     page-break-after: avoid;
 }}
 h3 {{
@@ -501,21 +782,29 @@ h3 {{
     color: {TEXT_BRIGHT};
     font-weight: 700;
     margin-top: 10px;
-    margin-bottom: 5px;
+    margin-bottom: 4px;
     page-break-after: avoid;
 }}
+h4 {{
+    font-size: 9pt;
+    color: {TEXT_BRIGHT};
+    font-weight: 700;
+    margin-top: 8px;
+    margin-bottom: 3px;
+}}
 p {{
-    margin: 5px 0;
+    margin: 4px 0;
     color: {TEXT_PRIMARY};
 }}
 ul, ol {{
-    padding-left: 20px;
-    margin: 5px 0;
+    padding-left: 16px;
+    margin: 4px 0;
     color: {TEXT_PRIMARY};
 }}
 li {{
     margin: 2px 0;
     color: {TEXT_PRIMARY};
+    line-height: 1.5;
 }}
 strong {{
     color: {TEXT_BRIGHT};
@@ -526,23 +815,30 @@ em {{
 }}
 a {{
     color: {PURPLE_BRIGHT};
+    text-decoration: none;
+}}
+blockquote {{
+    background: {CARD_BG};
+    border-left: 2px solid {PURPLE_DARK};
+    padding: 6px 12px;
+    margin: 6px 0;
+    color: #ccc8d4;
+    font-size: 8.5pt;
 }}
 code {{
     background: {PURPLE_SUBTLE};
     color: {PURPLE_BRIGHT};
-    padding: 1px 4px;
+    padding: 1px 3px;
     font-family: "Courier New", Courier, monospace;
     font-size: 8pt;
-    border-radius: 3px;
 }}
 pre {{
     background: {CARD_BG};
     border: 1px solid {BORDER};
-    padding: 8px 10px;
+    padding: 6px 10px;
     font-size: 7.5pt;
-    margin: 6px 0;
+    margin: 5px 0;
     color: {TEXT_PRIMARY};
-    border-radius: 4px;
 }}
 pre code {{
     background: none;
@@ -551,10 +847,11 @@ pre code {{
 hr {{
     border: none;
     border-top: 1px solid {BORDER};
-    margin: 12px 0;
+    margin: 8px 0;
 }}
 
 /* ========== TABLES ========== */
+
 table {{
     border-collapse: collapse;
     width: 100%;
@@ -570,7 +867,7 @@ th {{
     font-size: 7pt;
     text-transform: uppercase;
     letter-spacing: 0.5px;
-    border-bottom: 1px solid {BORDER};
+    border-bottom: 1px solid {PURPLE_DARK};
 }}
 td {{
     padding: 4px 8px;
@@ -587,13 +884,11 @@ td {{
     font-size: 7pt;
 }}
 .src-badge {{
-    display: inline-block;
     background: {PURPLE_DARK};
     color: {TEXT_BRIGHT};
     padding: 1px 6px;
     font-size: 6.5pt;
     font-weight: 700;
-    border-radius: 3px;
 }}
 .tri-box {{
     background: {PURPLE_SUBTLE};
@@ -601,7 +896,6 @@ td {{
     margin-bottom: 8px;
     font-size: 7.5pt;
     color: {TEXT_PRIMARY};
-    border-radius: 4px;
 }}
 .tri-label {{
     font-weight: 700;
@@ -611,6 +905,7 @@ td {{
 }}
 
 /* ========== CHARTS ========== */
+
 .chart-grid {{
     width: 100%;
     border-collapse: collapse;
@@ -635,18 +930,15 @@ td {{
 }}
 .chart-img {{
     width: 200px;
-    max-width: 95%;
-    border-radius: 4px;
 }}
 
-/* ========== MAP & GRAPH ========== */
+/* ========== MAP / GRAPH ========== */
+
 .media-frame {{
     margin: 6px auto;
 }}
 .media-img {{
     width: 88%;
-    max-width: 620px;
-    border-radius: 4px;
     border: 1px solid {BORDER};
 }}
 </style>
@@ -655,23 +947,14 @@ td {{
 
 {title_page}
 
-{map_section}
-
-{geo_summary}
-
-{graph_section}
-
-{chart_section}
-
-<div class="card body-card">
-{body_html}
-</div>
+{body_content}
 
 </body>
 </html>"""
 
 
-def generate_markdown(content: str, title: str, session_id: str) -> bytes:
+def generate_markdown(content: str, title: str, session_id: str,
+                      sensitivity_level: str = "INTERNAL") -> bytes:
     session_ref = session_id
     if session_ref:
         parts = session_ref.split("_", 1)
@@ -679,17 +962,25 @@ def generate_markdown(content: str, title: str, session_id: str) -> bytes:
         session_ref = re.sub(r"\.pdf$", "", session_ref).replace("_", " ")
     else:
         session_ref = "N/A"
+
+    sens = (sensitivity_level or "INTERNAL").upper()
+    tlp_label, _ = _TLP_MAP.get(sens, ("TLP:AMBER", "#f59e0b"))
+
     timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     md_lines = [
         f"# {title}", "",
+        f"> **{tlp_label}** | Classification: **{sens}**", "",
         "---", "",
         "| Field | Value |",
         "|-------|-------|",
         f"| **Platform** | Fortis Intelligence Hub |",
         f"| **Generated** | {timestamp} |",
         f"| **Source** | {session_ref} |",
+        f"| **Classification** | {sens} ({tlp_label}) |",
         "", "---", "",
         content,
+        "", "---", "",
+        f"*Generated by Fortis Intelligence Hub | {tlp_label} | {timestamp}*",
     ]
     return "\n".join(md_lines).encode("utf-8")
 

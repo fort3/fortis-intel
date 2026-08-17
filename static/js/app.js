@@ -993,6 +993,10 @@ async function runBatchInvestigation() {
                 html += '</div>';
             }
 
+            if (data.civilian_harm) {
+                html += renderCivilianHarmSection(data.civilian_harm);
+            }
+
             content.innerHTML = html;
         }
 
@@ -1208,7 +1212,8 @@ async function runScenario() {
             sensitivity_level: 'INTERNAL',
             session_id: data.session_id,
             identifier: scenarioType,
-            identifier_type: 'scenario'
+            identifier_type: 'scenario',
+            civilian_harm: data.civilian_harm || null
         });
 
         // Store for export
@@ -1217,7 +1222,8 @@ async function runScenario() {
             session_id: data.session_id || sessionId,
             sensitivity_level: 'INTERNAL',
             identifier: scenarioType,
-            identifier_type: 'scenario'
+            identifier_type: 'scenario',
+            civilian_harm: data.civilian_harm || null
         };
 
         showToast('Scenario analysis complete.', 'success');
@@ -1279,7 +1285,20 @@ async function sendChatMessage() {
             if (data.kb_context) {
                 kbNote = '<div class="kb-context-indicator">Based on Knowledge Base context</div>';
             }
-            appendChatMessage('ai', kbNote + renderMarkdown(data.answer), false, true);
+            var harmNote = '';
+            if (data.civilian_harm && data.civilian_harm.score >= 0.35) {
+                var ch = data.civilian_harm;
+                harmNote = '<div class="ch-inline-alert">' +
+                    '<span class="wi-badge ch-badge-' + (ch.classification || 'none').toLowerCase() + '">' +
+                    'CIVILIAN HARM: ' + ch.classification + ' (' + ((ch.score || 0) * 100).toFixed(0) + '%)</span>';
+                if (ch.matched_concepts && ch.matched_concepts.length) {
+                    harmNote += ' <span class="ch-concepts-inline">' +
+                        ch.matched_concepts.map(function(c) { return escapeHtml(c); }).join(', ') +
+                        '</span>';
+                }
+                harmNote += '</div>';
+            }
+            appendChatMessage('ai', kbNote + harmNote + renderMarkdown(data.answer), false, true);
 
             // Store in chat history
             chatMessages.push({
@@ -1534,6 +1553,9 @@ function renderAnalysis(data) {
         }
         if (ipIntel && (meta.ip_intel || meta.ip_geolocation)) {
             html += renderIpIntelSection(meta);
+        }
+        if (data.civilian_harm) {
+            html += renderCivilianHarmSection(data.civilian_harm);
         }
         if (data.web_intelligence) {
             html += renderWebIntelligenceSection(data.web_intelligence);
@@ -3061,6 +3083,94 @@ function renderDomainIntelSection(di) {
     }
 
     h += '</div>';
+    return h;
+}
+
+function renderCivilianHarmSection(harm) {
+    if (!harm || !harm.total_scored) return '';
+
+    var dist = harm.distribution || {};
+    var flagged = harm.flagged || [];
+    var hasFlagged = flagged.length > 0;
+
+    var h = '<div class="result-section civilian-harm-section">' +
+        '<div class="ch-header" onclick="this.parentElement.classList.toggle(\'ch-collapsed\')">' +
+        '<h4>Civilian Harm Analysis</h4>' +
+        '<span class="ch-methodology">Bellingcat Methodology</span>' +
+        '<span class="ch-summary">' + harm.total_scored + ' scored &middot; ' +
+        harm.flagged_count + ' flagged' +
+        (harm.max_score ? ' &middot; max ' + (harm.max_score * 100).toFixed(0) + '%' : '') +
+        '</span>' +
+        '<span class="ch-toggle">&#9660;</span></div>' +
+        '<div class="ch-body">';
+
+    // Distribution bar
+    h += '<div class="ch-distribution">';
+    var order = ['CRITICAL', 'HIGH', 'MODERATE', 'LOW', 'NONE'];
+    var colors = {
+        'CRITICAL': '#ef4444', 'HIGH': '#f97316',
+        'MODERATE': '#eab308', 'LOW': '#6b7280', 'NONE': '#374151'
+    };
+    for (var i = 0; i < order.length; i++) {
+        var cls = order[i];
+        if (dist[cls]) {
+            var pct = (dist[cls] / harm.total_scored * 100).toFixed(0);
+            h += '<div class="ch-bar-segment" style="width:' + pct +
+                '%;background:' + colors[cls] + '" title="' +
+                cls + ': ' + dist[cls] + '">' +
+                (pct >= 8 ? cls.charAt(0) + ' ' + dist[cls] : '') + '</div>';
+        }
+    }
+    h += '</div>';
+
+    // Distribution legend
+    h += '<div class="ch-legend">';
+    for (var j = 0; j < order.length; j++) {
+        var c = order[j];
+        if (dist[c]) {
+            h += '<span class="ch-legend-item">' +
+                '<span class="ch-dot" style="background:' + colors[c] + '"></span>' +
+                c + ': ' + dist[c] + '</span>';
+        }
+    }
+    h += '</div>';
+
+    // Flagged items
+    if (hasFlagged) {
+        h += '<div class="intel-card"><h5>Flagged Content (' + flagged.length + ')</h5>';
+        for (var k = 0; k < Math.min(flagged.length, 15); k++) {
+            var item = flagged[k];
+            var hs = item.harm_score || {};
+            var badgeClass = 'ch-badge-' + (hs.classification || 'none').toLowerCase();
+            h += '<div class="ch-item">' +
+                '<span class="wi-badge ' + badgeClass + '">' +
+                escapeHtml(hs.classification || '?') +
+                ' ' + ((hs.score || 0) * 100).toFixed(0) + '%</span> ';
+
+            if (item.platform) {
+                h += '<span class="ch-platform">' + escapeHtml(item.platform) + '</span> ';
+            }
+
+            h += '<div class="ch-content">' + escapeHtml((item.content || '').substring(0, 300)) + '</div>';
+
+            if (hs.matched_concepts && hs.matched_concepts.length) {
+                h += '<div class="ch-concepts">';
+                for (var m = 0; m < hs.matched_concepts.length; m++) {
+                    h += '<span class="ch-concept">' + escapeHtml(hs.matched_concepts[m]) + '</span>';
+                }
+                h += '</div>';
+            }
+
+            if (item.url) {
+                h += '<div class="wi-meta"><a href="' + escapeHtml(item.url) +
+                    '" target="_blank" rel="noopener">' + escapeHtml(item.url) + '</a></div>';
+            }
+            h += '</div>';
+        }
+        h += '</div>';
+    }
+
+    h += '</div></div>';
     return h;
 }
 

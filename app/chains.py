@@ -65,7 +65,7 @@ Brief overview of key findings, overall confidence, and most significant intelli
 Known attributes, aliases, affiliations, and identifiers for the subject.
 
 ## OSINT Source Analysis
-Breakdown of intelligence by source type (social media, public records, domain registrations, breach data, paste sites, forums, etc.). For each source, state what was found and its reliability.
+Breakdown of intelligence by source type (social media, public records, domain registrations, breach data, paste sites, forums, archive.org/Wayback Machine, etc.). For each source, state what was found and its reliability. When Wayback Machine data is present, include historical domain analysis: first/last seen dates, archived subdomain discovery, content change history, and robots.txt policy changes.
 
 ## Geolocation Assessment
 Location data analysis: primary locations, movement patterns, coordinate clustering, temporal correlations. If no geolocation data is available, state this explicitly.
@@ -82,11 +82,14 @@ Chronological ordering of significant events, appearances, and changes observed 
 ## Confidence Assessment
 Per-section confidence ratings with justification. Identify which findings are well-corroborated vs. single-source.
 
+## Civilian Harm Assessment
+If civilian harm scoring data is present (Bellingcat methodology), summarize flagged content: severity distribution, highest-scoring items, geographic patterns, and source reliability of harm indicators. Classify overall harm signal as CRITICAL/HIGH/MODERATE/LOW/NONE with justification. If no harm data is present, state "No civilian harm indicators detected."
+
 ## Intelligence Gaps
 What information is missing, what could not be verified, and what additional collection would strengthen the assessment.
 
 ## Recommendations
-Suggested next steps for further investigation, monitoring priorities, and operational considerations.
+Suggested next steps for further investigation, monitoring priorities, and operational considerations. If civilian harm indicators are present, include recommendations for evidence preservation, incident documentation, and escalation to relevant bodies.
 
 INVESTIGATION REPORT:"""
 

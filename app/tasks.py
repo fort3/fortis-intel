@@ -207,6 +207,41 @@ def poll_monitor(self, monitor_id: str) -> dict:
         except Exception as exc:
             log.warning("poll_monitor: metadata enrichment failed: %s", exc)
 
+    # 6b. Civilian harm scoring (Bellingcat methodology)
+    if new_results:
+        try:
+            from app.civilian_harm import (
+                get_civilian_harm_classifier,
+                CIVILIAN_HARM_ENABLED,
+            )
+            if CIVILIAN_HARM_ENABLED:
+                classifier = get_civilian_harm_classifier()
+                for i, item in enumerate(new_results):
+                    content = item.get("content", "")
+                    if content and len(content.strip()) >= 20:
+                        harm = classifier.score_text(content)
+                        if harm.score >= 0.35 and i < len(finding_ids):
+                            fid = finding_ids[i]
+                            existing = finding_store.get(fid)
+                            if existing:
+                                try:
+                                    meta = json.loads(existing.metadata) if existing.metadata else {}
+                                except (json.JSONDecodeError, TypeError):
+                                    meta = {}
+                                meta["harm_score"] = {
+                                    "score": harm.score,
+                                    "classification": harm.classification,
+                                    "matched_concepts": harm.matched_concepts[:3],
+                                }
+                                existing.metadata = json.dumps(meta)
+                                finding_store.save(existing)
+                log.info(
+                    "poll_monitor: civilian harm scoring complete for %s",
+                    monitor_id,
+                )
+        except Exception as exc:
+            log.warning("poll_monitor: civilian harm scoring failed: %s", exc)
+
     # 7. Notify for findings based on alert_threshold
     if finding_ids:
         try:
