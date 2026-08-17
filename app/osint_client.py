@@ -11,6 +11,16 @@ from typing import Any
 
 _IS_WIN32 = sys.platform == "win32"
 
+
+def _win32_thread_init():
+    """Initialize COM on Windows worker threads so libcurl/Schannel TLS cleanup works."""
+    if _IS_WIN32:
+        try:
+            import ctypes
+            ctypes.windll.ole32.CoInitializeEx(0, 0x2)  # COINIT_MULTITHREADED
+        except Exception:
+            pass
+
 from app.constants import SOCIAL_PLATFORMS
 from app.http_client import create_session
 
@@ -180,7 +190,10 @@ class OSINTClient:
 
         tasks = {}
         workers = 2 if _IS_WIN32 else 4
-        with ThreadPoolExecutor(max_workers=workers) as executor:
+        with ThreadPoolExecutor(
+            max_workers=workers,
+            initializer=_win32_thread_init if _IS_WIN32 else None,
+        ) as executor:
             tasks["profiles"] = executor.submit(
                 self._collect_profiles, identifier, resolved_platforms
             )
@@ -198,7 +211,7 @@ class OSINTClient:
 
             for key, future in tasks.items():
                 try:
-                    result = future.result(timeout=45)
+                    result = future.result(timeout=90)
                     if key == "profiles":
                         findings.profiles = result
                     elif key == "content":

@@ -154,7 +154,7 @@ class SocialClient:
 
     def __init__(self) -> None:
         log.info("SocialClient initialising (Phase 1)")
-        self._http = create_session()
+        self._http = create_session(timeout=15.0)
 
         self._insta_last_req: float = 0.0
 
@@ -2014,6 +2014,7 @@ class SocialClient:
                 except Exception:
                     pass
                 loop.close()
+                asyncio.set_event_loop(None)
             return result
         except Exception as exc:
             log.error("Telegram async bridge failed: %s", exc)
