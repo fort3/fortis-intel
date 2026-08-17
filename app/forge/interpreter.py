@@ -26,12 +26,12 @@ CHAIN_DESCRIPTIONS = {
 }
 
 ENDPOINT_REQUIRED_KEYS = {
-    "/ask": {"context", "question"},
-    "/investigate": {"identifier", "identifier_type"},
-    "/triangulate": {"identifiers"},
-    "/batch-investigate": {"identifiers"},
-    "/enrich": {"context", "document_text"},
-    "/scenario": {"context", "scenario_type"},
+    "/ask": {"question"},
+    "/investigate": {"subject_identifier", "identifier_type"},
+    "/triangulate": {"geo_points"},
+    "/batch-investigate": {"per_entity_summaries"},
+    "/enrich": {"document_text"},
+    "/scenario": {"scenario_type", "osint_data"},
     "/monitor/create": {"monitor_type", "query"},
     "/export/pdf": {"session_id"},
     "/export/markdown": {"session_id"},
