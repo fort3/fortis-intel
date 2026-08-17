@@ -13,6 +13,7 @@ An OSINT-driven intelligence and analysis platform for open-source intelligence 
 - **Geospatial Triangulation** -- Triangulate locations from EXIF data, social geotags, IP addresses, check-ins, video landmarks, and text mentions with interactive Leaflet.js maps
 - **Media Geo-Extraction** -- Automatic EXIF GPS extraction from social media images and video keyframe analysis (OCR + landmark geocoding via OpenCV)
 - **AI-Powered Analysis** -- DeepSeek LLM generates investigation reports, pattern-of-life analyses, network mapping, and influence assessments
+- **Web Intelligence** -- LLM autonomously searches the public web via Google dork queries (DuckDuckGo) to fill intelligence gaps and validate findings, with confidence-gated deep scraping of high-value results
 - **Separated LLM Pipeline** -- RAG (FAISS vectorstore) for document Q&A only; Knowledge Graph (NetworkX entity relationships) for OSINT multi-source enrichment -- no token waste from parallel injection
 - **RAG Knowledge Base** -- Upload PDF and Markdown reports, index them with FAISS vectorstore, and ask natural-language questions with automatic KB feedback from previous analyses
 - **Analytical Scenarios** -- Generate pattern-of-life, network mapping, location prediction, and influence analysis from collected OSINT data with entity graph context
@@ -40,6 +41,7 @@ An OSINT-driven intelligence and analysis platform for open-source intelligence 
 | Task Queue | Celery + Redis (feed monitoring, background enrichment) |
 | NLP | spaCy (NER), langdetect (language detection) |
 | Domain/IP Intel | python-whois, dnspython, HackerTarget API (DNSdumpster, reverse DNS/IP) |
+| Web Intelligence | duckduckgo-search (Google dork queries, no API key required) |
 | Geolocation | geopy, MaxMind GeoLite2, DBSCAN clustering |
 | Video Analysis | OpenCV keyframe extraction, imagehash deduplication, pytesseract OCR |
 | PDF Processing | PyMuPDF, pypdf (3-tier extraction pipeline) |
@@ -496,6 +498,19 @@ Configure either Slack, email, or both. Feed monitor findings will be sent as al
 
 ---
 
+### Web Intelligence Settings
+
+| Env Variable | Description | Default |
+|---|---|---|
+| `DORK_VALIDATION_ENABLED` | Master toggle for web intelligence feature | `true` |
+| `DORK_MAX_QUERIES` | Max dork queries per investigation (gap-fill + validation) | `10` |
+| `DORK_RATE_PER_MINUTE` | Global rate limit for DuckDuckGo queries | `10` |
+| `DORK_RATE_PER_HOUR` | Global hourly rate limit | `30` |
+| `DORK_MAX_SCRAPE_URLS` | Max URLs to deep-scrape per investigation (HIGH + MODERATE only) | `5` |
+| `SERPAPI_API_KEY` | Optional -- SerpAPI key for Google search results instead of DuckDuckGo | (none) |
+
+---
+
 ### Feed Monitor & Knowledge Base Settings
 
 | Env Variable | Description | Default |
@@ -559,7 +574,17 @@ Investigation depth:
 - **Standard** -- API + web scraping (social media, WHOIS, DNS, DNSdumpster, news)
 - **Deep** -- All sources including metadata analysis, entity extraction, and full DNSdumpster enumeration
 
-Results include a structured report, entity relationship graph with LLM-aware context, interactive map, and domain/IP intel cards.
+Results include a structured report, entity relationship graph with LLM-aware context, interactive map, domain/IP intel cards, and a Web Intelligence section.
+
+**Web Intelligence** (enabled by default, toggle per investigation):
+
+After the investigation chain completes, the LLM runs a 4-phase web search pipeline:
+1. **Gap Analysis** -- Identifies what OSINT sources missed and generates targeted dork queries
+2. **Validation** -- Generates queries to cross-reference key findings against independent sources
+3. **Synthesis** -- Integrates search results, rates findings as NEW_INTEL / CONFIRMED / CONTRADICTED / INCONCLUSIVE with confidence levels
+4. **Deep Scrape** -- Scrapes full page content of HIGH and MODERATE confidence results for enriched analysis
+
+All 4 phases go through ForgeChain governance. Web content is treated as untrusted (full injection scan). Uncheck "Search Web for Missing Intel" to skip this step for faster results.
 
 ### Geolocation
 
@@ -638,6 +663,23 @@ The platform uses two separate context pipelines to avoid token waste and LLM sa
 
 Both pipelines save their analysis results to the Knowledge Base after completion, creating a feedback loop where prior analyses inform future Q&A queries.
 
+### Web Intelligence Pipeline
+
+The web intelligence feature runs a 4-phase dork search pipeline at the end of each investigation:
+
+1. **Gap Analysis Chain** (`dork_gap_analysis_chain`) -- Reviews the investigation report and raw OSINT data to identify intelligence gaps (platforms with no results, unanswered questions, thin coverage). Generates 3-5 targeted Google dork queries to fill those gaps.
+2. **Validation Chain** (`dork_validation_chain`) -- Generates 3-5 dork queries to cross-reference key findings against independent public sources.
+3. **Synthesis Chain** (`dork_synthesis_chain`) -- Integrates search results into the investigation. Rates each result as NEW_INTEL / CONFIRMED / CONTRADICTED / INCONCLUSIVE with HIGH / MODERATE / LOW confidence. Flags HIGH and MODERATE results for deep scraping.
+4. **Deep Synthesis Chain** (`dork_deep_synthesis_chain`) -- Only runs when deep scraping returns content. Enriches findings with full-page content from the highest-confidence URLs.
+
+**Security layers:**
+- All 4 chains go through ForgeChain's 3-verifier consensus gate
+- Query sanitization blocks dangerous operators (`cache:`, `link:`), embedded URLs, base64 payloads, shell metacharacters (max 256 chars)
+- Search results and scraped content are NOT in `trusted_keys` -- full injection pattern scan applied
+- Only DuckDuckGo search API is called -- result URLs are only followed for HIGH/MODERATE confidence deep scraping
+- Global rate limiting: 10 queries/investigation, 10/min, 30/hour
+- Feature toggle: set `DORK_VALIDATION_ENABLED=false` to disable entirely
+
 ### FAISS Vectorstore
 
 Documents are embedded using `BAAI/bge-base-en-v1.5` (768 dimensions) and stored in a FAISS index. The RAG pipeline uses similarity search to retrieve relevant chunks for document Q&A. Analysis results from all routes are automatically indexed into the KB after completion.
@@ -648,6 +690,7 @@ The platform is designed to run with minimal configuration. Core features that w
 
 - PDF/Markdown upload and RAG Q&A
 - Domain/IP investigation (WHOIS, DNS, DNSdumpster -- no API key needed)
+- Web intelligence dork search via DuckDuckGo (no API key needed)
 - All 8 social platforms via curl_cffi scrape fallbacks (no API keys needed)
 - Manual EXIF extraction from uploaded images
 - Manual coordinate entry for triangulation
@@ -762,7 +805,7 @@ Fortis-Intelligence-Hub/
 |-- app/
 |   |-- __init__.py
 |   |-- web.py                   # Flask app factory + all routes
-|   |-- chains.py                # LLM prompt templates
+|   |-- chains.py                # LLM prompt templates (12 chains: 8 OSINT + 4 web intelligence)
 |   |-- llm.py                   # DeepSeek LLM factory
 |   |-- http_client.py           # Thread-safe HTTP session factory (curl_cffi / requests)
 |   |-- osint_client.py          # OSINT aggregator (unified geo pipeline, domain/IP intel)
@@ -771,6 +814,8 @@ Fortis-Intelligence-Hub/
 |   |-- telegram_auth.py         # One-time Telegram session setup (python -m app.telegram_auth)
 |   |-- geo_client.py            # Geolocation + triangulation
 |   |-- metadata_extractor.py    # EXIF, NER, language detection
+|   |-- dork_search.py            # DuckDuckGo dork search client + rate limiter
+|   |-- dork_sanitizer.py         # Query/result sanitization + anti-exfiltration
 |   |-- web_scraper.py           # News, WHOIS, DNS, DNSdumpster, reverse DNS/IP, RSS
 |   |-- export.py                # PDF/Markdown export
 |   |-- export_ioc.py            # STIX, CSV, JSON export
