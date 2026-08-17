@@ -122,6 +122,21 @@ class _RateLimiter:
 # DorkSearchClient
 # ---------------------------------------------------------------------------
 
+def _is_timeout(exc: Exception) -> bool:
+    """Return True if the exception is a timeout (query-specific, not a block)."""
+    if isinstance(exc, (TimeoutError, OSError)):
+        err_str = str(exc)
+        if "10060" in err_str or "timed out" in err_str.lower():
+            return True
+    try:
+        import httpx
+        if isinstance(exc, httpx.TimeoutException):
+            return True
+    except ImportError:
+        pass
+    return "timeout" in type(exc).__name__.lower()
+
+
 def _make_ddgs():
     """Import and instantiate DDGS with the configured timeout."""
     try:
@@ -189,13 +204,19 @@ class DorkSearchClient:
                 self._consecutive_failures = 0
                 return results
             except Exception as exc2:
-                log.error("Dork search fallback failed for %r: %s", query[:80], exc2)
-                self._consecutive_failures += 1
+                if _is_timeout(exc2):
+                    log.warning("Dork search fallback timed out for %r (continuing): %s", query[:80], exc2)
+                else:
+                    log.error("Dork search fallback failed for %r: %s", query[:80], exc2)
+                    self._consecutive_failures += 1
                 return []
         except Exception as exc:
-            log.error("Dork search failed for %r: %s", query[:80], exc)
-            self._consecutive_failures += 1
-            self._reset_ddgs()
+            if _is_timeout(exc):
+                log.warning("Dork search timed out for %r (continuing): %s", query[:80], exc)
+            else:
+                log.error("Dork search failed for %r: %s", query[:80], exc)
+                self._consecutive_failures += 1
+                self._reset_ddgs()
             return []
 
     def search_batch(
