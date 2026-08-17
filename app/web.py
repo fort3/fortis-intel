@@ -390,7 +390,7 @@ def _run_initial_dorking(
     Non-fatal: callers should wrap this in try/except.
     """
     from app.dork_search import DorkQuery, DorkSearchClient, parse_dork_queries
-    from app.dork_sanitizer import sanitize_dork_query, sanitize_search_results
+    from app.dork_sanitizer import sanitize_dork_query, sanitize_search_results, sanitize_scraped_content
 
     result: dict = {"text": "", "data": {}, "queries_run": 0, "suggested_platforms": []}
 
@@ -457,13 +457,57 @@ def _run_initial_dorking(
 
     collection_text = sanitize_search_results(collection_raw) if collection_raw else "No initial collection results."
 
+    # Deep-scrape the top initial results — these are typically the highest-
+    # quality hits (LinkedIn profiles, news articles, company pages) that the
+    # hardcoded SOCIAL_PLATFORMS would never reach.  Search position correlates
+    # with relevance so we scrape the first N unique URLs across all queries.
+    scraped_enrichments = []
+    if collection_raw:
+        from app.http_client import create_session
+        scrape_http = create_session(timeout=15.0)
+        seen_urls: set[str] = set()
+        scrape_cap = min(DORK_MAX_SCRAPE_URLS, len(collection_raw))
+
+        for item in collection_raw:
+            if len(scraped_enrichments) >= scrape_cap:
+                break
+            url = item.get("url", "")
+            if not url or url in seen_urls:
+                continue
+            seen_urls.add(url)
+            try:
+                resp = scrape_http.get(url, timeout=15)
+                if hasattr(resp, "status_code") and resp.status_code == 200:
+                    raw_html = resp.text if hasattr(resp, "text") else str(resp.content)
+                    clean = sanitize_scraped_content(raw_html, max_chars=2000)
+                    if clean and len(clean) > 50:
+                        scraped_enrichments.append({
+                            "url": url,
+                            "title": item.get("title", ""),
+                            "content": clean,
+                        })
+                        print(f"[DORK] Initial scrape enriched: {url} ({len(clean)} chars)")
+            except Exception as exc:
+                print(f"[DORK] Initial scrape skipped {url}: {exc}")
+
+    # Build enriched text that includes both snippets AND scraped full-page content
+    enriched_text = collection_text
+    if scraped_enrichments:
+        enriched_text += "\n\n--- ENRICHED PAGE CONTENT (top web results) ---\n"
+        for se in scraped_enrichments:
+            enriched_text += f"\n[Source: {se['title']}]\nURL: {se['url']}\n{se['content']}\n"
+
     result["queries_run"] = len(all_queries)
-    result["text"] = collection_text
+    result["text"] = enriched_text
     result["data"]["queries"] = [
         {"query": dq.query, "type": "collection", "purpose": dq.purpose, "ref": dq.finding_ref}
         for dq in all_queries
     ]
     result["data"]["collection_results"] = collection_raw
+    if scraped_enrichments:
+        result["data"]["scraped_pages"] = [
+            {"url": se["url"], "title": se["title"]} for se in scraped_enrichments
+        ]
 
     # Parse platform recommendations from LLM output (if no platforms were specified)
     if not platforms or platforms_str == "none":
@@ -479,7 +523,7 @@ def _run_initial_dorking(
                 if line.strip() and line.strip() != "-"
             ]
 
-    print(f"[DORK] Initial collection: {len(all_queries)} queries, {len(collection_raw)} results")
+    print(f"[DORK] Initial collection: {len(all_queries)} queries, {len(collection_raw)} results, {len(scraped_enrichments)} pages scraped")
     return result
 
 

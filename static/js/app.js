@@ -3055,11 +3055,17 @@ function renderWebIntelligenceSection(wi) {
         '<div class="wi-body">';
 
     // Initial Collection (Phase 1 — pre-OSINT)
+    var scrapedPages = initial.scraped_pages || [];
+    var scrapedUrls = {};
+    scrapedPages.forEach(function (sp) { scrapedUrls[sp.url] = true; });
+
     if (initResults.length) {
         h += '<div class="intel-card"><h5>Initial Web Discovery (Pre-OSINT)</h5>';
         initResults.forEach(function (r) {
-            h += '<div class="wi-result">' +
+            var enriched = scrapedUrls[r.url];
+            h += '<div class="wi-result' + (enriched ? ' wi-enriched' : '') + '">' +
                 '<span class="wi-badge wi-badge-collection">DISCOVERY</span> ' +
+                (enriched ? '<span class="wi-badge wi-badge-scraped">ENRICHED</span> ' : '') +
                 '<strong>' + escapeHtml(r.title || '') + '</strong>' +
                 '<div class="wi-snippet">' + escapeHtml(r.snippet || '') + '</div>' +
                 '<div class="wi-meta">' +
