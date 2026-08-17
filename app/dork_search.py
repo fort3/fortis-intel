@@ -43,7 +43,7 @@ class DorkResult:
 # ---------------------------------------------------------------------------
 
 _DORK_LINE_RE = re.compile(
-    r"DORK:\s*(?P<query>.+?)\s*\|\s*PURPOSE:\s*(?P<purpose>.+?)\s*\|\s*(?:FINDING|GAP):\s*(?P<ref>.+)",
+    r"DORK:\s*(?P<query>.+?)\s*\|\s*PURPOSE:\s*(?P<purpose>.+?)\s*\|\s*(?:FINDING|GAP|TARGET):\s*(?P<ref>.+)",
     re.IGNORECASE,
 )
 

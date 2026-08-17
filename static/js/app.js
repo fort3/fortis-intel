@@ -3034,24 +3034,48 @@ function renderDomainIntelSection(di) {
 }
 
 function renderWebIntelligenceSection(wi) {
-    var queries = wi.queries || [];
-    var gapResults = wi.gap_fill_results || [];
-    var valResults = wi.validation_results || [];
-    var deepScraped = wi.deep_scraped || [];
+    var initial = wi.initial_collection || {};
+    var final_ = wi.final_validation || {};
+    var initQueries = initial.queries || [];
+    var initResults = initial.collection_results || [];
+    var finalQueries = final_.queries || [];
+    var gapResults = final_.gap_fill_results || [];
+    var valResults = final_.validation_results || [];
+    var deepScraped = final_.deep_scraped || [];
 
-    var totalResults = gapResults.length + valResults.length;
+    var totalQueries = (wi.initial_queries_run || 0) + (wi.final_queries_run || 0);
+    var totalResults = initResults.length + gapResults.length + valResults.length;
+
     var h = '<div class="result-section web-intelligence-section">' +
         '<div class="wi-header" onclick="this.parentElement.classList.toggle(\'wi-collapsed\')">' +
         '<h4>Web Intelligence</h4>' +
-        '<span class="wi-summary">' + queries.length + ' queries &middot; ' +
+        '<span class="wi-summary">' + totalQueries + ' queries &middot; ' +
         totalResults + ' results' +
         (deepScraped.length ? ' &middot; ' + deepScraped.length + ' pages scraped' : '') +
         '</span>' +
         '<span class="wi-toggle">&#9660;</span></div>' +
         '<div class="wi-body">';
 
+    // Initial Collection (Phase 1 — pre-OSINT)
+    if (initResults.length) {
+        h += '<div class="intel-card"><h5>Initial Web Discovery (Pre-OSINT)</h5>';
+        initResults.forEach(function (r) {
+            h += '<div class="wi-result">' +
+                '<span class="wi-badge wi-badge-collection">DISCOVERY</span> ' +
+                '<strong>' + escapeHtml(r.title || '') + '</strong>' +
+                '<div class="wi-snippet">' + escapeHtml(r.snippet || '') + '</div>' +
+                '<div class="wi-meta">' +
+                '<a href="' + escapeHtml(r.url || '') + '" target="_blank" rel="noopener">' +
+                escapeHtml(r.url || '') + '</a>' +
+                ' &middot; Query: <em>' + escapeHtml(r.query || '') + '</em>' +
+                '</div></div>';
+        });
+        h += '</div>';
+    }
+
+    // Gap-fill (Phase 5 — post-analysis)
     if (gapResults.length) {
-        h += '<div class="intel-card"><h5>New Intelligence</h5>';
+        h += '<div class="intel-card"><h5>New Intelligence (Gap Analysis)</h5>';
         gapResults.forEach(function (r) {
             h += '<div class="wi-result">' +
                 '<span class="wi-badge wi-badge-new">NEW_INTEL</span> ' +
@@ -3066,6 +3090,7 @@ function renderWebIntelligenceSection(wi) {
         h += '</div>';
     }
 
+    // Validation (Phase 5 — post-analysis)
     if (valResults.length) {
         h += '<div class="intel-card"><h5>Validation Results</h5>';
         valResults.forEach(function (r) {
@@ -3081,6 +3106,7 @@ function renderWebIntelligenceSection(wi) {
         h += '</div>';
     }
 
+    // Deep scraped
     if (deepScraped.length) {
         h += '<div class="intel-card"><h5>Deep Scraped Sources</h5><ul>';
         deepScraped.forEach(function (s) {
@@ -3093,13 +3119,25 @@ function renderWebIntelligenceSection(wi) {
         h += '</ul></div>';
     }
 
-    if (queries.length) {
+    // All queries table (initial + final)
+    var allQueries = initQueries.concat(finalQueries);
+    if (allQueries.length) {
         h += '<div class="intel-card wi-queries-card"><h5>Dork Queries Used</h5>' +
-            '<table class="intel-table"><tr><th>Type</th><th>Query</th><th>Purpose</th></tr>';
-        queries.forEach(function (q) {
-            var typeClass = q.type === 'gap_fill' ? 'wi-badge-new' : 'wi-badge-validate';
+            '<table class="intel-table"><tr><th>Phase</th><th>Query</th><th>Purpose</th></tr>';
+        allQueries.forEach(function (q) {
+            var typeLabel, typeClass;
+            if (q.type === 'collection') {
+                typeLabel = 'COLLECT';
+                typeClass = 'wi-badge-collection';
+            } else if (q.type === 'gap_fill') {
+                typeLabel = 'GAP FILL';
+                typeClass = 'wi-badge-new';
+            } else {
+                typeLabel = 'VALIDATE';
+                typeClass = 'wi-badge-validate';
+            }
             h += '<tr><td><span class="wi-badge ' + typeClass + '">' +
-                escapeHtml(q.type === 'gap_fill' ? 'GAP FILL' : 'VALIDATE') + '</span></td>' +
+                escapeHtml(typeLabel) + '</span></td>' +
                 '<td><code>' + escapeHtml(q.query) + '</code></td>' +
                 '<td>' + escapeHtml(q.purpose) + '</td></tr>';
         });

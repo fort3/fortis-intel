@@ -54,6 +54,7 @@ from app.chains import (
     get_batch_item_chain,
     get_batch_synthesis_chain,
     get_scenario_chain,
+    get_dork_collection_chain,
     get_dork_gap_analysis_chain,
     get_dork_validation_chain,
     get_dork_synthesis_chain,
@@ -374,7 +375,100 @@ DORK_VALIDATION_ENABLED = os.environ.get("DORK_VALIDATION_ENABLED", "true").lowe
 DORK_MAX_SCRAPE_URLS = int(os.environ.get("DORK_MAX_SCRAPE_URLS", "5"))
 
 
-def _run_dork_search(
+def _run_initial_dorking(
+    subject_identifier: str,
+    identifier_type: str,
+    platforms: list[str],
+    session_id: str,
+    user_hash: str,
+) -> dict:
+    """Phase 1 dorking: generate and execute collection dork queries BEFORE OSINT collection.
+
+    Returns a dict with ``text`` (formatted results), ``data`` (structured results),
+    and ``suggested_platforms`` (list of platforms the LLM recommends checking).
+    Non-fatal: callers should wrap this in try/except.
+    """
+    from app.dork_search import DorkSearchClient, parse_dork_queries
+    from app.dork_sanitizer import sanitize_dork_query, sanitize_search_results
+
+    result: dict = {"text": "", "data": {}, "queries_run": 0, "suggested_platforms": []}
+
+    platforms_str = ", ".join(platforms) if platforms else "none"
+
+    collection_chain = get_dork_collection_chain()
+    collection_input = {
+        "subject_identifier": subject_identifier,
+        "identifier_type": identifier_type,
+        "platforms": platforms_str,
+    }
+    collection_result = gated_invoke(
+        collection_chain, collection_input,
+        chain_name="dork_collection_chain",
+        endpoint="/investigate",
+        mode="osint",
+        session_id=session_id,
+        user_hash=user_hash,
+        trusted_keys={"subject_identifier", "identifier_type", "platforms"},
+    )
+    if not collection_result.success:
+        print(f"[DORK] Initial collection blocked: {collection_result.reason}")
+        return result
+
+    collection_queries = parse_dork_queries(collection_result.content, "collection")
+
+    all_queries = []
+    for dq in collection_queries:
+        cleaned, warnings = sanitize_dork_query(dq.query)
+        if warnings:
+            print(f"[DORK] Collection query sanitisation warnings for '{dq.query[:60]}': {warnings}")
+        if cleaned:
+            dq.query = cleaned
+            all_queries.append(dq)
+
+    if not all_queries:
+        print("[DORK] No valid collection queries after sanitisation")
+        return result
+
+    client = DorkSearchClient()
+    search_results = client.search_batch(all_queries, max_per_query=5, delay=0.2)
+
+    collection_raw = []
+    for dq in all_queries:
+        for dr in search_results.get(dq.query, []):
+            collection_raw.append({
+                "title": dr.title, "url": dr.url, "snippet": dr.snippet,
+                "query": dq.query, "purpose": dq.purpose, "ref": dq.finding_ref,
+            })
+
+    collection_text = sanitize_search_results(collection_raw) if collection_raw else "No initial collection results."
+
+    result["queries_run"] = len(all_queries)
+    result["text"] = collection_text
+    result["data"]["queries"] = [
+        {"query": dq.query, "type": "collection", "purpose": dq.purpose, "ref": dq.finding_ref}
+        for dq in all_queries
+    ]
+    result["data"]["collection_results"] = collection_raw
+
+    # Parse platform recommendations from LLM output (if no platforms were specified)
+    if not platforms or platforms_str == "none":
+        import re
+        rec_match = re.search(
+            r"PLATFORM RECOMMENDATIONS?:?\s*(.+?)(?:\n\n|\Z)",
+            collection_result.content, re.DOTALL | re.IGNORECASE,
+        )
+        if rec_match:
+            result["suggested_platforms"] = [
+                line.strip().lstrip("- ").strip()
+                for line in rec_match.group(1).splitlines()
+                if line.strip() and line.strip() != "-"
+            ]
+
+    print(f"[DORK] Initial collection: {len(all_queries)} queries, {len(collection_raw)} results")
+    return result
+
+
+def _run_final_dorking(
     analysis_text: str,
     osint_summary: str,
     entities_summary: str,
@@ -564,6 +658,22 @@ def _process_single_identifier(identifier, identifier_type, platforms, depth,
     except Exception:
         clean_id = identifier
 
+    # Initial dorking for batch item
+    initial_dork_context = ""
+    if DORK_VALIDATION_ENABLED:
+        try:
+            dork_data = _run_initial_dorking(
+                subject_identifier=clean_id,
+                identifier_type=identifier_type,
+                platforms=platforms,
+                session_id=session_id or f"batch_{clean_id}",
+                user_hash=user_hash,
+            )
+            if dork_data and dork_data.get("text"):
+                initial_dork_context = dork_data["text"]
+        except Exception:
+            pass
+
     try:
         findings = osint_client.investigate(clean_id, platforms=platforms, depth=depth)
         findings_dict = asdict(findings)
@@ -576,6 +686,8 @@ def _process_single_identifier(identifier, identifier_type, platforms, depth,
         }
 
     osint_context = _findings_to_context(findings_dict)
+    if initial_dork_context:
+        osint_context += "\n\n--- INITIAL WEB COLLECTION ---\n" + initial_dork_context
     geo_context = _geo_points_to_text(findings_dict.get("geo_points", []))
 
     chain = get_batch_item_chain()
@@ -1071,7 +1183,26 @@ def create_app():
         session_id = f"inv_{uuid.uuid4().hex[:16]}"
         user_hash = _get_user_hash()
 
-        # Phase 0: OSINT collection (stubs will return minimal data)
+        # ── Phase 1: Initial Dorking (Collection) ─────────────────────
+        web_search_enabled = data.get("web_search", DORK_VALIDATION_ENABLED)
+        initial_dork_data = None
+        initial_dork_context = ""
+        if web_search_enabled and DORK_VALIDATION_ENABLED:
+            try:
+                initial_dork_data = _run_initial_dorking(
+                    subject_identifier=clean_id,
+                    identifier_type=identifier_type,
+                    platforms=platforms,
+                    session_id=session_id,
+                    user_hash=user_hash,
+                )
+                if initial_dork_data and initial_dork_data.get("text"):
+                    initial_dork_context = initial_dork_data["text"]
+                    print(f"[DORK] Initial collection: {initial_dork_data['queries_run']} queries executed")
+            except Exception as exc:
+                print(f"[WARN] Initial dorking failed (non-fatal): {exc}")
+
+        # ── Phase 2: OSINT Collection ─────────────────────────────────
         osint_client = _get_osint_client()
         geo_client = _get_geo_client()
 
@@ -1082,7 +1213,7 @@ def create_app():
             print(f"[ERROR] OSINT investigation failed: {exc}")
             return jsonify({"error": "OSINT collection failed. Please try again."}), 500
 
-        # Build context for chain
+        # ── Phase 3: Context Preparation ──────────────────────────────
         osint_context = _findings_to_context(findings_dict)
         geo_data = findings_dict.get("geo_points", [])
         geo_context = _geo_points_to_text(geo_data)
@@ -1182,10 +1313,19 @@ def create_app():
         except Exception as exc:
             print(f"[WARN] Chart generation failed (non-fatal): {exc}")
 
-        # Chain invocation via ForgeChain governance
+        # ── Phase 4: LLM Analysis ────────────────────────────────────
+        # Include initial dork results in the OSINT data so the LLM can
+        # reference web discoveries alongside platform findings.
+        full_osint_context = osint_context
+        if initial_dork_context:
+            full_osint_context += (
+                "\n\n--- INITIAL WEB COLLECTION (pre-OSINT dorking) ---\n"
+                + initial_dork_context
+            )
+
         chain = get_investigation_chain()
         chain_input = {
-            "osint_data": osint_context,
+            "osint_data": full_osint_context,
             "geo_data": geo_context,
             "entity_graph_context": entity_graph_ctx,
             "subject_identifier": clean_id,
@@ -1215,16 +1355,15 @@ def create_app():
         analysis = result.content
         sensitivity = findings_dict.get("sensitivity_level", "INTERNAL")
 
-        # Web Intelligence: dork search for gap-filling + validation
+        # ── Phase 5: Final Dorking (Validation + Gap Analysis) ────────
         web_intelligence = None
-        web_search_enabled = data.get("web_search", DORK_VALIDATION_ENABLED)
         if web_search_enabled and DORK_VALIDATION_ENABLED:
             try:
                 entities_text = "\n".join(
                     f"- {e.get('name', '')} ({e.get('type', '')})" for e in entities_data[:30]
                 ) or "No entities extracted."
 
-                web_intelligence = _run_dork_search(
+                web_intelligence = _run_final_dorking(
                     analysis_text=analysis,
                     osint_summary=osint_context[:4000],
                     entities_summary=entities_text,
@@ -1232,10 +1371,10 @@ def create_app():
                     user_hash=user_hash,
                 )
                 if web_intelligence and web_intelligence.get("text"):
-                    analysis += "\n\n---\n\n## Web Intelligence\n\n" + web_intelligence["text"]
-                    print(f"[DORK] Web intelligence appended ({web_intelligence['queries_run']} queries)")
+                    analysis += "\n\n---\n\n## Web Intelligence — Validation & Gap Analysis\n\n" + web_intelligence["text"]
+                    print(f"[DORK] Final dorking appended ({web_intelligence['queries_run']} queries)")
             except Exception as exc:
-                print(f"[WARN] Dork search failed (non-fatal): {exc}")
+                print(f"[WARN] Final dorking failed (non-fatal): {exc}")
 
         # Save to knowledge base
         report_id = _save_to_kb(
@@ -1280,8 +1419,17 @@ def create_app():
         }
         if graph_cache_key:
             response["graph_cache_key"] = graph_cache_key
+
+        # Combine initial + final dork data into unified web_intelligence
+        wi_data = {}
+        if initial_dork_data and initial_dork_data.get("data"):
+            wi_data["initial_collection"] = initial_dork_data["data"]
+            wi_data["initial_queries_run"] = initial_dork_data.get("queries_run", 0)
         if web_intelligence and web_intelligence.get("data"):
-            response["web_intelligence"] = web_intelligence["data"]
+            wi_data["final_validation"] = web_intelligence["data"]
+            wi_data["final_queries_run"] = web_intelligence.get("queries_run", 0)
+        if wi_data:
+            response["web_intelligence"] = wi_data
 
         return jsonify(response)
 
@@ -1319,7 +1467,24 @@ def create_app():
         enrich_session_id = f"enr_{uuid.uuid4().hex[:16]}"
         user_hash = _get_user_hash()
 
-        # Phase 0: OSINT collection
+        # Initial dorking for enrichment context
+        web_search_enabled = data.get("web_search", DORK_VALIDATION_ENABLED)
+        initial_dork_context = ""
+        if web_search_enabled and DORK_VALIDATION_ENABLED:
+            try:
+                initial_dork_data = _run_initial_dorking(
+                    subject_identifier=clean_id,
+                    identifier_type=identifier_type,
+                    platforms=[],
+                    session_id=enrich_session_id,
+                    user_hash=user_hash,
+                )
+                if initial_dork_data and initial_dork_data.get("text"):
+                    initial_dork_context = initial_dork_data["text"]
+            except Exception as exc:
+                print(f"[WARN] Initial dorking for /enrich failed (non-fatal): {exc}")
+
+        # OSINT collection
         osint_client = _get_osint_client()
         try:
             findings = osint_client.investigate(clean_id, depth="standard")
@@ -1329,6 +1494,8 @@ def create_app():
             return jsonify({"error": "OSINT collection failed."}), 500
 
         osint_context = _findings_to_context(findings_dict)
+        if initial_dork_context:
+            osint_context += "\n\n--- INITIAL WEB COLLECTION ---\n" + initial_dork_context
         geo_context = _geo_points_to_text(findings_dict.get("geo_points", []))
 
         # Extract entities from document for cross-referencing

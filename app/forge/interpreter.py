@@ -18,6 +18,7 @@ CHAIN_DESCRIPTIONS = {
     "osint_feed_monitoring": "Real-time feed monitoring rule creation and management",
     "osint_entity_mapping": "Entity relationship mapping and social graph analysis",
     # Web intelligence (dork search)
+    "dork_collection_chain": "Initial collection — generates dork queries for pre-OSINT web discovery",
     "dork_gap_analysis_chain": "Gap analysis — identifies missing intelligence for web search",
     "dork_validation_chain": "Validation query generation — cross-references findings via web search",
     "dork_synthesis_chain": "Web search synthesis — integrates search results into investigation",

@@ -1,6 +1,6 @@
 """LLM chains for Fortis Intelligence Hub.
 
-Eight OSINT-focused analysis chains built with LangChain LCEL.
+Thirteen OSINT-focused analysis chains built with LangChain LCEL.
 Each function returns a runnable chain (ChatPromptTemplate | LLM | StrOutputParser).
 """
 
@@ -309,6 +309,54 @@ Respond with EXACTLY this format:
 
 TRIAGE:"""
 
+DORK_COLLECTION_SYSTEM_PROMPT = """You are an OSINT analyst performing initial intelligence collection on a subject via public web search.
+
+Your task is to generate targeted Google dork queries to discover publicly available information about the subject BEFORE any social media or platform-specific OSINT collection begins. This is the first step in the intelligence lifecycle.
+
+SUBJECT IDENTIFIER: {subject_identifier}
+IDENTIFIER TYPE: {identifier_type}
+TARGET PLATFORMS: {platforms}
+
+If TARGET PLATFORMS is "none" or empty, perform a BROAD WEB SWEEP — do not use platform-specific site: operators. Instead, search across the open web (forums, paste sites, news, public records, code repositories, professional profiles). After your queries, add a PLATFORM RECOMMENDATIONS section suggesting which social media platforms the OSINT tools should check based on what the identifier type suggests.
+
+Based on the identifier type, generate 5-8 targeted dork queries:
+
+For USERNAME identifiers:
+- Search for the exact username across forums, paste sites, code repositories, and professional profiles
+- Look for associated email addresses, real names, or aliases
+- Search for the username in data breach compilations or public leak references
+- Check for accounts on platforms not in the OSINT tool's coverage (LinkedIn, GitHub, personal blogs)
+
+For EMAIL identifiers:
+- Search for the email in public records, forum registrations, mailing lists
+- Look for associated usernames, real names, or organisations
+- Check for the email domain to discover related accounts
+- Search for public mentions in documents (PDF, DOCX)
+
+For DOMAIN identifiers:
+- Search for domain mentions outside the domain itself (-site:domain)
+- Look for associated organisations, people, or contact information
+- Search for subdomains, related domains, or historical references
+- Check for the domain in security reports, tech forums, or news
+
+For IP identifiers:
+- Search for the IP in abuse reports, blocklists, or security advisories
+- Look for services or domains historically associated with the IP
+- Search for the IP in paste sites, forums, or public logs
+
+For NAME identifiers:
+- Search for the exact name across professional and public profiles
+- Look for news articles, publications, or public records
+- Search with location qualifiers if known
+- Check for social media presence not covered by other tools
+
+Use ONLY these operators: site: intitle: inurl: intext: filetype: "exact phrase" -exclude OR AND
+
+Output EXACTLY in this format, one per line (no other text before or after):
+DORK: <query> | PURPOSE: <what this query aims to discover> | TARGET: <which aspect of the subject>
+
+COLLECTION QUERIES:"""
+
 DORK_GAP_ANALYSIS_SYSTEM_PROMPT = """You are an OSINT analyst reviewing an investigation report to identify intelligence gaps that can be filled by searching the public web.
 
 Analyse the investigation report and raw OSINT data. Identify:
@@ -548,6 +596,10 @@ scenario_prompt = ChatPromptTemplate.from_messages([
     ("system", SCENARIO_SYSTEM_PROMPT),
 ])
 
+dork_collection_prompt = ChatPromptTemplate.from_messages([
+    ("system", DORK_COLLECTION_SYSTEM_PROMPT),
+])
+
 dork_gap_analysis_prompt = ChatPromptTemplate.from_messages([
     ("system", DORK_GAP_ANALYSIS_SYSTEM_PROMPT),
 ])
@@ -576,6 +628,7 @@ _batch_item_chain = None
 _batch_synthesis_chain = None
 _monitor_alert_chain = None
 _scenario_chain = None
+_dork_collection_chain = None
 _dork_gap_analysis_chain = None
 _dork_validation_chain = None
 _dork_synthesis_chain = None
@@ -686,6 +739,19 @@ def get_scenario_chain():
     return _scenario_chain
 
 
+def get_dork_collection_chain():
+    """Initial collection chain — generates dork queries based on identifier type + platforms."""
+    global _dork_collection_chain
+    if _dork_collection_chain is None:
+        _dork_collection_chain = (
+            RunnablePassthrough()
+            | dork_collection_prompt
+            | get_analyst_llm()
+            | StrOutputParser()
+        )
+    return _dork_collection_chain
+
+
 def get_dork_gap_analysis_chain():
     """Gap analysis chain — identifies intelligence gaps and generates dork queries."""
     global _dork_gap_analysis_chain
@@ -747,6 +813,7 @@ __all__ = [
     "get_batch_synthesis_chain",
     "get_monitor_alert_chain",
     "get_scenario_chain",
+    "get_dork_collection_chain",
     "get_dork_gap_analysis_chain",
     "get_dork_validation_chain",
     "get_dork_synthesis_chain",
