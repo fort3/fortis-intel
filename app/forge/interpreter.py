@@ -17,6 +17,11 @@ CHAIN_DESCRIPTIONS = {
     "osint_scenario_analysis": "Scenario analysis from behavioral patterns and OSINT data",
     "osint_feed_monitoring": "Real-time feed monitoring rule creation and management",
     "osint_entity_mapping": "Entity relationship mapping and social graph analysis",
+    # Web intelligence (dork search)
+    "dork_gap_analysis_chain": "Gap analysis — identifies missing intelligence for web search",
+    "dork_validation_chain": "Validation query generation — cross-references findings via web search",
+    "dork_synthesis_chain": "Web search synthesis — integrates search results into investigation",
+    "dork_deep_synthesis_chain": "Deep synthesis — enriches findings with full-page scraped content",
 }
 
 ENDPOINT_REQUIRED_KEYS = {

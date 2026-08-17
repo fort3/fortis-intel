@@ -309,6 +309,123 @@ Respond with EXACTLY this format:
 
 TRIAGE:"""
 
+DORK_GAP_ANALYSIS_SYSTEM_PROMPT = """You are an OSINT analyst reviewing an investigation report to identify intelligence gaps that can be filled by searching the public web.
+
+Analyse the investigation report and raw OSINT data. Identify:
+- Platforms that returned no data or very thin results
+- Unanswered questions about the subject's affiliations, history, or connections
+- Missing context that public web sources could provide (news articles, public records, forum posts, professional profiles)
+- Claims in the report marked LOW confidence that could be corroborated
+
+Generate 3-5 targeted Google dork queries to fill these gaps. Use ONLY these operators:
+site: intitle: inurl: intext: filetype: "exact phrase" -exclude OR AND
+
+INVESTIGATION REPORT:
+{analysis_text}
+
+OSINT DATA SUMMARY:
+{osint_summary}
+
+ENTITIES:
+{entities_summary}
+
+Output EXACTLY in this format, one per line (no other text before or after):
+DORK: <query> | PURPOSE: <what this query aims to find> | GAP: <which intelligence gap it fills>
+
+GAP-FILLING QUERIES:"""
+
+DORK_VALIDATION_SYSTEM_PROMPT = """You are an OSINT analyst generating Google dork queries to cross-reference and validate key findings from an investigation report.
+
+Review the investigation report and identify the most important claims and findings that should be validated against independent public sources.
+
+Generate 3-5 targeted Google dork queries to validate specific findings. Use ONLY these operators:
+site: intitle: inurl: intext: filetype: "exact phrase" -exclude OR AND
+
+INVESTIGATION REPORT:
+{analysis_text}
+
+ENTITIES:
+{entities_summary}
+
+Output EXACTLY in this format, one per line (no other text before or after):
+DORK: <query> | PURPOSE: <what this query aims to validate> | FINDING: <which report finding it cross-references>
+
+VALIDATION QUERIES:"""
+
+DORK_SYNTHESIS_SYSTEM_PROMPT = """You are an OSINT analyst synthesising web search results to fill intelligence gaps and validate investigation findings.
+
+You have two sets of search results:
+1. GAP-FILL results — from queries designed to find missing intelligence
+2. VALIDATION results — from queries designed to cross-reference existing findings
+
+For each search result, assess:
+- Is this NEW intelligence not in the original report? → Label as NEW_INTEL
+- Does this CONFIRM an existing finding? → Label as CONFIRMED
+- Does this CONTRADICT an existing finding? → Label as CONTRADICTED
+- Is the evidence insufficient to judge? → Label as INCONCLUSIVE
+
+Assign confidence: HIGH (multiple corroborating snippets), MODERATE (single credible source), LOW (ambiguous or weak source).
+
+For results rated HIGH or MODERATE confidence that would benefit from reading the full page, output a SCRAPE line.
+
+ORIGINAL INVESTIGATION REPORT:
+{analysis_text}
+
+GAP-FILL SEARCH RESULTS:
+{gap_fill_results}
+
+VALIDATION SEARCH RESULTS:
+{validation_results}
+
+Produce your analysis in these sections:
+
+## New Intelligence Found
+For each NEW_INTEL item: what was discovered, source URL, confidence level, and relevance to the investigation.
+
+## Validation Summary
+For each finding checked: CONFIRMED / CONTRADICTED / INCONCLUSIVE with the supporting evidence and confidence level.
+
+## Cross-Source Assessment
+How do the web results change the overall confidence of the investigation? Any patterns across sources?
+
+## Deep Scrape Candidates
+List URLs worth scraping for full content. Output EXACTLY in this format:
+SCRAPE: <url> | CONFIDENCE: HIGH
+SCRAPE: <url> | CONFIDENCE: MODERATE
+
+Only flag HIGH and MODERATE confidence results for scraping. Do NOT include LOW confidence URLs.
+
+WEB INTELLIGENCE SYNTHESIS:"""
+
+DORK_DEEP_SYNTHESIS_SYSTEM_PROMPT = """You are an OSINT analyst enriching an investigation with full-page content scraped from high-confidence web sources.
+
+You previously identified web search results as relevant. The full page content of the highest-confidence results has now been scraped and sanitised. Use this deeper content to:
+- Enrich NEW_INTEL findings with additional detail from the full page
+- Update CONFIRMED/CONTRADICTED assessments if full content changes the picture
+- Extract any additional entities, dates, or facts not visible in search snippets
+
+ORIGINAL INVESTIGATION REPORT:
+{analysis_text}
+
+INITIAL WEB INTELLIGENCE SYNTHESIS:
+{initial_synthesis}
+
+SCRAPED PAGE CONTENT:
+{scraped_content}
+
+Produce your analysis in these sections:
+
+## Enriched Intelligence
+Updated and expanded findings incorporating full-page content. Clearly mark what is new vs. what was already in the initial synthesis.
+
+## Updated Validation
+Any confidence changes based on full content. If a CONFIRMED finding is now CONTRADICTED (or vice versa), explain why.
+
+## Final Confidence Assessment
+Overall confidence adjustment for the investigation based on all web intelligence gathered.
+
+DEEP WEB INTELLIGENCE:"""
+
 SCENARIO_SYSTEM_PROMPT = """You are an OSINT analyst generating analytical scenarios based on collected intelligence.
 
 SCENARIO TYPE: {scenario_type}
@@ -431,6 +548,22 @@ scenario_prompt = ChatPromptTemplate.from_messages([
     ("system", SCENARIO_SYSTEM_PROMPT),
 ])
 
+dork_gap_analysis_prompt = ChatPromptTemplate.from_messages([
+    ("system", DORK_GAP_ANALYSIS_SYSTEM_PROMPT),
+])
+
+dork_validation_prompt = ChatPromptTemplate.from_messages([
+    ("system", DORK_VALIDATION_SYSTEM_PROMPT),
+])
+
+dork_synthesis_prompt = ChatPromptTemplate.from_messages([
+    ("system", DORK_SYNTHESIS_SYSTEM_PROMPT),
+])
+
+dork_deep_synthesis_prompt = ChatPromptTemplate.from_messages([
+    ("system", DORK_DEEP_SYNTHESIS_SYSTEM_PROMPT),
+])
+
 # ---------------------------------------------------------------------------
 # Chain singletons
 # ---------------------------------------------------------------------------
@@ -443,6 +576,10 @@ _batch_item_chain = None
 _batch_synthesis_chain = None
 _monitor_alert_chain = None
 _scenario_chain = None
+_dork_gap_analysis_chain = None
+_dork_validation_chain = None
+_dork_synthesis_chain = None
+_dork_deep_synthesis_chain = None
 
 
 def get_rag_chain():
@@ -549,6 +686,58 @@ def get_scenario_chain():
     return _scenario_chain
 
 
+def get_dork_gap_analysis_chain():
+    """Gap analysis chain — identifies intelligence gaps and generates dork queries."""
+    global _dork_gap_analysis_chain
+    if _dork_gap_analysis_chain is None:
+        _dork_gap_analysis_chain = (
+            RunnablePassthrough()
+            | dork_gap_analysis_prompt
+            | get_analyst_llm()
+            | StrOutputParser()
+        )
+    return _dork_gap_analysis_chain
+
+
+def get_dork_validation_chain():
+    """Validation dork generation chain — generates queries to cross-reference findings."""
+    global _dork_validation_chain
+    if _dork_validation_chain is None:
+        _dork_validation_chain = (
+            RunnablePassthrough()
+            | dork_validation_prompt
+            | get_analyst_llm()
+            | StrOutputParser()
+        )
+    return _dork_validation_chain
+
+
+def get_dork_synthesis_chain():
+    """Dork synthesis chain — integrates search results into investigation."""
+    global _dork_synthesis_chain
+    if _dork_synthesis_chain is None:
+        _dork_synthesis_chain = (
+            RunnablePassthrough()
+            | dork_synthesis_prompt
+            | get_analyst_llm()
+            | StrOutputParser()
+        )
+    return _dork_synthesis_chain
+
+
+def get_dork_deep_synthesis_chain():
+    """Deep synthesis chain — enriches findings with full-page scraped content."""
+    global _dork_deep_synthesis_chain
+    if _dork_deep_synthesis_chain is None:
+        _dork_deep_synthesis_chain = (
+            RunnablePassthrough()
+            | dork_deep_synthesis_prompt
+            | get_analyst_llm()
+            | StrOutputParser()
+        )
+    return _dork_deep_synthesis_chain
+
+
 __all__ = [
     "get_rag_chain",
     "get_investigation_chain",
@@ -558,4 +747,8 @@ __all__ = [
     "get_batch_synthesis_chain",
     "get_monitor_alert_chain",
     "get_scenario_chain",
+    "get_dork_gap_analysis_chain",
+    "get_dork_validation_chain",
+    "get_dork_synthesis_chain",
+    "get_dork_deep_synthesis_chain",
 ]

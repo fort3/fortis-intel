@@ -57,10 +57,10 @@ except ImportError:
 
 HAS_INSTALOADER = False
 try:
-    import instaloader  # noqa: F401
+    import instaloader
     HAS_INSTALOADER = True
 except ImportError:
-    pass
+    instaloader = None  # type: ignore[assignment]
 
 HAS_YOUTUBE = False
 try:
@@ -144,9 +144,9 @@ class SocialClient:
         "tiktok": True,
     }
 
-    _INSTA_MIN_DELAY = 3.0
-    _INSTA_POST_DELAY = 1.8
-    _INSTA_POST_CAP = 12
+    _INSTA_MIN_DELAY = 8.0
+    _INSTA_POST_DELAY = 4.0
+    _INSTA_POST_CAP = 8
 
     # ------------------------------------------------------------------
     # Initialisation
@@ -228,6 +228,15 @@ class SocialClient:
         if not HAS_INSTALOADER:
             return
         try:
+            class _ConservativeRC(instaloader.RateController):
+                def count_per_sliding_window(self, query_type):
+                    return 15
+
+                def query_waittime(self, query_type, current_time, untracked_queries):
+                    return max(8.0, super().query_waittime(
+                        query_type, current_time, untracked_queries,
+                    ))
+
             self._instaloader = instaloader.Instaloader(
                 download_pictures=False,
                 download_videos=False,
@@ -237,9 +246,20 @@ class SocialClient:
                 save_metadata=False,
                 compress_json=False,
                 request_timeout=15,
-                max_connection_attempts=2,
+                max_connection_attempts=1,
+                rate_controller=lambda ctx: _ConservativeRC(ctx),
             )
-            log.info("Instaloader initialised (public-profile mode)")
+            session_user = os.getenv("INSTAGRAM_SESSION_USER", "")
+            session_file = os.getenv("INSTAGRAM_SESSION_FILE", "")
+            if session_user and session_file and os.path.isfile(session_file):
+                try:
+                    self._instaloader.load_session_from_file(session_user, session_file)
+                    log.info("Instaloader initialised (logged-in session: %s)", session_user)
+                except Exception as sess_exc:
+                    log.warning("Instaloader session load failed, using anonymous: %s", sess_exc)
+            else:
+                log.info("Instaloader initialised (anonymous mode — rate limits apply)")
+            self._insta_profile_cache: dict[str, Any] = {}
         except Exception as exc:
             log.warning("Failed to initialise Instaloader: %s", exc)
 
@@ -877,14 +897,23 @@ class SocialClient:
             time.sleep(wait)
         self._insta_last_req = time.monotonic()
 
+    def _instagram_get_profile(self, username: str):
+        """Fetch and cache an Instagram profile to avoid redundant API calls."""
+        cached = self._insta_profile_cache.get(username)
+        if cached is not None:
+            return cached
+        self._instagram_throttle()
+        profile = instaloader.Profile.from_username(
+            self._instaloader.context, username,
+        )
+        self._insta_profile_cache[username] = profile
+        return profile
+
     def _instagram_search_username(self, username: str) -> list[dict[str, Any]]:
         if not self._instaloader:
             return []
         try:
-            self._instagram_throttle()
-            profile = instaloader.Profile.from_username(
-                self._instaloader.context, username,
-            )
+            profile = self._instagram_get_profile(username)
             return [self._normalise_profile(
                 platform="instagram",
                 user_id=str(profile.userid),
@@ -895,12 +924,15 @@ class SocialClient:
                 followers=profile.followers,
                 following=profile.followees,
                 post_count=profile.mediacount,
-                created_at=None,  # not exposed publicly
+                created_at=None,
                 verified=profile.is_verified,
                 profile_image_url=profile.profile_pic_url or "",
             )]
         except Exception as exc:
-            log.error("Instagram search_username(%r) failed: %s", username, exc)
+            if "429" in str(exc) or "Too Many Requests" in str(exc):
+                log.warning("Instagram 429 rate limit for %r — skipping", username)
+            else:
+                log.error("Instagram search_username(%r) failed: %s", username, exc)
             return []
 
     def _instagram_get_user_posts(
@@ -910,10 +942,7 @@ class SocialClient:
         if not self._instaloader:
             return []
         try:
-            self._instagram_throttle()
-            profile = instaloader.Profile.from_username(
-                self._instaloader.context, user_id,
-            )
+            profile = self._instagram_get_profile(user_id)
             posts: list[dict[str, Any]] = []
             cap = min(limit, self._INSTA_POST_CAP)
             for i, post in enumerate(profile.get_posts()):
@@ -955,7 +984,10 @@ class SocialClient:
                 ))
             return posts
         except Exception as exc:
-            log.error("Instagram get_user_posts(%r) failed: %s", user_id, exc)
+            if "429" in str(exc) or "Too Many Requests" in str(exc):
+                log.warning("Instagram 429 rate limit for %r — skipping post fetch", user_id)
+            else:
+                log.error("Instagram get_user_posts(%r) failed: %s", user_id, exc)
             return []
 
     # ==================================================================

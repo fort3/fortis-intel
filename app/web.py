@@ -54,6 +54,10 @@ from app.chains import (
     get_batch_item_chain,
     get_batch_synthesis_chain,
     get_scenario_chain,
+    get_dork_gap_analysis_chain,
+    get_dork_validation_chain,
+    get_dork_synthesis_chain,
+    get_dork_deep_synthesis_chain,
 )
 from app.rag_store import (
     build_vectorstore,
@@ -364,6 +368,191 @@ def _geo_points_to_text(geo_points: list[dict]) -> str:
             f"type={gp.get('point_type', '?')} ts={gp.get('timestamp', '?')}"
         )
     return "\n".join(parts)
+
+
+DORK_VALIDATION_ENABLED = os.environ.get("DORK_VALIDATION_ENABLED", "true").lower() in ("1", "true", "yes")
+DORK_MAX_SCRAPE_URLS = int(os.environ.get("DORK_MAX_SCRAPE_URLS", "5"))
+
+
+def _run_dork_search(
+    analysis_text: str,
+    osint_summary: str,
+    entities_summary: str,
+    session_id: str,
+    user_hash: str,
+) -> dict:
+    """Run the 4-phase dork search pipeline (gap-fill + validate + synthesise + deep scrape).
+
+    Returns a dict with ``text`` (markdown section) and ``data`` (structured results).
+    Non-fatal: callers should wrap this in try/except.
+    """
+    from app.dork_search import DorkSearchClient, parse_dork_queries, parse_scrape_candidates
+    from app.dork_sanitizer import sanitize_dork_query, sanitize_search_results, sanitize_scraped_content
+
+    result: dict = {"text": "", "data": {}, "queries_run": 0}
+
+    # Phase 1: Gap analysis — identify missing intel
+    gap_chain = get_dork_gap_analysis_chain()
+    gap_input = {
+        "analysis_text": analysis_text,
+        "osint_summary": osint_summary,
+        "entities_summary": entities_summary,
+    }
+    gap_result = gated_invoke(
+        gap_chain, gap_input,
+        chain_name="dork_gap_analysis_chain",
+        endpoint="/investigate",
+        mode="osint",
+        session_id=session_id,
+        user_hash=user_hash,
+        trusted_keys={"analysis_text", "osint_summary", "entities_summary"},
+    )
+    if not gap_result.success:
+        print(f"[DORK] Gap analysis blocked: {gap_result.reason}")
+        return result
+
+    gap_queries = parse_dork_queries(gap_result.content, "gap_fill")
+
+    # Phase 2: Validation — cross-reference findings
+    val_chain = get_dork_validation_chain()
+    val_input = {
+        "analysis_text": analysis_text,
+        "entities_summary": entities_summary,
+    }
+    val_result = gated_invoke(
+        val_chain, val_input,
+        chain_name="dork_validation_chain",
+        endpoint="/investigate",
+        mode="osint",
+        session_id=session_id,
+        user_hash=user_hash,
+        trusted_keys={"analysis_text", "entities_summary"},
+    )
+    if not val_result.success:
+        print(f"[DORK] Validation generation blocked: {val_result.reason}")
+        return result
+
+    val_queries = parse_dork_queries(val_result.content, "validation")
+
+    # Sanitise all queries
+    all_queries = []
+    for dq in gap_queries + val_queries:
+        cleaned, warnings = sanitize_dork_query(dq.query)
+        if warnings:
+            print(f"[DORK] Query sanitisation warnings for '{dq.query[:60]}': {warnings}")
+        if cleaned:
+            dq.query = cleaned
+            all_queries.append(dq)
+
+    if not all_queries:
+        print("[DORK] No valid queries after sanitisation")
+        return result
+
+    # Execute searches
+    client = DorkSearchClient()
+    search_results = client.search_batch(all_queries, max_per_query=5, delay=0.2)
+
+    gap_fill_raw = []
+    validation_raw = []
+    for dq in all_queries:
+        for dr in search_results.get(dq.query, []):
+            entry = {"title": dr.title, "url": dr.url, "snippet": dr.snippet,
+                     "query": dq.query, "purpose": dq.purpose, "ref": dq.finding_ref}
+            if dq.query_type == "gap_fill":
+                gap_fill_raw.append(entry)
+            else:
+                validation_raw.append(entry)
+
+    gap_fill_text = sanitize_search_results(gap_fill_raw) if gap_fill_raw else "No gap-fill results."
+    validation_text = sanitize_search_results(validation_raw) if validation_raw else "No validation results."
+
+    result["queries_run"] = len(all_queries)
+    result["data"]["queries"] = [
+        {"query": dq.query, "type": dq.query_type, "purpose": dq.purpose, "ref": dq.finding_ref}
+        for dq in all_queries
+    ]
+    result["data"]["gap_fill_results"] = gap_fill_raw
+    result["data"]["validation_results"] = validation_raw
+
+    # Phase 3: Synthesis
+    synth_chain = get_dork_synthesis_chain()
+    synth_input = {
+        "analysis_text": analysis_text,
+        "gap_fill_results": gap_fill_text,
+        "validation_results": validation_text,
+    }
+    synth_result = gated_invoke(
+        synth_chain, synth_input,
+        chain_name="dork_synthesis_chain",
+        endpoint="/investigate",
+        mode="osint",
+        session_id=session_id,
+        user_hash=user_hash,
+        trusted_keys={"analysis_text"},
+    )
+    if not synth_result.success:
+        print(f"[DORK] Synthesis blocked: {synth_result.reason}")
+        return result
+
+    synthesis_text = synth_result.content
+    result["text"] = synthesis_text
+
+    # Phase 4: Deep scrape (confidence-gated)
+    scrape_candidates = parse_scrape_candidates(synthesis_text)
+    scrape_candidates = scrape_candidates[:DORK_MAX_SCRAPE_URLS]
+
+    if scrape_candidates:
+        scraped_parts = []
+        from app.http_client import create_session
+        scrape_http = create_session(timeout=15.0)
+
+        for sc in scrape_candidates:
+            try:
+                resp = scrape_http.get(sc.url, timeout=15)
+                if hasattr(resp, "status_code") and resp.status_code == 200:
+                    raw_html = resp.text if hasattr(resp, "text") else str(resp.content)
+                    clean = sanitize_scraped_content(raw_html, max_chars=2000)
+                    if clean and len(clean) > 50:
+                        scraped_parts.append(
+                            f"--- Source: {sc.url} (Confidence: {sc.confidence}) ---\n{clean}"
+                        )
+                        print(f"[DORK] Deep scraped: {sc.url} ({len(clean)} chars)")
+                    else:
+                        print(f"[DORK] Scraped content too short, skipping: {sc.url}")
+                else:
+                    status = getattr(resp, "status_code", "?")
+                    print(f"[DORK] Scrape failed HTTP {status}: {sc.url}")
+            except Exception as exc:
+                print(f"[DORK] Scrape error for {sc.url}: {exc}")
+
+        if scraped_parts:
+            scraped_content = "\n\n".join(scraped_parts)
+
+            deep_chain = get_dork_deep_synthesis_chain()
+            deep_input = {
+                "analysis_text": analysis_text,
+                "initial_synthesis": synthesis_text,
+                "scraped_content": scraped_content,
+            }
+            deep_result = gated_invoke(
+                deep_chain, deep_input,
+                chain_name="dork_deep_synthesis_chain",
+                endpoint="/investigate",
+                mode="osint",
+                session_id=session_id,
+                user_hash=user_hash,
+                trusted_keys={"analysis_text", "initial_synthesis"},
+            )
+            if deep_result.success:
+                result["text"] = deep_result.content
+                result["data"]["deep_scraped"] = [
+                    {"url": sc.url, "confidence": sc.confidence} for sc in scrape_candidates
+                ]
+                print(f"[DORK] Deep synthesis complete ({len(scraped_parts)} pages)")
+            else:
+                print(f"[DORK] Deep synthesis blocked: {deep_result.reason}")
+
+    return result
 
 
 def _process_single_identifier(identifier, identifier_type, platforms, depth,
@@ -1026,6 +1215,28 @@ def create_app():
         analysis = result.content
         sensitivity = findings_dict.get("sensitivity_level", "INTERNAL")
 
+        # Web Intelligence: dork search for gap-filling + validation
+        web_intelligence = None
+        web_search_enabled = data.get("web_search", DORK_VALIDATION_ENABLED)
+        if web_search_enabled and DORK_VALIDATION_ENABLED:
+            try:
+                entities_text = "\n".join(
+                    f"- {e.get('name', '')} ({e.get('type', '')})" for e in entities_data[:30]
+                ) or "No entities extracted."
+
+                web_intelligence = _run_dork_search(
+                    analysis_text=analysis,
+                    osint_summary=osint_context[:4000],
+                    entities_summary=entities_text,
+                    session_id=session_id,
+                    user_hash=user_hash,
+                )
+                if web_intelligence and web_intelligence.get("text"):
+                    analysis += "\n\n---\n\n## Web Intelligence\n\n" + web_intelligence["text"]
+                    print(f"[DORK] Web intelligence appended ({web_intelligence['queries_run']} queries)")
+            except Exception as exc:
+                print(f"[WARN] Dork search failed (non-fatal): {exc}")
+
         # Save to knowledge base
         report_id = _save_to_kb(
             source_route="/investigate",
@@ -1069,6 +1280,8 @@ def create_app():
         }
         if graph_cache_key:
             response["graph_cache_key"] = graph_cache_key
+        if web_intelligence and web_intelligence.get("data"):
+            response["web_intelligence"] = web_intelligence["data"]
 
         return jsonify(response)
 

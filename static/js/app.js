@@ -663,6 +663,7 @@ async function runInvestigation() {
     }
 
     try {
+        const webSearchCb = document.getElementById('investWebSearch');
         const response = await fetchApi('/investigate', {
             method: 'POST',
             body: JSON.stringify({
@@ -670,7 +671,8 @@ async function runInvestigation() {
                 identifier_type: idType,
                 platforms: platforms,
                 depth: depthSelect ? depthSelect.value : 'standard',
-                investigation_purpose: purposeTextarea ? purposeTextarea.value.trim() : ''
+                investigation_purpose: purposeTextarea ? purposeTextarea.value.trim() : '',
+                web_search: webSearchCb ? webSearchCb.checked : true
             })
         });
 
@@ -1508,6 +1510,9 @@ function renderAnalysis(data) {
         }
         if (ipIntel && (meta.ip_intel || meta.ip_geolocation)) {
             html += renderIpIntelSection(meta);
+        }
+        if (data.web_intelligence) {
+            html += renderWebIntelligenceSection(data.web_intelligence);
         }
 
         content.innerHTML = html;
@@ -3025,6 +3030,83 @@ function renderDomainIntelSection(di) {
     }
 
     h += '</div>';
+    return h;
+}
+
+function renderWebIntelligenceSection(wi) {
+    var queries = wi.queries || [];
+    var gapResults = wi.gap_fill_results || [];
+    var valResults = wi.validation_results || [];
+    var deepScraped = wi.deep_scraped || [];
+
+    var totalResults = gapResults.length + valResults.length;
+    var h = '<div class="result-section web-intelligence-section">' +
+        '<div class="wi-header" onclick="this.parentElement.classList.toggle(\'wi-collapsed\')">' +
+        '<h4>Web Intelligence</h4>' +
+        '<span class="wi-summary">' + queries.length + ' queries &middot; ' +
+        totalResults + ' results' +
+        (deepScraped.length ? ' &middot; ' + deepScraped.length + ' pages scraped' : '') +
+        '</span>' +
+        '<span class="wi-toggle">&#9660;</span></div>' +
+        '<div class="wi-body">';
+
+    if (gapResults.length) {
+        h += '<div class="intel-card"><h5>New Intelligence</h5>';
+        gapResults.forEach(function (r) {
+            h += '<div class="wi-result">' +
+                '<span class="wi-badge wi-badge-new">NEW_INTEL</span> ' +
+                '<strong>' + escapeHtml(r.title || '') + '</strong>' +
+                '<div class="wi-snippet">' + escapeHtml(r.snippet || '') + '</div>' +
+                '<div class="wi-meta">' +
+                '<a href="' + escapeHtml(r.url || '') + '" target="_blank" rel="noopener">' +
+                escapeHtml(r.url || '') + '</a>' +
+                ' &middot; Query: <em>' + escapeHtml(r.query || '') + '</em>' +
+                '</div></div>';
+        });
+        h += '</div>';
+    }
+
+    if (valResults.length) {
+        h += '<div class="intel-card"><h5>Validation Results</h5>';
+        valResults.forEach(function (r) {
+            h += '<div class="wi-result">' +
+                '<strong>' + escapeHtml(r.title || '') + '</strong>' +
+                '<div class="wi-snippet">' + escapeHtml(r.snippet || '') + '</div>' +
+                '<div class="wi-meta">' +
+                '<a href="' + escapeHtml(r.url || '') + '" target="_blank" rel="noopener">' +
+                escapeHtml(r.url || '') + '</a>' +
+                ' &middot; Validates: <em>' + escapeHtml(r.ref || '') + '</em>' +
+                '</div></div>';
+        });
+        h += '</div>';
+    }
+
+    if (deepScraped.length) {
+        h += '<div class="intel-card"><h5>Deep Scraped Sources</h5><ul>';
+        deepScraped.forEach(function (s) {
+            var confClass = s.confidence === 'HIGH' ? 'wi-badge-high' : 'wi-badge-moderate';
+            h += '<li><span class="wi-badge ' + confClass + '">' +
+                escapeHtml(s.confidence) + '</span> ' +
+                '<a href="' + escapeHtml(s.url) + '" target="_blank" rel="noopener">' +
+                escapeHtml(s.url) + '</a></li>';
+        });
+        h += '</ul></div>';
+    }
+
+    if (queries.length) {
+        h += '<div class="intel-card wi-queries-card"><h5>Dork Queries Used</h5>' +
+            '<table class="intel-table"><tr><th>Type</th><th>Query</th><th>Purpose</th></tr>';
+        queries.forEach(function (q) {
+            var typeClass = q.type === 'gap_fill' ? 'wi-badge-new' : 'wi-badge-validate';
+            h += '<tr><td><span class="wi-badge ' + typeClass + '">' +
+                escapeHtml(q.type === 'gap_fill' ? 'GAP FILL' : 'VALIDATE') + '</span></td>' +
+                '<td><code>' + escapeHtml(q.query) + '</code></td>' +
+                '<td>' + escapeHtml(q.purpose) + '</td></tr>';
+        });
+        h += '</table></div>';
+    }
+
+    h += '</div></div>';
     return h;
 }
 

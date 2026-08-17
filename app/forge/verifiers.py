@@ -136,6 +136,15 @@ FORTIS_TRUSTED_KEYS = {
     "metadata_summary",
 }
 
+DORK_CHAIN_NAMES = {
+    "dork_gap_analysis_chain",
+    "dork_validation_chain",
+    "dork_synthesis_chain",
+    "dork_deep_synthesis_chain",
+}
+
+DORK_UNTRUSTED_KEYS = {"search_results", "gap_fill_results", "validation_results", "scraped_content"}
+
 # ---------------------------------------------------------------------------
 # Fortis endpoint whitelist
 # ---------------------------------------------------------------------------
@@ -225,6 +234,22 @@ class RuleVerifier:
                         if pattern.search(normalized_val):
                             print(f"[WARN] Injection-like pattern in trusted key '{k}': {pattern.pattern}")
                             # Log but don't block (defensive logging for audit trail)
+
+        # --- Dork chain: full injection scan on untrusted web content ---
+        if chain_name in DORK_CHAIN_NAMES:
+            for k in DORK_UNTRUSTED_KEYS:
+                val = chain_input.get(k)
+                if isinstance(val, str) and val:
+                    normalized_val = self._normalize_text(val)
+                    for pattern in INJECTION_PATTERNS:
+                        if pattern.search(normalized_val):
+                            return VerifierVote(
+                                verifier_id=self.VERIFIER_ID,
+                                approved=False,
+                                reason=f"Injection in web content key '{k}': pattern '{pattern.pattern}'",
+                                confidence=1.0,
+                                policy_veto=True,
+                            )
 
         # --- Prompt injection detection ---
         for pattern in INJECTION_PATTERNS:

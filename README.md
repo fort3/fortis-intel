@@ -7,14 +7,19 @@ An OSINT-driven intelligence and analysis platform for open-source intelligence 
 ## Key Features
 
 - **Multi-Platform OSINT** -- Investigate usernames, emails, domains, and IPs across Twitter/X, Reddit, YouTube, Instagram, Mastodon, Facebook, TikTok, and Telegram
-- **Geospatial Triangulation** -- Triangulate locations from EXIF data, social geotags, IP addresses, check-ins, and text mentions with interactive Leaflet.js maps
+- **Domain & IP Intelligence** -- First-class domain/IP investigations with WHOIS, DNS records, DNSdumpster subdomain enumeration, reverse DNS, reverse IP (co-hosted domains), and HTTP header probing via HackerTarget API
+- **Anti-Detection HTTP** -- All outbound HTTP uses curl_cffi with Chrome TLS fingerprinting to bypass bot detection; thread-safe per-thread session isolation for Windows COM compatibility
+- **API-Free Scrape Fallbacks** -- Every platform works without API keys via curl_cffi-powered scrape fallbacks (Reddit .json endpoints, Twitter syndication API, TikTok embedded JSON, Facebook mbasic)
+- **Geospatial Triangulation** -- Triangulate locations from EXIF data, social geotags, IP addresses, check-ins, video landmarks, and text mentions with interactive Leaflet.js maps
+- **Media Geo-Extraction** -- Automatic EXIF GPS extraction from social media images and video keyframe analysis (OCR + landmark geocoding via OpenCV)
 - **AI-Powered Analysis** -- DeepSeek LLM generates investigation reports, pattern-of-life analyses, network mapping, and influence assessments
-- **RAG Knowledge Base** -- Upload PDF and Markdown reports, index them with FAISS vectorstore, and ask natural-language questions
-- **Analytical Scenarios** -- Generate pattern-of-life, network mapping, location prediction, and influence analysis from collected OSINT data
+- **Separated LLM Pipeline** -- RAG (FAISS vectorstore) for document Q&A only; Knowledge Graph (NetworkX entity relationships) for OSINT multi-source enrichment -- no token waste from parallel injection
+- **RAG Knowledge Base** -- Upload PDF and Markdown reports, index them with FAISS vectorstore, and ask natural-language questions with automatic KB feedback from previous analyses
+- **Analytical Scenarios** -- Generate pattern-of-life, network mapping, location prediction, and influence analysis from collected OSINT data with entity graph context
 - **Feed Monitoring** -- Set up keyword, username, and hashtag monitors with Celery background tasks and automatic enrichment
 - **ForgeChain Governance** -- Every LLM request passes through a 3-verifier consensus gate (rule, safety, consistency) before execution
 - **Elevated Authorization** -- Investigation endpoints support elevated authorization for privileged analysts handling sensitive cases
-- **Entity Relationship Graphs** -- Cytoscape.js-powered interactive graphs with click-to-drill-down entity detail popups
+- **Entity Relationship Graphs** -- Cytoscape.js-powered interactive graphs with click-to-drill-down entity detail popups; graph context fed directly to LLM for entity-aware analysis
 - **Multi-Format Export** -- PDF, Markdown, STIX 2.1, CSV, JSON, and Google Drive export with map snapshots
 - **Docker Ready** -- Dockerfile and docker-compose.yml for containerized deployment with Redis, Celery worker, and Celery beat
 
@@ -27,12 +32,16 @@ An OSINT-driven intelligence and analysis platform for open-source intelligence 
 | Component | Technology |
 |-----------|-----------|
 | Web Framework | Flask 3.x with Jinja2 SPA |
+| HTTP Client | curl_cffi (Chrome TLS fingerprinting) with thread-safe per-thread sessions, requests fallback |
 | LLM | DeepSeek v4-flash (analysis) + v4-pro (governance) via `langchain-openai` |
+| LLM Pipeline | RAG (FAISS) for document Q&A; Knowledge Graph (NetworkX) for OSINT enrichment |
 | Vectorstore | FAISS with `BAAI/bge-base-en-v1.5` embeddings |
-| Database | SQLite (reports, ForgeChain audit trail) |
+| Database | SQLite (reports, ForgeChain audit trail, entity relationships) |
 | Task Queue | Celery + Redis (feed monitoring, background enrichment) |
 | NLP | spaCy (NER), langdetect (language detection) |
+| Domain/IP Intel | python-whois, dnspython, HackerTarget API (DNSdumpster, reverse DNS/IP) |
 | Geolocation | geopy, MaxMind GeoLite2, DBSCAN clustering |
+| Video Analysis | OpenCV keyframe extraction, imagehash deduplication, pytesseract OCR |
 | PDF Processing | PyMuPDF, pypdf (3-tier extraction pipeline) |
 
 ### Frontend
@@ -242,17 +251,23 @@ The LLM that powers all analysis, enrichment, and governance chains.
 
 | Env Variable | Description |
 |---|---|
-| `INSTAGRAM_ACCESS_TOKEN` | Optional -- Instagram Graph API token |
+| `INSTAGRAM_SESSION_USER` | Optional -- Instagram username for session-based access |
+| `INSTAGRAM_SESSION_FILE` | Optional -- Path to Instaloader session file |
 
-Instagram integration uses [instaloader](https://instaloader.github.io/) for scraping public profiles and posts. No API key is required for basic public data access.
+Instagram integration uses [instaloader](https://instaloader.github.io/) for scraping public profiles and posts. No API key is required, but anonymous access is heavily rate-limited by Instagram (429 errors are common).
 
-If you want to use the official Instagram Graph API for higher rate limits:
+**Recommended:** Use a logged-in session for higher rate limits:
 
-1. Create a [Facebook Developer](https://developers.facebook.com/) account
-2. Create an app and add the **Instagram Graph API** product
-3. Generate a long-lived access token via the Graph API Explorer
+1. Install instaloader: `pip install instaloader`
+2. Log in once: `instaloader --login YOUR_USERNAME`
+3. The session file is saved at `~/.config/instaloader/session-YOUR_USERNAME`
+4. Set `INSTAGRAM_SESSION_USER=YOUR_USERNAME` and `INSTAGRAM_SESSION_FILE=/path/to/session-YOUR_USERNAME`
 
-**Free tier:** Instaloader works without any key for public data. Rate limit: 200 requests per hour (self-throttled).
+Alternatively, import cookies from Firefox: `instaloader --login YOUR_USERNAME --sessionfile session-file 615_import_firefox_session.py`
+
+**Without a session:** Anonymous mode works but with aggressive rate limiting (8s between requests, 8-post cap). The app gracefully skips Instagram on 429 errors without crashing the investigation.
+
+**Rate limiting:** Custom conservative RateController (15 requests per 11-minute window, 8s minimum wait between requests).
 
 ---
 
@@ -532,13 +547,19 @@ Upload PDF or Markdown files for AI-powered analysis. The platform extracts text
 
 ### Investigation
 
-Enter a username, email address, domain, IP address, or keyword. Select the investigation depth:
+Enter a username, email address, domain, IP address, or keyword. The identifier type is auto-detected and routes to the appropriate intel pipeline:
 
-- **Quick** -- API lookups only (fast social media queries)
-- **Standard** -- API + web scraping (social media plus WHOIS, DNS, news)
-- **Deep** -- All sources including metadata analysis and entity extraction
+- **Username/email** -- Social media profiles, posts, web mentions, news, entity extraction
+- **Domain** -- WHOIS registration data, DNS records (A/AAAA/MX/NS/TXT/SOA/CNAME), DNSdumpster subdomain enumeration, HTTP header probe, IP geolocation for all resolved addresses
+- **IP address** -- Geolocation, reverse DNS (PTR), reverse IP (co-hosted domains), DNSdumpster on resolved hostname
 
-Results include a structured report, entity graph, and links to source data.
+Investigation depth:
+
+- **Quick** -- API lookups only (fast social media or DNS queries)
+- **Standard** -- API + web scraping (social media, WHOIS, DNS, DNSdumpster, news)
+- **Deep** -- All sources including metadata analysis, entity extraction, and full DNSdumpster enumeration
+
+Results include a structured report, entity relationship graph with LLM-aware context, interactive map, and domain/IP intel cards.
 
 ### Geolocation
 
@@ -553,7 +574,7 @@ The interactive map (CartoDB Voyager tiles) shows markers with confidence radii,
 
 ### Q&A
 
-Ask natural-language questions about uploaded reports. The RAG pipeline retrieves relevant chunks from the FAISS vectorstore and generates answers with source citations.
+Ask natural-language questions about uploaded reports and previous analysis results. The RAG pipeline retrieves relevant chunks from the FAISS vectorstore and the Knowledge Base (which automatically indexes all completed analyses). When answering from KB context, a visual indicator shows that prior intelligence is being used.
 
 ### Feed Monitor
 
@@ -570,7 +591,7 @@ Generate analytical scenarios from collected OSINT data:
 
 ### Knowledge Base
 
-Manage and search across all indexed reports. Archive old reports based on retention policy. Search uses semantic similarity via the FAISS vectorstore.
+All analysis results (investigations, enrichments, scenarios, triangulations, Q&A answers) are automatically saved to the Knowledge Base immediately upon completion. The KB panel lets you manage, search, and archive indexed reports. Search uses semantic similarity via the FAISS vectorstore. Prior analyses feed back into Q&A queries automatically.
 
 ### Export
 
@@ -608,15 +629,26 @@ A 2-of-3 consensus is required to pass. Failed requests are either healed (autom
 
 Feed monitors use Celery periodic tasks with configurable intervals. The beat scheduler dispatches poll tasks to the worker queue (`fortis_monitor`). Each poll checks for new content since the last run, applies auto-enrichment, and stores findings for analyst review.
 
+### LLM Pipeline Architecture
+
+The platform uses two separate context pipelines to avoid token waste and LLM saturation:
+
+- **RAG Pipeline** (document Q&A only) -- When a user uploads a report and asks questions via `/ask`, the FAISS vectorstore retrieves relevant document chunks plus prior analysis results from the Knowledge Base. This pipeline is NOT used for OSINT enrichment.
+- **Knowledge Graph Pipeline** (OSINT enrichment) -- When running investigations, enrichments, batch analyses, or scenarios, the entity relationship graph (NetworkX) provides structured relationship context to the LLM. No RAG chunks are injected into OSINT chains.
+
+Both pipelines save their analysis results to the Knowledge Base after completion, creating a feedback loop where prior analyses inform future Q&A queries.
+
 ### FAISS Vectorstore
 
-Documents are embedded using `BAAI/bge-base-en-v1.5` (768 dimensions) and stored in a FAISS index. The RAG pipeline uses similarity search to retrieve relevant chunks for Q&A, enrichment context, and cross-investigation analysis.
+Documents are embedded using `BAAI/bge-base-en-v1.5` (768 dimensions) and stored in a FAISS index. The RAG pipeline uses similarity search to retrieve relevant chunks for document Q&A. Analysis results from all routes are automatically indexed into the KB after completion.
 
 ### Graceful Degradation
 
 The platform is designed to run with minimal configuration. Core features that work without any OSINT API keys:
 
 - PDF/Markdown upload and RAG Q&A
+- Domain/IP investigation (WHOIS, DNS, DNSdumpster -- no API key needed)
+- All 8 social platforms via curl_cffi scrape fallbacks (no API keys needed)
 - Manual EXIF extraction from uploaded images
 - Manual coordinate entry for triangulation
 - Knowledge Base management
@@ -625,16 +657,18 @@ The platform is designed to run with minimal configuration. Core features that w
 
 ### API-Free Fallbacks
 
-Several platforms can operate without official API keys using optional scraper libraries:
+Every social platform works without API keys via curl_cffi-powered scrape fallbacks with Chrome TLS fingerprinting. When an API key is configured, it is always preferred (faster, richer data). Fallbacks activate automatically when keys are absent.
 
-| Platform | API Path | No-API Fallback | Install |
+| Platform | API Path | No-API Fallback | Method |
 |---|---|---|---|
-| TikTok | `TIKTOK_API_KEY` (Research API) | **Pyktok** -- Playwright-based scraping of public search/profile pages | `pip install pyktok && playwright install chromium` |
-| Mastodon | `MASTODON_ACCESS_TOKEN` | **Cross-instance search** -- Queries 6 major instances directly (mastodon.social, mastodon.online, mstdn.social, infosec.exchange, hachyderm.io, fosstodon.org) | Built-in (no extra deps) |
-| Mastodon | `MASTODON_ACCESS_TOKEN` | **Masto library** -- Cross-instance user OSINT (optional) | `pip install masto` |
-| Instagram | (none needed) | **Instaloader** -- Scrapes public profiles and posts | Included in requirements.txt |
+| Twitter/X | `TWITTER_BEARER_TOKEN` | **Syndication API scrape** | Fetches public timelines via Twitter's syndication endpoint |
+| Reddit | `REDDIT_CLIENT_ID` | **Reddit .json API** | Appends `.json` to Reddit URLs for structured data |
+| TikTok | `TIKTOK_API_KEY` | **Embedded JSON scrape** | Parses `__UNIVERSAL_DATA_FOR_REHYDRATION__` / `SIGI_STATE` from page HTML |
+| Facebook | `FACEBOOK_ACCESS_TOKEN` | **mbasic.facebook.com scrape** | Fetches the mobile-basic version for public page content |
+| Instagram | (none needed) | **Instaloader** | Scrapes public profiles and posts with built-in throttling (3s delay, 12-post cap) |
+| Mastodon | `MASTODON_ACCESS_TOKEN` | **Cross-instance search** | Queries 6 major instances directly (mastodon.social, mastodon.online, mstdn.social, infosec.exchange, hachyderm.io, fosstodon.org) |
 
-When an API key is configured, it is always preferred (faster, richer data). Fallbacks activate automatically when keys are absent.
+All scrape fallbacks use the anti-detection HTTP client (`curl_cffi`) for browser-like TLS fingerprints. No additional dependencies or Playwright installations required.
 
 ### News Enrichment (RSS)
 
@@ -669,11 +703,9 @@ The geolocation card supports direct image uploads for GPS triangulation. Upload
 
 ---
 
-## Roadmap: Media Geolocation Enrichment
+### Media Geolocation Enrichment
 
-The following capabilities are planned for future development:
-
-### Automatic Media Geo-Extraction
+#### Automatic Media Geo-Extraction
 
 Every OSINT enrichment captures `media_urls` from social media posts. The pipeline automatically:
 
@@ -681,7 +713,7 @@ Every OSINT enrichment captures `media_urls` from social media posts. The pipeli
 2. **Runs EXIF extraction on all collected media** -- Feeds downloaded images through `MetadataExtractor.extract_geo_from_images()` to extract GPS coordinates (confidence: 0.95)
 3. **Injects extracted coordinates into the geospatial pipeline** -- EXIF-derived locations join geotags, IP geolocation, text-mentioned places for triangulation and mapping
 
-### Video Frame Geolocation
+#### Video Frame Geolocation
 
 Estimates location from video content using OpenCV keyframe analysis (`app/video_geo.py`):
 
@@ -693,7 +725,7 @@ Estimates location from video content using OpenCV keyframe analysis (`app/video
 
 **Optional dependencies**: `opencv-python>=4.9.0`, `imagehash>=4.3.0`, `pytesseract` (for OCR). The system degrades gracefully — without OpenCV, video analysis is skipped entirely.
 
-### Unified Geo Signal Aggregation
+#### Unified Geo Signal Aggregation
 
 All geolocation signals from an investigation are aggregated onto a single map with automatic triangulation:
 
@@ -732,13 +764,14 @@ Fortis-Intelligence-Hub/
 |   |-- web.py                   # Flask app factory + all routes
 |   |-- chains.py                # LLM prompt templates
 |   |-- llm.py                   # DeepSeek LLM factory
-|   |-- osint_client.py          # OSINT aggregator (unified geo pipeline)
+|   |-- http_client.py           # Thread-safe HTTP session factory (curl_cffi / requests)
+|   |-- osint_client.py          # OSINT aggregator (unified geo pipeline, domain/IP intel)
 |   |-- video_geo.py             # Video keyframe extraction + landmark geolocation
-|   |-- social_client.py         # Social media API integrations (+ Pyktok/Masto fallbacks)
+|   |-- social_client.py         # Social media integrations (API + curl_cffi scrape fallbacks)
 |   |-- telegram_auth.py         # One-time Telegram session setup (python -m app.telegram_auth)
 |   |-- geo_client.py            # Geolocation + triangulation
 |   |-- metadata_extractor.py    # EXIF, NER, language detection
-|   |-- web_scraper.py           # News, WHOIS, DNS, RSS
+|   |-- web_scraper.py           # News, WHOIS, DNS, DNSdumpster, reverse DNS/IP, RSS
 |   |-- export.py                # PDF/Markdown export
 |   |-- export_ioc.py            # STIX, CSV, JSON export
 |   |-- rag_store.py             # FAISS vectorstore
