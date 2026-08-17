@@ -14,7 +14,7 @@ log = logging.getLogger(__name__)
 # Allowed / blocked dork operators
 # ---------------------------------------------------------------------------
 
-ALLOWED_OPERATORS = {"site:", "intitle:", "inurl:", "intext:", "filetype:"}
+ALLOWED_OPERATORS = {"site:", "intitle:", "inurl:", "filetype:"}
 BLOCKED_OPERATORS = {"cache:", "link:", "related:", "info:", "inanchor:"}
 
 MAX_QUERY_LENGTH = 256

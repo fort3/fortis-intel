@@ -389,7 +389,7 @@ def _run_initial_dorking(
     and ``suggested_platforms`` (list of platforms the LLM recommends checking).
     Non-fatal: callers should wrap this in try/except.
     """
-    from app.dork_search import DorkSearchClient, parse_dork_queries
+    from app.dork_search import DorkQuery, DorkSearchClient, parse_dork_queries
     from app.dork_sanitizer import sanitize_dork_query, sanitize_search_results
 
     result: dict = {"text": "", "data": {}, "queries_run": 0, "suggested_platforms": []}
@@ -418,14 +418,27 @@ def _run_initial_dorking(
 
     collection_queries = parse_dork_queries(collection_result.content, "collection")
 
-    all_queries = []
+    # Guaranteed baseline: always search the plain identifier in quotes first.
+    # DuckDuckGo returns best results for simple quoted queries — LLM-generated
+    # operator-heavy queries often return nothing on DDG.
+    baseline_query = f'"{subject_identifier}"'
+    baseline_dq = DorkQuery(
+        query=baseline_query,
+        purpose=f"Direct search for {identifier_type} identifier",
+        finding_ref="baseline",
+        query_type="collection",
+    )
+
+    all_queries = [baseline_dq]
+    seen_queries = {baseline_query.lower()}
     for dq in collection_queries:
         cleaned, warnings = sanitize_dork_query(dq.query)
         if warnings:
             print(f"[DORK] Collection query sanitisation warnings for '{dq.query[:60]}': {warnings}")
-        if cleaned:
+        if cleaned and cleaned.lower() not in seen_queries:
             dq.query = cleaned
             all_queries.append(dq)
+            seen_queries.add(cleaned.lower())
 
     if not all_queries:
         print("[DORK] No valid collection queries after sanitisation")
