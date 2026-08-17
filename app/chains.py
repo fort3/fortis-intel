@@ -56,9 +56,6 @@ ENTITY RELATIONSHIP GRAPH:
 SUBJECT IDENTIFIER: {subject_identifier}
 IDENTIFIER TYPE: {identifier_type}
 
-KNOWLEDGE BASE CONTEXT:
-{kb_context}
-
 Structure your report using these sections in order:
 
 ## Executive Summary
@@ -115,8 +112,8 @@ OSINT DATA:
 GEOLOCATION DATA:
 {geo_data}
 
-KNOWLEDGE BASE CONTEXT:
-{kb_context}
+ENTITY RELATIONSHIP GRAPH:
+{entity_graph_context}
 
 Structure your report using these sections in order:
 
@@ -327,8 +324,8 @@ OSINT DATA:
 SUBJECT CONTEXT:
 {subject_context}
 
-KNOWLEDGE BASE CONTEXT:
-{kb_context}
+ENTITY RELATIONSHIP GRAPH:
+{entity_graph_context}
 
 Generate the scenario analysis based on the scenario type:
 

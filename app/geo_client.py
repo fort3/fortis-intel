@@ -19,7 +19,8 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-import requests
+
+from app.http_client import create_session
 
 try:
     from geopy.geocoders import Nominatim, GoogleV3
@@ -197,13 +198,7 @@ class GeoClient:
             else:
                 log.info("MaxMind DB not found at %s — will use ip-api fallback", db_path)
 
-        self._http = requests.Session()
-        self._http.headers.update({"User-Agent": "FortisIntelHub/1.0"})
-        _adapter = requests.adapters.HTTPAdapter(
-            pool_connections=4, pool_maxsize=6, max_retries=1,
-        )
-        self._http.mount("https://", _adapter)
-        self._http.mount("http://", _adapter)
+        self._http = create_session(pool_connections=4, pool_maxsize=6)
         log.info("GeoClient initialised (Phase 1)")
 
     # ------------------------------------------------------------------

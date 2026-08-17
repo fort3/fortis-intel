@@ -6,13 +6,9 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 from urllib.parse import urlparse
 
-import requests
-from requests.adapters import HTTPAdapter
+from app.http_client import create_session
 
-_notify_http = requests.Session()
-_notify_adapter = HTTPAdapter(pool_connections=1, pool_maxsize=2, max_retries=1)
-_notify_http.mount("https://", _notify_adapter)
-_notify_http.mount("http://", _notify_adapter)
+_notify_http = create_session(pool_connections=1, pool_maxsize=2)
 
 
 def send_slack_notification(message: str, finding_id: str | None = None) -> bool:

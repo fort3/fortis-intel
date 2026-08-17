@@ -288,6 +288,56 @@ def _findings_to_context(findings_dict: dict) -> str:
         for evt in timeline[:10]:
             parts.append(f"  {evt}")
 
+    metadata = findings_dict.get("metadata", {})
+    domain_intel = metadata.get("domain_intel", {})
+    if domain_intel:
+        parts.append(f"\n=== Domain Intelligence: {domain_intel.get('domain', '?')} ===")
+        whois = domain_intel.get("whois", {})
+        if whois.get("registrar"):
+            parts.append(f"  Registrar: {whois['registrar']}")
+        if whois.get("registrant"):
+            parts.append(f"  Registrant: {whois['registrant']}")
+        if whois.get("creation_date"):
+            parts.append(f"  Created: {whois['creation_date']}")
+        if whois.get("expiration_date"):
+            parts.append(f"  Expires: {whois['expiration_date']}")
+        dns = domain_intel.get("dns", {})
+        for rtype in ("A", "AAAA", "MX", "NS", "CNAME", "SOA"):
+            records = dns.get(rtype, [])
+            if records:
+                parts.append(f"  {rtype}: {', '.join(str(r) for r in records)}")
+        dd = domain_intel.get("dnsdumpster", {})
+        subs = dd.get("subdomains", [])
+        if subs:
+            parts.append(f"  Subdomains (DNSdumpster): {len(subs)} found")
+            for s in subs[:15]:
+                parts.append(f"    {s.get('hostname', '?')} -> {s.get('ip', '?')}")
+            if len(subs) > 15:
+                parts.append(f"    ... and {len(subs) - 15} more")
+        headers = domain_intel.get("http_headers", {})
+        if headers.get("Server"):
+            parts.append(f"  Server: {headers['Server']}")
+        if headers.get("X-Powered-By"):
+            parts.append(f"  Powered-By: {headers['X-Powered-By']}")
+
+    ip_intel = metadata.get("ip_intel", {})
+    if ip_intel:
+        parts.append(f"\n=== IP Intelligence: {ip_intel.get('ip', '?')} ===")
+        if ip_intel.get("reverse_dns"):
+            parts.append(f"  Reverse DNS: {ip_intel['reverse_dns']}")
+        co = ip_intel.get("co_hosted_domains", [])
+        if co:
+            parts.append(f"  Co-hosted domains: {ip_intel.get('co_hosted_count', len(co))}")
+            for d in co[:10]:
+                parts.append(f"    {d}")
+
+    ip_geo = metadata.get("ip_geolocation", {})
+    if ip_geo:
+        parts.append(f"\n=== IP Geolocation ===")
+        for k in ("ip", "city", "country", "isp", "region"):
+            if ip_geo.get(k):
+                parts.append(f"  {k.title()}: {ip_geo[k]}")
+
     errors = findings_dict.get("errors", [])
     if errors:
         parts.append(f"\n=== Collection Errors ({len(errors)}) ===")
@@ -786,6 +836,7 @@ def create_app():
         return jsonify({
             "answer": answer,
             "session_id": session_id,
+            "kb_context": bool(kb_context),
         })
 
     # ================================================================
@@ -846,8 +897,6 @@ def create_app():
         osint_context = _findings_to_context(findings_dict)
         geo_data = findings_dict.get("geo_points", [])
         geo_context = _geo_points_to_text(geo_data)
-        kb_context = _get_kb_context(f"{identifier_type} {clean_id} investigation")
-
         # Build entity graph
         entities_data = findings_dict.get("entities", [])
         try:
@@ -952,7 +1001,6 @@ def create_app():
             "entity_graph_context": entity_graph_ctx,
             "subject_identifier": clean_id,
             "identifier_type": identifier_type,
-            "kb_context": kb_context,
             "elevated_authorization": _is_admin(),
         }
 
@@ -964,7 +1012,7 @@ def create_app():
             mode="osint",
             session_id=session_id,
             user_hash=user_hash,
-            trusted_keys={"osint_data", "geo_data", "entity_graph_context", "kb_context"},
+            trusted_keys={"osint_data", "geo_data", "entity_graph_context"},
         )
 
         if not result.success:
@@ -1017,6 +1065,7 @@ def create_app():
             "entities": entities_data,
             "entity_count": len(entities_data),
             "source_count": len(findings_dict.get("platforms_queried", [])),
+            "metadata": findings_dict.get("metadata", {}),
         }
         if graph_cache_key:
             response["graph_cache_key"] = graph_cache_key
@@ -1068,7 +1117,6 @@ def create_app():
 
         osint_context = _findings_to_context(findings_dict)
         geo_context = _geo_points_to_text(findings_dict.get("geo_points", []))
-        kb_context = _get_kb_context(f"enrich {clean_id} {document_text[:200]}")
 
         # Extract entities from document for cross-referencing
         entities_data = findings_dict.get("entities", [])
@@ -1077,13 +1125,21 @@ def create_app():
             for e in entities_data[:30]
         ) or "No entities extracted."
 
+        # Build entity graph for relationship context
+        try:
+            entity_graph = build_investigation_graph(entities_data)
+            entity_graph_ctx = graph_context(entity_graph, max_chars=4000)
+        except Exception as exc:
+            print(f"[WARN] Graph construction failed in /enrich (non-fatal): {exc}")
+            entity_graph_ctx = "No entity graph available."
+
         chain = get_enrichment_chain()
         chain_input = {
             "document_text": document_text[:8000],
             "extracted_entities": extracted_entities,
             "osint_data": osint_context,
             "geo_data": geo_context,
-            "kb_context": kb_context,
+            "entity_graph_context": entity_graph_ctx,
         }
 
         result = gated_invoke(
@@ -1094,7 +1150,7 @@ def create_app():
             mode="osint",
             session_id=enrich_session_id,
             user_hash=user_hash,
-            trusted_keys={"document_text", "osint_data", "geo_data", "kb_context"},
+            trusted_keys={"document_text", "osint_data", "geo_data", "entity_graph_context"},
         )
 
         if not result.success:
@@ -1125,6 +1181,7 @@ def create_app():
             "sensitivity_level": sensitivity,
             "identifier": clean_id,
             "entity_count": len(entities_data),
+            "metadata": findings_dict.get("metadata", {}),
         })
 
     @app.route("/triangulate", methods=["POST"])
@@ -1198,6 +1255,19 @@ def create_app():
                     resolved = geo_client.ip_geolocate(value)
                     if resolved:
                         geo_points.append(resolved)
+                    try:
+                        scraper = _get_osint_client()._scraper
+                        reverse_dns = scraper.reverse_dns_lookup(value)
+                        co_hosted = scraper.reverse_ip_lookup(value)
+                        if not data.get("_ip_intel"):
+                            data["_ip_intel"] = {}
+                        data["_ip_intel"][value] = {
+                            "reverse_dns": reverse_dns,
+                            "co_hosted_domains": co_hosted[:20],
+                            "co_hosted_count": len(co_hosted),
+                        }
+                    except Exception:
+                        pass
                     continue
 
                 if dp_type == "address" and value:
@@ -1310,7 +1380,6 @@ def create_app():
             print(f"[WARN] Metadata extraction failed (non-fatal): {exc}")
 
         geo_points_text = _geo_points_to_text([asdict(gp) for gp in geo_points])
-        kb_context = _get_kb_context(f"geolocation triangulation {subject_context[:200]}")
 
         chain = get_geolocation_chain()
         chain_input = {
@@ -1360,6 +1429,8 @@ def create_app():
         }
         if triangulation:
             response["triangulation"] = asdict(triangulation)
+        if data.get("_ip_intel"):
+            response["ip_intel"] = data["_ip_intel"]
 
         return jsonify(response)
 
@@ -1453,10 +1524,6 @@ def create_app():
                 f"### {r['identifier']} ({r['identifier_type']})\n{r['analysis']}"
                 for r in successful
             )
-            kb_context = _get_kb_context(
-                " ".join(r["identifier"] for r in successful)[:500] or "batch investigation"
-            )
-
             chain = get_batch_synthesis_chain()
             chain_input = {
                 "per_entity_summaries": per_entity_summaries,
@@ -1531,14 +1598,21 @@ def create_app():
             osint_data = stored_reports[session_id].get("text", "")[:5000]
 
         if not osint_data:
-            kb_osint = _get_kb_context(f"scenario {scenario_type} analysis")
-            if not kb_osint:
-                return jsonify({
-                    "error": "No OSINT data available. Run an investigation or provide osint_data."
-                }), 400
-            osint_data = kb_osint
+            return jsonify({
+                "error": "No OSINT data available. Run an investigation or provide osint_data."
+            }), 400
 
-        kb_context = _get_kb_context(f"{scenario_type} {subject_context[:200]}")
+        # Build entity graph from session entities if available
+        entity_graph_ctx = "No entity graph available."
+        if session_id and validate_session_id(session_id) and session_id in stored_reports:
+            cached = stored_reports[session_id]
+            entities_data = cached.get("entities", [])
+            if entities_data:
+                try:
+                    entity_graph = build_investigation_graph(entities_data)
+                    entity_graph_ctx = graph_context(entity_graph, max_chars=4000)
+                except Exception as exc:
+                    print(f"[WARN] Graph construction failed in /scenario (non-fatal): {exc}")
 
         scenario_session_id = session_id or f"scn_{uuid.uuid4().hex[:16]}"
         user_hash = _get_user_hash()
@@ -1548,7 +1622,7 @@ def create_app():
             "scenario_type": scenario_type,
             "osint_data": osint_data,
             "subject_context": subject_context or "No additional subject context provided.",
-            "kb_context": kb_context,
+            "entity_graph_context": entity_graph_ctx,
         }
 
         result = gated_invoke(
@@ -1559,7 +1633,7 @@ def create_app():
             mode="osint",
             session_id=scenario_session_id,
             user_hash=user_hash,
-            trusted_keys={"osint_data", "kb_context"},
+            trusted_keys={"osint_data", "entity_graph_context"},
         )
 
         if not result.success:

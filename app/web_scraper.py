@@ -7,9 +7,10 @@ from urllib.parse import urlparse
 
 import dns.resolver
 import feedparser
-import requests
 import whois
 from newsapi import NewsApiClient
+
+from app.http_client import create_session
 
 try:
     import shodan
@@ -52,13 +53,7 @@ class WebScraper:
         else:
             log.info("VirusTotal API NOT configured (VIRUSTOTAL_API_KEY not set)")
 
-        self._http = requests.Session()
-        self._http.headers.update({"User-Agent": "FortisIntelHub/1.0"})
-        adapter = requests.adapters.HTTPAdapter(
-            pool_connections=4, pool_maxsize=6, max_retries=1,
-        )
-        self._http.mount("https://", adapter)
-        self._http.mount("http://", adapter)
+        self._http = create_session(pool_connections=4, pool_maxsize=6)
 
     def parse_rss_feed(self, feed_url: str) -> list[dict[str, Any]]:
         try:
@@ -221,7 +216,7 @@ class WebScraper:
             }
 
     def dns_lookup(self, domain: str) -> dict[str, Any]:
-        record_types = ["A", "AAAA", "MX", "TXT", "NS"]
+        record_types = ["A", "AAAA", "MX", "TXT", "NS", "SOA", "CNAME"]
         results: dict[str, list[str]] = {rt: [] for rt in record_types}
         for rtype in record_types:
             try:
@@ -232,6 +227,10 @@ class WebScraper:
                     elif rtype == "TXT":
                         results[rtype].append(
                             b"".join(rdata.strings).decode("utf-8", errors="replace")
+                        )
+                    elif rtype == "SOA":
+                        results[rtype].append(
+                            f"{rdata.mname} {rdata.rname} serial={rdata.serial}"
                         )
                     else:
                         results[rtype].append(str(rdata))
@@ -291,6 +290,98 @@ class WebScraper:
         except Exception:
             log.exception("Failed to fetch/parse robots.txt for %r", url)
             return empty
+
+    # ------------------------------------------------------------------
+    # DNSdumpster / HackerTarget API
+    # ------------------------------------------------------------------
+
+    _HACKERTARGET_BASE = "https://api.hackertarget.com"
+
+    def _hackertarget_get(self, endpoint: str, query: str) -> str | None:
+        try:
+            resp = self._http.get(
+                f"{self._HACKERTARGET_BASE}/{endpoint}/",
+                params={"q": query},
+                timeout=20,
+            )
+            if resp.status_code != 200:
+                log.debug("HackerTarget %s returned %d", endpoint, resp.status_code)
+                return None
+            text = resp.text.strip()
+            if text.startswith("error") or "API count exceeded" in text:
+                log.warning("HackerTarget %s: %s", endpoint, text[:120])
+                return None
+            return text
+        except Exception as exc:
+            log.error("HackerTarget %s failed: %s", endpoint, exc)
+            return None
+
+    def dnsdumpster_lookup(self, domain: str) -> dict[str, Any]:
+        """Subdomain enumeration and host discovery via HackerTarget API.
+
+        Returns subdomains with their resolved IPs, reverse DNS entries,
+        and basic HTTP header probes.
+        """
+        result: dict[str, Any] = {
+            "domain": domain,
+            "subdomains": [],
+            "dns_records": {},
+            "reverse_dns": [],
+        }
+
+        raw = self._hackertarget_get("hostsearch", domain)
+        if raw:
+            for line in raw.splitlines():
+                parts = line.split(",", 1)
+                if len(parts) == 2:
+                    hostname, ip = parts[0].strip(), parts[1].strip()
+                    result["subdomains"].append({
+                        "hostname": hostname,
+                        "ip": ip,
+                    })
+
+        dns_raw = self._hackertarget_get("dnslookup", domain)
+        if dns_raw:
+            records: dict[str, list[str]] = {}
+            for line in dns_raw.splitlines():
+                parts = line.split(None, 2)
+                if len(parts) >= 3:
+                    rtype = parts[1].strip().upper()
+                    rdata = parts[2].strip()
+                    records.setdefault(rtype, []).append(rdata)
+            result["dns_records"] = records
+
+        log.info("DNSdumpster lookup for %r: %d subdomains found",
+                 domain, len(result["subdomains"]))
+        return result
+
+    def reverse_ip_lookup(self, ip: str) -> list[str]:
+        """Find domains hosted on the same IP address."""
+        raw = self._hackertarget_get("reverseiplookup", ip)
+        if not raw:
+            return []
+        domains = [line.strip() for line in raw.splitlines() if line.strip()]
+        log.info("Reverse IP lookup for %s: %d domains", ip, len(domains))
+        return domains
+
+    def reverse_dns_lookup(self, ip: str) -> str:
+        """PTR record / reverse DNS for an IP address."""
+        raw = self._hackertarget_get("reversedns", ip)
+        if not raw:
+            return ""
+        return raw.splitlines()[0].strip() if raw.strip() else ""
+
+    def http_headers_lookup(self, domain: str) -> dict[str, str]:
+        """Fetch HTTP response headers for a target domain."""
+        raw = self._hackertarget_get("httpheaders", domain)
+        if not raw:
+            return {}
+        headers: dict[str, str] = {}
+        for line in raw.splitlines():
+            if ": " in line:
+                key, _, val = line.partition(": ")
+                headers[key.strip()] = val.strip()
+        return headers
 
     # ------------------------------------------------------------------
     # Shodan integration

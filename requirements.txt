@@ -25,6 +25,7 @@ instaloader>=4.11
 google-api-python-client>=2.100.0
 beautifulsoup4>=4.12.0
 requests>=2.32.5
+curl_cffi>=0.16.0
 feedparser>=6.0.0
 python-whois>=0.9.0
 dnspython>=2.6.0

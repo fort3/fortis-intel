@@ -1496,8 +1496,21 @@ function renderAnalysis(data) {
 
     // Render analysis text
     if (content && data.analysis) {
-        content.innerHTML = '<div class="result-section analysis-content">' +
+        var html = '<div class="result-section analysis-content">' +
             renderMarkdown(data.analysis) + '</div>';
+
+        var meta = data.metadata || data.findings_metadata || {};
+        var domainIntel = meta.domain_intel || {};
+        var ipIntel = meta.ip_intel || data.ip_intel || meta.ip_geolocation ? meta : null;
+
+        if (domainIntel.domain) {
+            html += renderDomainIntelSection(domainIntel);
+        }
+        if (ipIntel && (meta.ip_intel || meta.ip_geolocation)) {
+            html += renderIpIntelSection(meta);
+        }
+
+        content.innerHTML = html;
     }
 
     // Check for map data (defer rendering until pane is visible)
@@ -2958,3 +2971,113 @@ document.addEventListener('DOMContentLoaded', function () {
     // ---- Initial tool selection ----
     selectTool('ingest');
 });
+
+// =========================================================================
+// Domain / IP Intelligence Renderers
+// =========================================================================
+
+function renderDomainIntelSection(di) {
+    var h = '<div class="result-section domain-intel-section">' +
+        '<h4>Domain Intelligence: ' + escapeHtml(di.domain) + '</h4>';
+
+    var w = di.whois || {};
+    if (w.registrar || w.creation_date) {
+        h += '<div class="intel-card"><h5>WHOIS</h5><table class="intel-table">';
+        if (w.registrar) h += '<tr><td>Registrar</td><td>' + escapeHtml(w.registrar) + '</td></tr>';
+        if (w.registrant) h += '<tr><td>Registrant</td><td>' + escapeHtml(w.registrant) + '</td></tr>';
+        if (w.creation_date) h += '<tr><td>Created</td><td>' + escapeHtml(w.creation_date) + '</td></tr>';
+        if (w.expiration_date) h += '<tr><td>Expires</td><td>' + escapeHtml(w.expiration_date) + '</td></tr>';
+        if (w.name_servers && w.name_servers.length)
+            h += '<tr><td>Name Servers</td><td>' + w.name_servers.map(escapeHtml).join('<br>') + '</td></tr>';
+        h += '</table></div>';
+    }
+
+    var dns = di.dns || {};
+    var dnsKeys = Object.keys(dns).filter(function (k) { return dns[k] && dns[k].length; });
+    if (dnsKeys.length) {
+        h += '<div class="intel-card"><h5>DNS Records</h5><table class="intel-table">';
+        dnsKeys.forEach(function (k) {
+            h += '<tr><td>' + escapeHtml(k) + '</td><td>' + dns[k].map(escapeHtml).join('<br>') + '</td></tr>';
+        });
+        h += '</table></div>';
+    }
+
+    var dd = di.dnsdumpster || {};
+    var subs = dd.subdomains || [];
+    if (subs.length) {
+        h += '<div class="intel-card"><h5>Subdomains (DNSdumpster) &mdash; ' + subs.length + ' found</h5>' +
+            '<table class="intel-table"><tr><th>Hostname</th><th>IP</th></tr>';
+        subs.slice(0, 30).forEach(function (s) {
+            h += '<tr><td>' + escapeHtml(s.hostname) + '</td><td>' + escapeHtml(s.ip) + '</td></tr>';
+        });
+        if (subs.length > 30) h += '<tr><td colspan="2"><em>... and ' + (subs.length - 30) + ' more</em></td></tr>';
+        h += '</table></div>';
+    }
+
+    var hdrs = di.http_headers || {};
+    var hdrKeys = Object.keys(hdrs);
+    if (hdrKeys.length) {
+        h += '<div class="intel-card"><h5>HTTP Headers</h5><table class="intel-table">';
+        hdrKeys.slice(0, 15).forEach(function (k) {
+            h += '<tr><td>' + escapeHtml(k) + '</td><td>' + escapeHtml(hdrs[k]) + '</td></tr>';
+        });
+        h += '</table></div>';
+    }
+
+    h += '</div>';
+    return h;
+}
+
+function renderIpIntelSection(meta) {
+    var ipGeo = meta.ip_geolocation || {};
+    var ipInfo = meta.ip_intel || {};
+    var ipRev = meta.ip_reverse || {};
+
+    var h = '<div class="result-section ip-intel-section">' +
+        '<h4>IP Intelligence' + (ipInfo.ip ? ': ' + escapeHtml(ipInfo.ip) : '') + '</h4>';
+
+    if (ipGeo.ip || ipGeo.city) {
+        h += '<div class="intel-card"><h5>Geolocation</h5><table class="intel-table">';
+        if (ipGeo.ip) h += '<tr><td>IP</td><td>' + escapeHtml(ipGeo.ip) + '</td></tr>';
+        if (ipGeo.city) h += '<tr><td>City</td><td>' + escapeHtml(ipGeo.city) + '</td></tr>';
+        if (ipGeo.country) h += '<tr><td>Country</td><td>' + escapeHtml(ipGeo.country) + '</td></tr>';
+        if (ipGeo.isp) h += '<tr><td>ISP</td><td>' + escapeHtml(ipGeo.isp) + '</td></tr>';
+        if (ipGeo.region) h += '<tr><td>Region</td><td>' + escapeHtml(ipGeo.region) + '</td></tr>';
+        h += '</table></div>';
+    }
+
+    if (ipInfo.reverse_dns) {
+        h += '<div class="intel-card"><h5>Reverse DNS</h5><p>' + escapeHtml(ipInfo.reverse_dns) + '</p></div>';
+    }
+
+    var coHosted = ipInfo.co_hosted_domains || [];
+    if (coHosted.length) {
+        h += '<div class="intel-card"><h5>Co-Hosted Domains &mdash; ' +
+            (ipInfo.co_hosted_count || coHosted.length) + ' found</h5><ul>';
+        coHosted.slice(0, 20).forEach(function (d) {
+            h += '<li>' + escapeHtml(d) + '</li>';
+        });
+        if (coHosted.length > 20) h += '<li><em>... and ' + (coHosted.length - 20) + ' more</em></li>';
+        h += '</ul></div>';
+    }
+
+    if (ipRev.hostname) {
+        h += '<div class="intel-card"><h5>Reverse Host: ' + escapeHtml(ipRev.hostname) + '</h5>';
+        var rw = ipRev.whois || {};
+        if (rw.registrar) {
+            h += '<table class="intel-table">';
+            h += '<tr><td>Registrar</td><td>' + escapeHtml(rw.registrar) + '</td></tr>';
+            if (rw.creation_date) h += '<tr><td>Created</td><td>' + escapeHtml(rw.creation_date) + '</td></tr>';
+            h += '</table>';
+        }
+        var rd = ipRev.dnsdumpster || {};
+        var rSubs = rd.subdomains || [];
+        if (rSubs.length) {
+            h += '<p><strong>Subdomains:</strong> ' + rSubs.length + ' found</p>';
+        }
+        h += '</div>';
+    }
+
+    h += '</div>';
+    return h;
+}

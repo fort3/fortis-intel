@@ -16,6 +16,7 @@ from typing import Any
 import requests
 
 from app.constants import SOCIAL_PLATFORMS
+from app.http_client import create_session
 
 log = logging.getLogger(__name__)
 
@@ -133,14 +134,14 @@ class SocialClient:
     """
 
     LIBRARY_FLAGS: dict[str, bool] = {
-        "twitter": HAS_TWEEPY,
-        "reddit": HAS_PRAW,
+        "twitter": True,
+        "reddit": True,
         "telegram": HAS_TELETHON,
         "instagram": HAS_INSTALOADER,
         "youtube": HAS_YOUTUBE,
         "mastodon": HAS_MASTODON or HAS_MASTO_LIB,
-        "facebook": HAS_FACEBOOK,
-        "tiktok": HAS_TIKTOK or HAS_PYKTOK,
+        "facebook": True,
+        "tiktok": True,
     }
 
     _INSTA_MIN_DELAY = 3.0
@@ -153,13 +154,7 @@ class SocialClient:
 
     def __init__(self) -> None:
         log.info("SocialClient initialising (Phase 1)")
-        self._http = requests.Session()
-        self._http.headers.update({"User-Agent": "FortisIntelHub/1.0"})
-        adapter = requests.adapters.HTTPAdapter(
-            pool_connections=6, pool_maxsize=10, max_retries=1,
-        )
-        self._http.mount("https://", adapter)
-        self._http.mount("http://", adapter)
+        self._http = create_session()
 
         self._insta_last_req: float = 0.0
 
@@ -241,6 +236,8 @@ class SocialClient:
                 download_comments=False,
                 save_metadata=False,
                 compress_json=False,
+                request_timeout=15,
+                max_connection_attempts=2,
             )
             log.info("Instaloader initialised (public-profile mode)")
         except Exception as exc:
@@ -327,13 +324,13 @@ class SocialClient:
     def _platform_ready(self, platform: str) -> bool:
         """Return True if the platform's API client was successfully built."""
         return {
-            "twitter": self._twitter_client is not None,
-            "reddit": self._reddit_client is not None,
+            "twitter": True,
+            "reddit": True,
             "instagram": self._instaloader is not None,
             "youtube": self._youtube_client is not None,
             "mastodon": self._mastodon_base_url is not None or HAS_MASTO_LIB,
-            "facebook": self._facebook_token is not None,
-            "tiktok": self._tiktok_api_key is not None or self._tiktok_pyktok,
+            "facebook": True,
+            "tiktok": True,
             "telegram": self._telegram_api_id is not None,
         }.get(platform, False)
 
@@ -424,12 +421,12 @@ class SocialClient:
         }
 
     # ==================================================================
-    # TWITTER / X  (tweepy, API v2)
+    # TWITTER / X  (tweepy API v2, with syndication scrape fallback)
     # ==================================================================
 
     def _twitter_search_username(self, username: str) -> list[dict[str, Any]]:
         if not self._twitter_client:
-            return []
+            return self._twitter_search_username_scrape(username)
         try:
             user_fields = [
                 "id", "name", "username", "description", "public_metrics",
@@ -458,14 +455,14 @@ class SocialClient:
                 profile_image_url=getattr(u, "profile_image_url", "") or "",
             )]
         except Exception as exc:
-            log.error("Twitter search_username(%r) failed: %s", username, exc)
-            return []
+            log.warning("Twitter API search_username(%r) failed, trying scrape: %s", username, exc)
+            return self._twitter_search_username_scrape(username)
 
     def _twitter_get_user_posts(
         self, user_id: str, limit: int, since: str | None,
     ) -> list[dict[str, Any]]:
         if not self._twitter_client:
-            return []
+            return self._twitter_get_user_posts_scrape(user_id, limit, since)
         try:
             tweet_fields = [
                 "id", "text", "author_id", "created_at", "public_metrics",
@@ -504,14 +501,14 @@ class SocialClient:
                 ))
             return posts
         except Exception as exc:
-            log.error("Twitter get_user_posts(%r) failed: %s", user_id, exc)
-            return []
+            log.warning("Twitter API get_user_posts(%r) failed, trying scrape: %s", user_id, exc)
+            return self._twitter_get_user_posts_scrape(user_id, limit, since)
 
     def _twitter_search_content(
         self, query: str, limit: int = 50,
     ) -> list[dict[str, Any]]:
         if not self._twitter_client:
-            return []
+            return self._twitter_search_content_scrape(query, limit)
         try:
             tweet_fields = [
                 "id", "text", "author_id", "created_at", "public_metrics",
@@ -547,16 +544,113 @@ class SocialClient:
                 ))
             return posts
         except Exception as exc:
-            log.error("Twitter search_content(%r) failed: %s", query, exc)
+            log.warning("Twitter API search_content(%r) failed, trying scrape: %s", query, exc)
+            return self._twitter_search_content_scrape(query, limit)
+
+    # --- Twitter/X syndication scrape fallbacks ---
+
+    _TWITTER_SYNDICATION = "https://syndication.twitter.com/srv/timeline-profile/screen-name"
+
+    def _twitter_scrape_timeline(self, username: str) -> str | None:
+        url = f"{self._TWITTER_SYNDICATION}/{username}"
+        try:
+            resp = self._http.get(url, params={"dnt": "true", "embedId": "twitter-widget-0"}, timeout=15)
+            if resp.status_code == 200:
+                return resp.text
+            log.debug("Twitter syndication %s returned %d", username, resp.status_code)
+        except Exception as exc:
+            log.debug("Twitter syndication scrape failed: %s", exc)
+        return None
+
+    def _twitter_parse_syndication_tweets(self, html: str, limit: int) -> list[dict[str, Any]]:
+        posts: list[dict[str, Any]] = []
+        tweet_re = re.compile(
+            r'data-tweet-id="(\d+)".*?'
+            r'class="[^"]*timeline-Tweet-text[^"]*"[^>]*>(.*?)</(?:p|div)>',
+            re.DOTALL,
+        )
+        author_re = re.compile(r'data-screen-name="([^"]+)"')
+        time_re = re.compile(r'<time[^>]*datetime="([^"]+)"')
+        for m in tweet_re.finditer(html):
+            if len(posts) >= limit:
+                break
+            tweet_id = m.group(1)
+            raw_text = re.sub(r"<[^>]+>", "", m.group(2)).strip()
+            block = html[max(0, m.start() - 500):m.end() + 200]
+            author_m = author_re.search(block)
+            author = author_m.group(1) if author_m else ""
+            time_m = time_re.search(block)
+            ts = time_m.group(1) if time_m else None
+            hashtags, mentions = _extract_tags(raw_text)
+            posts.append(self._normalise_post(
+                platform="twitter",
+                post_id=tweet_id,
+                author_username=author,
+                content=raw_text,
+                url=f"https://x.com/{author}/status/{tweet_id}" if author else f"https://x.com/i/status/{tweet_id}",
+                timestamp=ts,
+                likes=0,
+                shares=0,
+                replies=0,
+                hashtags=hashtags,
+                mentions=mentions,
+            ))
+        return posts
+
+    def _twitter_search_username_scrape(self, username: str) -> list[dict[str, Any]]:
+        html = self._twitter_scrape_timeline(username)
+        if not html:
+            log.error("Twitter scrape search_username(%r) failed — syndication unavailable", username)
             return []
+        display_re = re.compile(r'class="[^"]*TweetAuthor-name[^"]*"[^>]*>([^<]+)<')
+        bio_re = re.compile(r'class="[^"]*timeline-Header-description[^"]*"[^>]*>(.*?)</(?:p|div)>', re.DOTALL)
+        avatar_re = re.compile(r'class="[^"]*TweetAuthor-avatar[^"]*"[^>]*src="([^"]+)"')
+        display = display_re.search(html)
+        bio = bio_re.search(html)
+        avatar = avatar_re.search(html)
+        return [self._normalise_profile(
+            platform="twitter",
+            user_id="",
+            username=username,
+            display_name=display.group(1).strip() if display else "",
+            bio=re.sub(r"<[^>]+>", "", bio.group(1)).strip() if bio else "",
+            url=f"https://x.com/{username}",
+            followers=0,
+            following=0,
+            post_count=0,
+            created_at=None,
+            verified=False,
+            profile_image_url=avatar.group(1) if avatar else "",
+        )]
+
+    def _twitter_get_user_posts_scrape(
+        self, user_id: str, limit: int, since: str | None,
+    ) -> list[dict[str, Any]]:
+        html = self._twitter_scrape_timeline(user_id)
+        if not html:
+            return []
+        posts = self._twitter_parse_syndication_tweets(html, min(limit, 20))
+        if since:
+            posts = [p for p in posts if not p.get("timestamp") or p["timestamp"] >= since]
+        return posts
+
+    def _twitter_search_content_scrape(
+        self, query: str, limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        log.info("Twitter content search requires API access — scrape fallback not available for keyword search")
+        return []
 
     # ==================================================================
-    # REDDIT  (praw)
+    # REDDIT  (praw, with curl_cffi scrape fallback)
     # ==================================================================
+
+    _REDDIT_JSON_HEADERS = {
+        "Accept": "application/json",
+    }
 
     def _reddit_search_username(self, username: str) -> list[dict[str, Any]]:
         if not self._reddit_client:
-            return []
+            return self._reddit_search_username_scrape(username)
         try:
             redditor = self._reddit_client.redditor(username)
             # Force fetch to verify user exists
@@ -576,15 +670,15 @@ class SocialClient:
                 profile_image_url=getattr(redditor, "icon_img", "") or "",
             )]
         except Exception as exc:
-            log.error("Reddit search_username(%r) failed: %s", username, exc)
-            return []
+            log.warning("Reddit PRAW search_username(%r) failed, trying scrape: %s", username, exc)
+            return self._reddit_search_username_scrape(username)
 
     def _reddit_get_user_posts(
         self, user_id: str, limit: int, since: str | None,
     ) -> list[dict[str, Any]]:
         """Fetch submissions and comments.  *user_id* is treated as username."""
         if not self._reddit_client:
-            return []
+            return self._reddit_get_user_posts_scrape(user_id, limit, since)
         try:
             redditor = self._reddit_client.redditor(user_id)
             posts: list[dict[str, Any]] = []
@@ -633,14 +727,14 @@ class SocialClient:
 
             return posts
         except Exception as exc:
-            log.error("Reddit get_user_posts(%r) failed: %s", user_id, exc)
-            return []
+            log.warning("Reddit PRAW get_user_posts(%r) failed, trying scrape: %s", user_id, exc)
+            return self._reddit_get_user_posts_scrape(user_id, limit, since)
 
     def _reddit_search_content(
         self, query: str, limit: int = 50,
     ) -> list[dict[str, Any]]:
         if not self._reddit_client:
-            return []
+            return self._reddit_search_content_scrape(query, limit)
         try:
             posts: list[dict[str, Any]] = []
             for sub in self._reddit_client.subreddit("all").search(query, limit=limit):
@@ -661,17 +755,133 @@ class SocialClient:
                 ))
             return posts
         except Exception as exc:
-            log.error("Reddit search_content(%r) failed: %s", query, exc)
+            log.warning("Reddit PRAW search_content(%r) failed, trying scrape: %s", query, exc)
+            return self._reddit_search_content_scrape(query, limit)
+
+    # --- Reddit curl_cffi scrape fallbacks ---
+
+    def _reddit_scrape_get(self, path: str) -> dict | None:
+        url = f"https://www.reddit.com{path}"
+        try:
+            resp = self._http.get(url, headers=self._REDDIT_JSON_HEADERS, timeout=15)
+            if resp.status_code == 200:
+                return resp.json()
+            log.debug("Reddit scrape %s returned %d", path, resp.status_code)
+        except Exception as exc:
+            log.debug("Reddit scrape %s failed: %s", path, exc)
+        return None
+
+    def _reddit_search_username_scrape(self, username: str) -> list[dict[str, Any]]:
+        data = self._reddit_scrape_get(f"/user/{username}/about.json")
+        if not data or "data" not in data:
+            log.error("Reddit scrape search_username(%r) failed", username)
             return []
+        try:
+            u = data["data"]
+            return [self._normalise_profile(
+                platform="reddit",
+                user_id=u.get("id", ""),
+                username=u.get("name", username),
+                display_name=u.get("subreddit", {}).get("title", ""),
+                bio=u.get("subreddit", {}).get("public_description", ""),
+                url=f"https://www.reddit.com/user/{u.get('name', username)}",
+                followers=0,
+                following=0,
+                post_count=u.get("link_karma", 0) + u.get("comment_karma", 0),
+                created_at=_iso(datetime.fromtimestamp(u["created_utc"], tz=timezone.utc)) if u.get("created_utc") else None,
+                verified=u.get("has_verified_email", False),
+                profile_image_url=u.get("icon_img", ""),
+            )]
+        except Exception as exc:
+            log.error("Reddit scrape parse user %r failed: %s", username, exc)
+            return []
+
+    def _reddit_get_user_posts_scrape(
+        self, user_id: str, limit: int, since: str | None,
+    ) -> list[dict[str, Any]]:
+        posts: list[dict[str, Any]] = []
+        half = max(limit // 2, 1)
+        for endpoint, is_comment in [("/submitted.json", False), ("/comments.json", True)]:
+            data = self._reddit_scrape_get(f"/user/{user_id}{endpoint}?limit={half}&raw_json=1")
+            if not data or "data" not in data:
+                continue
+            for child in data["data"].get("children", []):
+                item = child.get("data", {})
+                ts = _iso(datetime.fromtimestamp(item["created_utc"], tz=timezone.utc)) if item.get("created_utc") else None
+                if since and ts and ts < since:
+                    continue
+                content = item.get("body", "") if is_comment else (item.get("selftext", "") or item.get("title", ""))
+                hashtags, mentions = _extract_tags(content)
+                permalink = item.get("permalink", "")
+                media_urls: list[str] = []
+                if not is_comment:
+                    item_url = item.get("url", "")
+                    if item_url and item_url != permalink:
+                        media_urls.append(item_url)
+                posts.append(self._normalise_post(
+                    platform="reddit",
+                    post_id=item.get("id", ""),
+                    author_username=item.get("author", "[deleted]"),
+                    content=content,
+                    url=f"https://www.reddit.com{permalink}" if permalink else "",
+                    timestamp=ts,
+                    likes=item.get("score", 0),
+                    shares=0,
+                    replies=item.get("num_comments", 0) if not is_comment else 0,
+                    hashtags=hashtags,
+                    mentions=mentions,
+                    media_urls=media_urls,
+                ))
+        return posts
+
+    def _reddit_search_content_scrape(
+        self, query: str, limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        from urllib.parse import quote_plus
+        data = self._reddit_scrape_get(f"/search.json?q={quote_plus(query)}&limit={min(limit, 100)}&raw_json=1")
+        if not data or "data" not in data:
+            log.error("Reddit scrape search_content(%r) failed", query)
+            return []
+        posts: list[dict[str, Any]] = []
+        for child in data["data"].get("children", []):
+            item = child.get("data", {})
+            content = item.get("selftext", "") or item.get("title", "")
+            hashtags, mentions = _extract_tags(content)
+            permalink = item.get("permalink", "")
+            item_url = item.get("url", "")
+            posts.append(self._normalise_post(
+                platform="reddit",
+                post_id=item.get("id", ""),
+                author_username=item.get("author", "[deleted]"),
+                content=content,
+                url=f"https://www.reddit.com{permalink}" if permalink else "",
+                timestamp=_iso(datetime.fromtimestamp(item["created_utc"], tz=timezone.utc)) if item.get("created_utc") else None,
+                likes=item.get("score", 0),
+                shares=0,
+                replies=item.get("num_comments", 0),
+                hashtags=hashtags,
+                mentions=mentions,
+                media_urls=[item_url] if item_url and item_url != permalink else [],
+            ))
+        return posts
 
     # ==================================================================
     # INSTAGRAM  (instaloader, public profiles only)
     # ==================================================================
 
+    def _instagram_throttle(self) -> None:
+        elapsed = time.monotonic() - self._insta_last_req
+        if elapsed < self._INSTA_MIN_DELAY:
+            wait = self._INSTA_MIN_DELAY - elapsed
+            log.debug("Instagram throttle: sleeping %.1fs", wait)
+            time.sleep(wait)
+        self._insta_last_req = time.monotonic()
+
     def _instagram_search_username(self, username: str) -> list[dict[str, Any]]:
         if not self._instaloader:
             return []
         try:
+            self._instagram_throttle()
             profile = instaloader.Profile.from_username(
                 self._instaloader.context, username,
             )
@@ -700,15 +910,17 @@ class SocialClient:
         if not self._instaloader:
             return []
         try:
+            self._instagram_throttle()
             profile = instaloader.Profile.from_username(
                 self._instaloader.context, user_id,
             )
             posts: list[dict[str, Any]] = []
-            # Cap at 20 to avoid rate limits on public scraping
-            cap = min(limit, 20)
+            cap = min(limit, self._INSTA_POST_CAP)
             for i, post in enumerate(profile.get_posts()):
                 if i >= cap:
                     break
+                if i > 0:
+                    time.sleep(self._INSTA_POST_DELAY)
                 ts = _iso(post.date_utc.replace(tzinfo=timezone.utc) if post.date_utc else None)
                 if since and ts and ts < since:
                     continue
@@ -1128,12 +1340,12 @@ class SocialClient:
             return []
 
     # ==================================================================
-    # FACEBOOK  (Graph API via requests)
+    # FACEBOOK  (Graph API, with mbasic scrape fallback)
     # ==================================================================
 
     def _facebook_search_username(self, username: str) -> list[dict[str, Any]]:
         if not self._facebook_token:
-            return []
+            return self._facebook_search_username_scrape(username)
         try:
             url = f"https://graph.facebook.com/v19.0/{username}"
             resp = self._http.get(
@@ -1161,13 +1373,14 @@ class SocialClient:
                 profile_image_url="",
             )]
         except Exception as exc:
-            log.error("Facebook search_username(%r) failed: %s", username, exc)
-            return []
+            log.warning("Facebook API search_username(%r) failed, trying scrape: %s", username, exc)
+            return self._facebook_search_username_scrape(username)
 
     def _facebook_search_content(
         self, query: str, limit: int = 50,
     ) -> list[dict[str, Any]]:
         if not self._facebook_token:
+            log.info("Facebook content search requires Graph API access — scrape fallback not available")
             return []
         try:
             url = "https://graph.facebook.com/v19.0/search"
@@ -1209,7 +1422,7 @@ class SocialClient:
         self, user_id: str, limit: int, since: str | None,
     ) -> list[dict[str, Any]]:
         if not self._facebook_token:
-            return []
+            return self._facebook_get_user_posts_scrape(user_id, limit, since)
         try:
             url = f"https://graph.facebook.com/v19.0/{user_id}/posts"
             params: dict[str, Any] = {
@@ -1241,7 +1454,92 @@ class SocialClient:
                 ))
             return posts
         except Exception as exc:
-            log.error("Facebook get_user_posts(%r) failed: %s", user_id, exc)
+            log.warning("Facebook API get_user_posts(%r) failed, trying scrape: %s", user_id, exc)
+            return self._facebook_get_user_posts_scrape(user_id, limit, since)
+
+    # --- Facebook mbasic scrape fallbacks ---
+
+    def _facebook_scrape_page(self, page_name: str) -> str | None:
+        url = f"https://mbasic.facebook.com/{page_name}"
+        try:
+            resp = self._http.get(url, timeout=15)
+            if resp.status_code == 200:
+                return resp.text
+            log.debug("Facebook mbasic %s returned %d", page_name, resp.status_code)
+        except Exception as exc:
+            log.debug("Facebook mbasic scrape failed: %s", exc)
+        return None
+
+    def _facebook_search_username_scrape(self, username: str) -> list[dict[str, Any]]:
+        html = self._facebook_scrape_page(username)
+        if not html:
+            log.error("Facebook scrape search_username(%r) failed", username)
+            return []
+        try:
+            title_re = re.compile(r"<title[^>]*>([^<]+)</title>", re.IGNORECASE)
+            title_m = title_re.search(html)
+            display_name = title_m.group(1).strip() if title_m else username
+            bio_re = re.compile(r'id="bio"[^>]*>(.*?)</div>', re.DOTALL | re.IGNORECASE)
+            bio_m = bio_re.search(html)
+            bio = re.sub(r"<[^>]+>", "", bio_m.group(1)).strip() if bio_m else ""
+            avatar_re = re.compile(r'<img[^>]*class="[^"]*profpic[^"]*"[^>]*src="([^"]+)"', re.IGNORECASE)
+            avatar_m = avatar_re.search(html)
+            avatar = avatar_m.group(1) if avatar_m else ""
+            return [self._normalise_profile(
+                platform="facebook",
+                user_id="",
+                username=username,
+                display_name=display_name,
+                bio=bio,
+                url=f"https://www.facebook.com/{username}",
+                followers=0,
+                following=0,
+                post_count=0,
+                created_at=None,
+                verified=False,
+                profile_image_url=avatar,
+            )]
+        except Exception as exc:
+            log.error("Facebook scrape parse %r failed: %s", username, exc)
+            return []
+
+    def _facebook_get_user_posts_scrape(
+        self, user_id: str, limit: int, since: str | None,
+    ) -> list[dict[str, Any]]:
+        html = self._facebook_scrape_page(user_id)
+        if not html:
+            return []
+        try:
+            post_re = re.compile(
+                r'<div[^>]*class="[^"]*(?:story_body_container|_55wo)[^"]*"[^>]*>(.*?)</div>\s*</div>',
+                re.DOTALL,
+            )
+            posts: list[dict[str, Any]] = []
+            for m in post_re.finditer(html):
+                if len(posts) >= min(limit, 10):
+                    break
+                raw = m.group(1)
+                text = re.sub(r"<[^>]+>", " ", raw).strip()
+                text = re.sub(r"\s+", " ", text)
+                if len(text) < 10:
+                    continue
+                hashtags, mentions = _extract_tags(text)
+                posts.append(self._normalise_post(
+                    platform="facebook",
+                    post_id="",
+                    author_username=user_id,
+                    content=text[:1000],
+                    url=f"https://www.facebook.com/{user_id}",
+                    timestamp=None,
+                    likes=0,
+                    shares=0,
+                    replies=0,
+                    hashtags=hashtags,
+                    mentions=mentions,
+                ))
+            return posts
+        except Exception as exc:
+            log.error("Facebook scrape posts %r failed: %s", user_id, exc)
             return []
 
     # ==================================================================
@@ -1250,10 +1548,14 @@ class SocialClient:
 
     def _tiktok_search_username(self, username: str) -> list[dict[str, Any]]:
         if self._tiktok_api_key:
-            return self._tiktok_search_username_api(username)
+            result = self._tiktok_search_username_api(username)
+            if result:
+                return result
         if self._tiktok_pyktok:
-            return self._tiktok_search_username_pyktok(username)
-        return []
+            result = self._tiktok_search_username_pyktok(username)
+            if result:
+                return result
+        return self._tiktok_search_username_scrape(username)
 
     def _tiktok_search_username_api(self, username: str) -> list[dict[str, Any]]:
         try:
@@ -1318,10 +1620,14 @@ class SocialClient:
         self, query: str, limit: int = 50,
     ) -> list[dict[str, Any]]:
         if self._tiktok_api_key:
-            return self._tiktok_search_content_api(query, limit)
+            result = self._tiktok_search_content_api(query, limit)
+            if result:
+                return result
         if self._tiktok_pyktok:
-            return self._tiktok_search_content_pyktok(query, limit)
-        return []
+            result = self._tiktok_search_content_pyktok(query, limit)
+            if result:
+                return result
+        return self._tiktok_search_content_scrape(query, limit)
 
     def _tiktok_search_content_api(
         self, query: str, limit: int = 50,
@@ -1424,10 +1730,14 @@ class SocialClient:
         self, user_id: str, limit: int, since: str | None,
     ) -> list[dict[str, Any]]:
         if self._tiktok_api_key:
-            return self._tiktok_get_user_posts_api(user_id, limit, since)
+            result = self._tiktok_get_user_posts_api(user_id, limit, since)
+            if result:
+                return result
         if self._tiktok_pyktok:
-            return self._tiktok_get_user_posts_pyktok(user_id, limit, since)
-        return []
+            result = self._tiktok_get_user_posts_pyktok(user_id, limit, since)
+            if result:
+                return result
+        return self._tiktok_get_user_posts_scrape(user_id, limit, since)
 
     def _tiktok_get_user_posts_api(
         self, user_id: str, limit: int, since: str | None,
@@ -1521,6 +1831,145 @@ class SocialClient:
         except Exception as exc:
             log.error("TikTok Pyktok get_user_posts(%r) failed: %s", user_id, exc)
             return []
+
+    # --- TikTok curl_cffi scrape fallbacks ---
+
+    _TIKTOK_REHYDRATION_RE = re.compile(
+        r'<script\s+id="__UNIVERSAL_DATA_FOR_REHYDRATION__"[^>]*>(.*?)</script>',
+        re.DOTALL,
+    )
+    _TIKTOK_SIGI_RE = re.compile(
+        r'<script\s+id="SIGI_STATE"[^>]*>(.*?)</script>',
+        re.DOTALL,
+    )
+
+    def _tiktok_scrape_page(self, url: str) -> dict | None:
+        try:
+            resp = self._http.get(url, timeout=15)
+            if resp.status_code != 200:
+                log.debug("TikTok scrape %s returned %d", url, resp.status_code)
+                return None
+            html = resp.text
+            import json as _json
+            for pattern in (self._TIKTOK_REHYDRATION_RE, self._TIKTOK_SIGI_RE):
+                m = pattern.search(html)
+                if m:
+                    return _json.loads(m.group(1))
+        except Exception as exc:
+            log.debug("TikTok scrape %s failed: %s", url, exc)
+        return None
+
+    def _tiktok_extract_user(self, data: dict, username: str) -> dict | None:
+        scope = data.get("__DEFAULT_SCOPE__", {})
+        detail = scope.get("webapp.user-detail", {})
+        user_info = detail.get("userInfo", {})
+        if user_info:
+            return user_info
+        users = data.get("UserModule", {}).get("users", {})
+        if username in users:
+            stats = data.get("UserModule", {}).get("stats", {}).get(username, {})
+            return {"user": users[username], "stats": stats}
+        return None
+
+    def _tiktok_search_username_scrape(self, username: str) -> list[dict[str, Any]]:
+        data = self._tiktok_scrape_page(f"https://www.tiktok.com/@{username}")
+        if not data:
+            log.error("TikTok scrape search_username(%r) failed", username)
+            return []
+        try:
+            info = self._tiktok_extract_user(data, username)
+            if not info:
+                return []
+            user = info.get("user", info)
+            stats = info.get("stats", {})
+            return [self._normalise_profile(
+                platform="tiktok",
+                user_id=str(user.get("id", user.get("uid", ""))),
+                username=user.get("uniqueId", user.get("unique_id", username)),
+                display_name=user.get("nickname", ""),
+                bio=user.get("signature", ""),
+                url=f"https://www.tiktok.com/@{user.get('uniqueId', username)}",
+                followers=stats.get("followerCount", stats.get("follower_count", 0)),
+                following=stats.get("followingCount", stats.get("following_count", 0)),
+                post_count=stats.get("videoCount", stats.get("video_count", 0)),
+                created_at=None,
+                verified=user.get("verified", False),
+                profile_image_url=user.get("avatarLarger", user.get("avatar_larger", "")),
+            )]
+        except Exception as exc:
+            log.error("TikTok scrape parse user %r failed: %s", username, exc)
+            return []
+
+    def _tiktok_extract_items(self, data: dict) -> list[dict]:
+        scope = data.get("__DEFAULT_SCOPE__", {})
+        detail = scope.get("webapp.user-detail", {})
+        item_list = detail.get("itemList", [])
+        if item_list:
+            return item_list
+        items = data.get("ItemModule", {})
+        if isinstance(items, dict):
+            return list(items.values())
+        return []
+
+    def _tiktok_parse_video_items(
+        self, items: list[dict], limit: int, since: str | None,
+    ) -> list[dict[str, Any]]:
+        posts: list[dict[str, Any]] = []
+        for item in items[:limit]:
+            desc = item.get("desc", item.get("video_description", ""))
+            hashtags, mentions = _extract_tags(desc)
+            video_id = str(item.get("id", ""))
+            author = item.get("author", "")
+            if isinstance(author, dict):
+                author = author.get("uniqueId", "")
+            stats = item.get("stats", {})
+            ts = None
+            create_time = item.get("createTime", item.get("create_time"))
+            if create_time:
+                ts = _iso(datetime.fromtimestamp(int(create_time), tz=timezone.utc))
+            if since and ts and ts < since:
+                continue
+            likes = stats.get("diggCount", stats.get("like_count", item.get("like_count", 0)))
+            shares = stats.get("shareCount", stats.get("share_count", item.get("share_count", 0)))
+            replies = stats.get("commentCount", stats.get("comment_count", item.get("comment_count", 0)))
+            challenges = item.get("challenges", [])
+            if not hashtags and challenges:
+                hashtags = [c.get("hashtagName", c.get("title", "")) for c in challenges]
+            posts.append(self._normalise_post(
+                platform="tiktok",
+                post_id=video_id,
+                author_username=author,
+                content=desc,
+                url=f"https://www.tiktok.com/@{author}/video/{video_id}" if author else "",
+                timestamp=ts,
+                likes=likes,
+                shares=shares,
+                replies=replies,
+                hashtags=hashtags,
+                mentions=mentions,
+            ))
+        return posts
+
+    def _tiktok_get_user_posts_scrape(
+        self, user_id: str, limit: int, since: str | None,
+    ) -> list[dict[str, Any]]:
+        data = self._tiktok_scrape_page(f"https://www.tiktok.com/@{user_id}")
+        if not data:
+            log.error("TikTok scrape get_user_posts(%r) failed", user_id)
+            return []
+        items = self._tiktok_extract_items(data)
+        return self._tiktok_parse_video_items(items, min(limit, 30), since)
+
+    def _tiktok_search_content_scrape(
+        self, query: str, limit: int = 30,
+    ) -> list[dict[str, Any]]:
+        from urllib.parse import quote_plus
+        data = self._tiktok_scrape_page(f"https://www.tiktok.com/search?q={quote_plus(query)}")
+        if not data:
+            log.error("TikTok scrape search_content(%r) failed", query)
+            return []
+        items = self._tiktok_extract_items(data)
+        return self._tiktok_parse_video_items(items, min(limit, 30), None)
 
     # ==================================================================
     # TELEGRAM  (Telethon — async bridge)

@@ -12,15 +12,11 @@ import tempfile
 from dataclasses import dataclass, field
 from typing import Any
 
-import requests as _requests
-from requests.adapters import HTTPAdapter as _HTTPAdapter
-
 log = logging.getLogger(__name__)
 
-_video_http = _requests.Session()
-_video_adapter = _HTTPAdapter(pool_connections=2, pool_maxsize=4, max_retries=1)
-_video_http.mount("https://", _video_adapter)
-_video_http.mount("http://", _video_adapter)
+from app.http_client import create_session
+
+_video_http = create_session(pool_connections=2, pool_maxsize=4)
 
 # ---------------------------------------------------------------------------
 # Optional library availability

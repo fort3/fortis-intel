@@ -11,10 +11,8 @@ from typing import Any
 
 _IS_WIN32 = sys.platform == "win32"
 
-import requests as _requests
-from requests.adapters import HTTPAdapter as _HTTPAdapter
-
 from app.constants import SOCIAL_PLATFORMS
+from app.http_client import create_session
 
 log = logging.getLogger(__name__)
 
@@ -83,6 +81,7 @@ class EnrichedEntity:
     risk_indicators: list[str] = field(default_factory=list)
     confidence: float = 0.0
     enrichment_sources: list[str] = field(default_factory=list)
+    raw: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -139,12 +138,28 @@ class OSINTClient:
         except ImportError:
             log.info("GeoClient not available for NLP geocoding")
 
-        self._http = _requests.Session()
-        _adapter = _HTTPAdapter(pool_connections=4, pool_maxsize=6, max_retries=1)
-        self._http.mount("https://", _adapter)
-        self._http.mount("http://", _adapter)
+        self._http = create_session(pool_connections=4, pool_maxsize=6)
 
         log.info("OSINTClient initialised — social, web, metadata modules loaded")
+
+    _DOMAIN_RE = _re.compile(
+        r"^(?:[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?\.)+"
+        r"[a-zA-Z]{2,}$"
+    )
+    _IP_RE = _re.compile(
+        r"^(?:\d{1,3}\.){3}\d{1,3}$"
+        r"|^[0-9a-fA-F:]{3,39}$"
+    )
+
+    def _classify_identifier(self, identifier: str) -> str:
+        stripped = identifier.strip()
+        if self._IP_RE.match(stripped):
+            return "ip"
+        if self._DOMAIN_RE.match(stripped):
+            return "domain"
+        if stripped.startswith("http://") or stripped.startswith("https://"):
+            return "url"
+        return "username"
 
     def investigate(
         self,
@@ -154,8 +169,10 @@ class OSINTClient:
     ) -> OSINTFindings:
         """Run a full-spectrum OSINT investigation on *identifier*."""
         resolved_platforms = platforms or list(self._platform_config.keys())
+        id_type = self._classify_identifier(identifier)
         findings = OSINTFindings(
             identifier=identifier,
+            identifier_type=id_type,
             subject_id=identifier,
             depth=depth,
             platforms_queried=resolved_platforms,
@@ -194,7 +211,137 @@ class OSINTClient:
                     log.error("OSINT task %s failed: %s", key, exc)
                     findings.errors.append(f"{key}: {str(exc)[:200]}")
 
-        findings.geo_points = self._extract_geo(findings.posts)
+        if id_type in ("domain", "url"):
+            domain = identifier
+            if id_type == "url":
+                from urllib.parse import urlparse
+                domain = urlparse(identifier).netloc or identifier
+            try:
+                whois_data = self._scraper.whois_lookup(domain)
+                dns_data = self._scraper.dns_lookup(domain)
+                dnsdumpster = self._scraper.dnsdumpster_lookup(domain)
+                http_headers = self._scraper.http_headers_lookup(domain)
+                findings.metadata["domain_intel"] = {
+                    "domain": domain,
+                    "whois": whois_data,
+                    "dns": dns_data,
+                    "dnsdumpster": dnsdumpster,
+                    "http_headers": http_headers,
+                }
+                enrichment_sources = ["whois", "dns", "dnsdumpster"]
+                findings.entities.append(EnrichedEntity(
+                    entity_type="domain",
+                    entity_value=domain,
+                    confidence=0.95,
+                    enrichment_sources=enrichment_sources,
+                    raw={"whois": whois_data, "dns": dns_data, "dnsdumpster": dnsdumpster},
+                ))
+                for sub in dnsdumpster.get("subdomains", []):
+                    sub_host = sub.get("hostname", "")
+                    if sub_host and sub_host != domain:
+                        findings.entities.append(EnrichedEntity(
+                            entity_type="subdomain",
+                            entity_value=sub_host,
+                            confidence=0.85,
+                            enrichment_sources=["dnsdumpster"],
+                            raw={"ip": sub.get("ip", "")},
+                        ))
+                a_records = dns_data.get("A", [])
+                all_ips = set(a_records)
+                for sub in dnsdumpster.get("subdomains", []):
+                    sub_ip = sub.get("ip", "")
+                    if sub_ip:
+                        all_ips.add(sub_ip)
+                if self._geo_client:
+                    for ip in list(all_ips)[:6]:
+                        geo_pt = self._geo_client.ip_geolocate(ip)
+                        if geo_pt:
+                            label_host = domain
+                            for sub in dnsdumpster.get("subdomains", []):
+                                if sub.get("ip") == ip:
+                                    label_host = sub.get("hostname", domain)
+                                    break
+                            findings.geo_points.append({
+                                "lat": geo_pt.lat,
+                                "lon": geo_pt.lon,
+                                "label": f"{label_host} → {ip} ({geo_pt.label})",
+                                "source": "domain_ip_geolocation",
+                                "confidence": 0.65,
+                            })
+                log.info("Domain intel collected for %r: registrar=%s, A=%s, subdomains=%d",
+                         domain, whois_data.get("registrar", "?"), a_records,
+                         len(dnsdumpster.get("subdomains", [])))
+            except Exception as exc:
+                log.error("Domain/IP intel failed for %r: %s", domain, exc)
+                findings.errors.append(f"domain_intel: {str(exc)[:200]}")
+
+        if id_type == "ip":
+            try:
+                if self._geo_client:
+                    geo_pt = self._geo_client.ip_geolocate(identifier)
+                    if geo_pt:
+                        findings.geo_points.append({
+                            "lat": geo_pt.lat,
+                            "lon": geo_pt.lon,
+                            "label": f"IP {identifier} ({geo_pt.label})",
+                            "source": "ip_geolocation",
+                            "confidence": geo_pt.confidence,
+                        })
+                        findings.metadata["ip_geolocation"] = geo_pt.raw
+                reverse_dns = self._scraper.reverse_dns_lookup(identifier)
+                co_hosted = self._scraper.reverse_ip_lookup(identifier)
+                findings.metadata["ip_intel"] = {
+                    "ip": identifier,
+                    "reverse_dns": reverse_dns,
+                    "co_hosted_domains": co_hosted[:50],
+                    "co_hosted_count": len(co_hosted),
+                }
+                if reverse_dns:
+                    findings.entities.append(EnrichedEntity(
+                        entity_type="hostname",
+                        entity_value=reverse_dns,
+                        confidence=0.9,
+                        enrichment_sources=["reverse_dns"],
+                    ))
+                for d in co_hosted[:10]:
+                    findings.entities.append(EnrichedEntity(
+                        entity_type="co_hosted_domain",
+                        entity_value=d,
+                        confidence=0.8,
+                        enrichment_sources=["reverse_ip"],
+                    ))
+                hostname = reverse_dns or None
+                if not hostname:
+                    try:
+                        import socket
+                        hostname = socket.getfqdn(identifier)
+                        if hostname == identifier:
+                            hostname = None
+                    except Exception:
+                        pass
+                if hostname:
+                    whois_data = self._scraper.whois_lookup(hostname)
+                    dns_data = self._scraper.dns_lookup(hostname)
+                    dnsdumpster = self._scraper.dnsdumpster_lookup(hostname)
+                    findings.metadata["ip_reverse"] = {
+                        "hostname": hostname,
+                        "whois": whois_data,
+                        "dns": dns_data,
+                        "dnsdumpster": dnsdumpster,
+                    }
+                findings.entities.append(EnrichedEntity(
+                    entity_type="ip",
+                    entity_value=identifier,
+                    confidence=0.95,
+                    enrichment_sources=["ip_geolocation", "reverse_dns", "reverse_ip"],
+                ))
+                log.info("IP intel collected for %r: reverse_dns=%s, co_hosted=%d",
+                         identifier, reverse_dns or "none", len(co_hosted))
+            except Exception as exc:
+                log.error("IP intel failed for %r: %s", identifier, exc)
+                findings.errors.append(f"ip_intel: {str(exc)[:200]}")
+
+        findings.geo_points.extend(self._extract_geo(findings.posts))
         findings.geo_points.extend(self._extract_media_geo(findings.posts))
         findings.geo_points.extend(self._extract_video_geo(findings.posts))
 
@@ -289,8 +436,33 @@ class OSINTClient:
                 if etype == "domain":
                     whois_data = self._scraper.whois_lookup(evalue)
                     dns_data = self._scraper.dns_lookup(evalue)
-                    enriched.raw = {"whois": whois_data, "dns": dns_data}
+                    dnsdumpster = self._scraper.dnsdumpster_lookup(evalue)
+                    enriched.raw = {
+                        "whois": whois_data,
+                        "dns": dns_data,
+                        "dnsdumpster": dnsdumpster,
+                    }
                     enriched.enrichment_sources.append("domain_intel")
+                    enriched.enrichment_sources.append("dnsdumpster")
+
+                if etype == "ip":
+                    reverse_dns = self._scraper.reverse_dns_lookup(evalue)
+                    co_hosted = self._scraper.reverse_ip_lookup(evalue)
+                    enriched.raw = {
+                        "reverse_dns": reverse_dns,
+                        "co_hosted_domains": co_hosted[:20],
+                    }
+                    if self._geo_client:
+                        geo_pt = self._geo_client.ip_geolocate(evalue)
+                        if geo_pt:
+                            enriched.geo_points.append({
+                                "lat": geo_pt.lat,
+                                "lon": geo_pt.lon,
+                                "label": f"{evalue} ({geo_pt.label})",
+                                "source": "ip_geolocation",
+                                "confidence": geo_pt.confidence,
+                            })
+                    enriched.enrichment_sources.append("ip_intel")
 
                 enriched.confidence = 0.5 + 0.1 * len(enriched.enrichment_sources)
 

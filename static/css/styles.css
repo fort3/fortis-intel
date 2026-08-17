@@ -2658,3 +2658,89 @@ small, .text-sm {
     padding: 0;
   }
 }
+
+/* ==========================================================================
+   Domain / IP Intelligence Cards
+   ========================================================================== */
+.domain-intel-section,
+.ip-intel-section {
+  margin-top: 1.5rem;
+  padding-top: 1rem;
+  border-top: 1px solid var(--border);
+}
+
+.domain-intel-section h4,
+.ip-intel-section h4 {
+  color: var(--purple-bright);
+  font-size: 1.1rem;
+  margin-bottom: 1rem;
+}
+
+.intel-card {
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 1rem 1.2rem;
+  margin-bottom: 0.75rem;
+}
+
+.intel-card h5 {
+  color: var(--text-bright);
+  font-size: 0.9rem;
+  margin: 0 0 0.6rem 0;
+  padding-bottom: 0.4rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.intel-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+.intel-table th {
+  text-align: left;
+  color: var(--text-secondary);
+  padding: 0.35rem 0.5rem;
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+}
+
+.intel-table td {
+  padding: 0.35rem 0.5rem;
+  color: var(--text-primary);
+  border-bottom: 1px solid rgba(42, 42, 61, 0.5);
+  vertical-align: top;
+}
+
+.intel-table tr:last-child td {
+  border-bottom: none;
+}
+
+.intel-table td:first-child {
+  color: var(--text-secondary);
+  white-space: nowrap;
+  width: 140px;
+  font-weight: 500;
+}
+
+.intel-card ul {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  columns: 2;
+  column-gap: 1.5rem;
+}
+
+.intel-card li {
+  color: var(--text-primary);
+  font-size: 0.85rem;
+  padding: 0.2rem 0;
+  break-inside: avoid;
+}
+
+.intel-card p {
+  color: var(--text-primary);
+  font-size: 0.85rem;
+  margin: 0.3rem 0;
+}
