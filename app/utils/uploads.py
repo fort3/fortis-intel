@@ -5,7 +5,7 @@ import uuid
 from pathlib import Path
 from typing import Tuple
 
-SESSION_ID_PATTERN = re.compile(r"^[a-f0-9]{12}_[\w.\-]+$")
+SESSION_ID_PATTERN = re.compile(r"^[\w][\w.\-]{2,120}$")
 
 MAX_FILE_SIZE_MB = 50
 
