@@ -570,7 +570,7 @@ def _run_initial_dorking(
         return result
 
     client = DorkSearchClient()
-    search_results = client.search_batch(all_queries, max_per_query=10, delay=0.2)
+    search_results = client.search_batch(all_queries, max_per_query=10)
 
     collection_raw = []
     for dq in all_queries:
@@ -733,7 +733,7 @@ def _run_final_dorking(
 
     # Execute searches
     client = DorkSearchClient()
-    search_results = client.search_batch(all_queries, max_per_query=5, delay=0.2)
+    search_results = client.search_batch(all_queries, max_per_query=5)
 
     gap_fill_raw = []
     validation_raw = []

@@ -122,9 +122,28 @@ class _RateLimiter:
 # DorkSearchClient
 # ---------------------------------------------------------------------------
 
+def _make_ddgs():
+    """Import and instantiate DDGS with the configured timeout."""
+    try:
+        from ddgs import DDGS
+    except ImportError:
+        from duckduckgo_search import DDGS
+    return DDGS(timeout=DORK_SEARCH_TIMEOUT)
+
+
 class DorkSearchClient:
     def __init__(self):
         self._limiter = _RateLimiter(DORK_RATE_PER_MINUTE, DORK_RATE_PER_HOUR)
+        self._ddgs = None
+        self._consecutive_failures = 0
+
+    def _get_ddgs(self):
+        if self._ddgs is None:
+            self._ddgs = _make_ddgs()
+        return self._ddgs
+
+    def _reset_ddgs(self):
+        self._ddgs = None
 
     def search(self, query: str, max_results: int = 10) -> list[DorkResult]:
         if not self._limiter.acquire():
@@ -132,12 +151,7 @@ class DorkSearchClient:
             return []
 
         try:
-            try:
-                from ddgs import DDGS
-            except ImportError:
-                from duckduckgo_search import DDGS
-
-            results: list[DorkResult] = []
+            ddgs = self._get_ddgs()
             search_kwargs: dict = {
                 "keywords": query,
                 "region": DORK_SEARCH_REGION,
@@ -146,7 +160,7 @@ class DorkSearchClient:
             if DORK_SEARCH_BACKEND != "auto":
                 search_kwargs["backend"] = DORK_SEARCH_BACKEND
 
-            ddgs = DDGS(timeout=DORK_SEARCH_TIMEOUT)
+            results: list[DorkResult] = []
             for r in ddgs.text(**search_kwargs):
                 results.append(DorkResult(
                     title=r.get("title", ""),
@@ -154,45 +168,53 @@ class DorkSearchClient:
                     snippet=r.get("body", ""),
                 ))
             log.info("Dork search returned %d results for: %s", len(results), query[:80])
+            self._consecutive_failures = 0
             return results
 
         except ImportError:
             log.error("ddgs / duckduckgo-search package not installed")
             return []
         except TypeError:
-            # Older package version may not support backend/keywords kwargs —
-            # fall back to positional call.
+            # Older package version may not support backend/keywords kwargs
+            self._reset_ddgs()
             try:
-                try:
-                    from ddgs import DDGS
-                except ImportError:
-                    from duckduckgo_search import DDGS
+                ddgs = self._get_ddgs()
                 results = []
-                ddgs = DDGS(timeout=DORK_SEARCH_TIMEOUT)
                 for r in ddgs.text(query, max_results=max_results):
                     results.append(DorkResult(
                         title=r.get("title", ""),
                         url=r.get("href", ""),
                         snippet=r.get("body", ""),
                     ))
+                self._consecutive_failures = 0
                 return results
             except Exception as exc2:
                 log.error("Dork search fallback failed for %r: %s", query[:80], exc2)
+                self._consecutive_failures += 1
                 return []
         except Exception as exc:
             log.error("Dork search failed for %r: %s", query[:80], exc)
+            self._consecutive_failures += 1
+            self._reset_ddgs()
             return []
 
     def search_batch(
         self,
         queries: list[DorkQuery],
         max_per_query: int = 10,
-        delay: float = 0.2,
+        delay: float = 1.0,
     ) -> dict[str, list[DorkResult]]:
         capped = queries[:DORK_MAX_QUERIES]
         results: dict[str, list[DorkResult]] = {}
         for i, dq in enumerate(capped):
+            if self._consecutive_failures >= 3:
+                log.warning(
+                    "Aborting batch after %d consecutive failures (%d/%d queries done)",
+                    self._consecutive_failures, i, len(capped),
+                )
+                break
             results[dq.query] = self.search(dq.query, max_results=max_per_query)
             if i < len(capped) - 1:
-                time.sleep(delay)
+                backoff = delay * (1 + self._consecutive_failures)
+                time.sleep(backoff)
         return results
