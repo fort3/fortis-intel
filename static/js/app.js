@@ -662,16 +662,42 @@ async function runInvestigation() {
 
     try {
         const webSearchCb = document.getElementById('investWebSearch');
-        const response = await fetchApi('/investigate', {
-            method: 'POST',
-            body: JSON.stringify({
+        const mediaInput = document.getElementById('investMediaFiles');
+        const mediaFiles = mediaInput ? mediaInput.files : null;
+        const hasMedia = mediaFiles && mediaFiles.length > 0;
+
+        var requestBody;
+        var requestHeaders = {};
+
+        if (hasMedia) {
+            // Use FormData for multipart upload when media files are attached
+            var fd = new FormData();
+            fd.append('identifier', subject.value.trim());
+            fd.append('identifier_type', idType);
+            fd.append('platforms', JSON.stringify(platforms));
+            fd.append('depth', depthSelect ? depthSelect.value : 'standard');
+            fd.append('investigation_purpose', purposeTextarea ? purposeTextarea.value.trim() : '');
+            fd.append('web_search', webSearchCb ? webSearchCb.checked : true);
+            for (var i = 0; i < mediaFiles.length; i++) {
+                fd.append('media_files', mediaFiles[i]);
+            }
+            requestBody = fd;
+            // Let browser set multipart Content-Type with boundary
+        } else {
+            requestBody = JSON.stringify({
                 identifier: subject.value.trim(),
                 identifier_type: idType,
                 platforms: platforms,
                 depth: depthSelect ? depthSelect.value : 'standard',
                 investigation_purpose: purposeTextarea ? purposeTextarea.value.trim() : '',
                 web_search: webSearchCb ? webSearchCb.checked : true
-            })
+            });
+        }
+
+        const response = await fetchApi('/investigate', {
+            method: 'POST',
+            body: requestBody,
+            headers: requestHeaders
         });
 
         if (!response.ok) {

@@ -606,12 +606,29 @@ class OSINTClient:
     _MAX_MEDIA_DOWNLOAD = 50
     _MEDIA_DOWNLOAD_TIMEOUT = 10
 
+    # Platforms that strip EXIF/GPS metadata on upload — downloading their
+    # images for EXIF extraction is wasteful.  Only attempt EXIF on media
+    # from non-platform sources (blogs, forums, paste sites, dork results).
+    _EXIF_STRIP_PLATFORMS = {
+        "twitter", "reddit", "instagram", "facebook",
+        "tiktok", "youtube", "mastodon", "telegram",
+    }
+
     def _extract_media_geo(self, posts: list[SocialPost]) -> list[dict[str, Any]]:
-        """Download images from posts' media_urls and extract EXIF GPS."""
+        """Download images from posts' media_urls and extract EXIF GPS.
+
+        Skips images from major social platforms (they strip EXIF metadata).
+        Only attempts extraction on media from non-platform sources like
+        blogs, forums, and web mentions where EXIF may still be intact.
+        """
         image_urls: list[tuple[str, str]] = []
+        skipped_platform = 0
         for p in posts:
             for url in (p.media_urls or []):
                 if not url or not url.startswith("http"):
+                    continue
+                if p.platform.lower() in self._EXIF_STRIP_PLATFORMS:
+                    skipped_platform += 1
                     continue
                 if self._IMAGE_EXT_RE.search(url) or "/photo/" in url:
                     image_urls.append((url, p.platform))
@@ -619,6 +636,12 @@ class OSINTClient:
                     break
             if len(image_urls) >= self._MAX_MEDIA_DOWNLOAD:
                 break
+
+        if skipped_platform:
+            log.info(
+                "Skipped %d platform-hosted images (EXIF stripped by platform)",
+                skipped_platform,
+            )
 
         if not image_urls:
             return []
@@ -668,12 +691,18 @@ class OSINTClient:
     _VIDEO_URL_HINTS = ("/video/", "/videos/", ".mp4", ".webm")
 
     def _extract_video_geo(self, posts: list[SocialPost]) -> list[dict[str, Any]]:
-        """Extract geo signals from video URLs in posts."""
+        """Extract geo signals from video URLs in posts.
+
+        Skips videos from major social platforms (they strip metadata
+        and transcode uploads). Only processes non-platform video sources.
+        """
         if self._video_geo is None:
             return []
 
         video_urls: list[tuple[str, str]] = []
         for p in posts:
+            if p.platform.lower() in self._EXIF_STRIP_PLATFORMS:
+                continue
             for url in (p.media_urls or []):
                 if not url or not url.startswith("http"):
                     continue
@@ -695,6 +724,72 @@ class OSINTClient:
         except Exception as exc:
             log.error("Video geo extraction failed: %s", exc)
             return []
+
+    def extract_geo_from_uploaded_media(
+        self, file_bytes_list: list[tuple[bytes, str]],
+    ) -> list[dict[str, Any]]:
+        """Extract EXIF GPS from user-uploaded media files.
+
+        Unlike platform-hosted media, user uploads may still contain
+        original EXIF metadata including GPS coordinates.
+
+        Args:
+            file_bytes_list: List of (file_bytes, filename) tuples.
+
+        Returns:
+            List of geo point dicts with source='exif_upload'.
+        """
+        image_bytes = []
+        video_paths: list[tuple[str, str]] = []
+        filenames: list[str] = []
+
+        for data, filename in file_bytes_list:
+            ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+            if ext in ("jpg", "jpeg", "png", "tiff", "tif", "webp", "heic"):
+                image_bytes.append(data)
+                filenames.append(filename)
+            elif ext in ("mp4", "avi", "mov", "mkv", "webm", "flv", "m4v"):
+                if self._video_geo is not None:
+                    import tempfile
+                    tmp = tempfile.NamedTemporaryFile(
+                        suffix=f".{ext}", delete=False,
+                    )
+                    tmp.write(data)
+                    tmp.close()
+                    video_paths.append((tmp.name, filename))
+
+        geo_points: list[dict[str, Any]] = []
+
+        if image_bytes:
+            results = self._extractor.extract_geo_from_images(image_bytes)
+            for i, gp in enumerate(results):
+                gp["source"] = "exif_upload"
+                gp["media_url"] = filenames[i] if i < len(filenames) else "upload"
+                gp["platform"] = "user_upload"
+                gp.setdefault("confidence", 0.95)
+                geo_points.append(gp)
+            log.info(
+                "Extracted %d EXIF geo points from %d uploaded images",
+                len(results), len(image_bytes),
+            )
+
+        if video_paths and self._video_geo is not None:
+            try:
+                video_results = self._video_geo.extract_from_urls(video_paths)
+                for vp in video_results:
+                    vp["platform"] = "user_upload"
+                geo_points.extend(video_results)
+            except Exception as exc:
+                log.error("Uploaded video geo extraction failed: %s", exc)
+            finally:
+                import os as _os
+                for path, _ in video_paths:
+                    try:
+                        _os.unlink(path)
+                    except OSError:
+                        pass
+
+        return geo_points
 
     def _geocode_entity_locations(
         self, entities: list[EnrichedEntity]

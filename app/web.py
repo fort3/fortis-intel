@@ -361,6 +361,7 @@ def _findings_to_context(findings_dict: dict) -> str:
 
 
 GEO_CONFIDENCE_FLOOR = float(os.environ.get("GEO_CONFIDENCE_FLOOR", "0.6"))
+MAX_UPLOAD_SIZE_MB = int(os.environ.get("MAX_UPLOAD_SIZE_MB", "50"))
 
 
 def _filter_geo_points(geo_points: list[dict]) -> tuple[list[dict], list[dict]]:
@@ -1312,12 +1313,35 @@ def create_app():
     @limiter.limit("20 per hour")
     def investigate():
         """Full OSINT investigation for a subject identifier."""
-        data = request.get_json(silent=True) or {}
-        identifier = data.get("identifier", "").strip()
-        identifier_type = data.get("identifier_type", "").strip().lower()
-        platforms = data.get("platforms", list(SOCIAL_PLATFORMS.keys()))
-        depth = data.get("depth", "standard").strip().lower()
-        investigation_purpose = data.get("investigation_purpose", "").strip()
+        # Support both JSON and multipart form data (for media uploads)
+        media_files: list[tuple[bytes, str]] = []
+        if request.content_type and "multipart/form-data" in request.content_type:
+            identifier = request.form.get("identifier", "").strip()
+            identifier_type = request.form.get("identifier_type", "").strip().lower()
+            platforms_raw = request.form.get("platforms", "")
+            try:
+                import json as _json
+                platforms = _json.loads(platforms_raw) if platforms_raw else list(SOCIAL_PLATFORMS.keys())
+            except (ValueError, TypeError):
+                platforms = list(SOCIAL_PLATFORMS.keys())
+            depth = request.form.get("depth", "standard").strip().lower()
+            investigation_purpose = request.form.get("investigation_purpose", "").strip()
+            # Collect uploaded media files for EXIF extraction
+            for f in request.files.getlist("media_files"):
+                if f and f.filename:
+                    file_bytes = f.read()
+                    if len(file_bytes) > MAX_UPLOAD_SIZE_MB * 1024 * 1024:
+                        continue
+                    media_files.append((file_bytes, f.filename))
+            if media_files:
+                print(f"[GEO] {len(media_files)} media files uploaded for EXIF extraction")
+        else:
+            data = request.get_json(silent=True) or {}
+            identifier = data.get("identifier", "").strip()
+            identifier_type = data.get("identifier_type", "").strip().lower()
+            platforms = data.get("platforms", list(SOCIAL_PLATFORMS.keys()))
+            depth = data.get("depth", "standard").strip().lower()
+            investigation_purpose = data.get("investigation_purpose", "").strip()
 
         # Input validation
         if not identifier:
@@ -1380,6 +1404,18 @@ def create_app():
         except Exception as exc:
             print(f"[ERROR] OSINT investigation failed: {exc}")
             return jsonify({"error": "OSINT collection failed. Please try again."}), 500
+
+        # ── Phase 2b: Process uploaded media for EXIF geo ─────────────
+        if media_files:
+            try:
+                upload_geo = osint_client.extract_geo_from_uploaded_media(media_files)
+                if upload_geo:
+                    existing_geo = findings_dict.get("geo_points", [])
+                    existing_geo.extend(upload_geo)
+                    findings_dict["geo_points"] = existing_geo
+                    print(f"[GEO] Added {len(upload_geo)} geo points from uploaded media")
+            except Exception as exc:
+                print(f"[WARN] Uploaded media geo extraction failed (non-fatal): {exc}")
 
         # ── Phase 3: Context Preparation ──────────────────────────────
         osint_context = _findings_to_context(findings_dict)
