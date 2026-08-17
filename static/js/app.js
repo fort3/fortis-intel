@@ -1817,6 +1817,13 @@ function renderMap(mapData) {
                         '<span style="width:10px;height:10px;border-radius:50%;background:' + usedSources[src] + ';display:inline-block;"></span>' +
                         '<span>' + label + '</span></div>';
                 });
+                var accepted = mapData.points_accepted || mapData.markers.length;
+                var rejected = mapData.points_rejected || 0;
+                if (rejected > 0) {
+                    html += '<div style="margin-top:6px;padding-top:6px;border-top:1px solid #1e293b;color:#e2e8f0;">' +
+                        '<span style="color:#22c55e;">' + accepted + ' accepted</span>' +
+                        ' &middot; <span style="color:#ef4444;">' + rejected + ' rejected</span></div>';
+                }
                 div.innerHTML = html;
                 L.DomEvent.disableClickPropagation(div);
                 return div;

@@ -270,8 +270,13 @@ def _findings_to_context(findings_dict: dict) -> str:
 
     geo_points = findings_dict.get("geo_points", [])
     if geo_points:
-        parts.append(f"\n=== Geo Points ({len(geo_points)}) ===")
-        for gp in geo_points[:10]:
+        credible_geo = [
+            gp for gp in geo_points
+            if isinstance(gp.get("confidence", 0), (int, float))
+            and gp.get("confidence", 0) >= GEO_CONFIDENCE_FLOOR
+        ]
+        parts.append(f"\n=== Geo Points ({len(credible_geo)} accepted / {len(geo_points)} total) ===")
+        for gp in credible_geo[:10]:
             conf = gp.get("confidence", 0)
             conf_str = f"{conf:.0%}" if isinstance(conf, float) else str(conf)
             parts.append(
@@ -355,8 +360,30 @@ def _findings_to_context(findings_dict: dict) -> str:
     return "\n".join(parts)
 
 
+GEO_CONFIDENCE_FLOOR = float(os.environ.get("GEO_CONFIDENCE_FLOOR", "0.6"))
+
+
+def _filter_geo_points(geo_points: list[dict]) -> tuple[list[dict], list[dict]]:
+    """Split geo points into accepted (above confidence floor) and rejected.
+
+    Returns ``(accepted, rejected)`` — only accepted points should appear
+    on the map and in the LLM report context.
+    """
+    accepted, rejected = [], []
+    for gp in geo_points:
+        conf = gp.get("confidence", 0)
+        if isinstance(conf, (int, float)) and conf >= GEO_CONFIDENCE_FLOOR:
+            accepted.append(gp)
+        else:
+            rejected.append(gp)
+    return accepted, rejected
+
+
 def _geo_points_to_text(geo_points: list[dict]) -> str:
-    """Convert geo data points to text context for chain input."""
+    """Convert geo data points to text context for chain input.
+
+    Only points that passed the confidence floor should be passed here.
+    """
     if not geo_points:
         return "No geolocation data available."
     parts = []
@@ -821,7 +848,8 @@ def _process_single_identifier(identifier, identifier_type, platforms, depth,
     osint_context = _findings_to_context(findings_dict)
     if initial_dork_context:
         osint_context += "\n\n--- INITIAL WEB COLLECTION ---\n" + initial_dork_context
-    geo_context = _geo_points_to_text(findings_dict.get("geo_points", []))
+    batch_accepted_geo, _ = _filter_geo_points(findings_dict.get("geo_points", []))
+    geo_context = _geo_points_to_text(batch_accepted_geo)
 
     chain = get_batch_item_chain()
     chain_input = {
@@ -1355,8 +1383,23 @@ def create_app():
 
         # ── Phase 3: Context Preparation ──────────────────────────────
         osint_context = _findings_to_context(findings_dict)
-        geo_data = findings_dict.get("geo_points", [])
-        geo_context = _geo_points_to_text(geo_data)
+        geo_data_raw = findings_dict.get("geo_points", [])
+
+        # Filter geo points: only those above the confidence floor are
+        # accepted.  Rejected points (NLP mentions, low-confidence OCR,
+        # etc.) are excluded from the map AND the LLM report context.
+        accepted_geo, rejected_geo = _filter_geo_points(geo_data_raw)
+        if rejected_geo:
+            print(
+                f"[GEO] Rejected {len(rejected_geo)}/{len(geo_data_raw)} geo points "
+                f"below {GEO_CONFIDENCE_FLOOR:.0%} confidence: "
+                + ", ".join(
+                    f"{gp.get('source','?')}({gp.get('confidence',0):.0%})"
+                    for gp in rejected_geo[:10]
+                )
+            )
+        geo_context = _geo_points_to_text(accepted_geo)
+
         # Build entity graph
         entities_data = findings_dict.get("entities", [])
         try:
@@ -1379,15 +1422,56 @@ def create_app():
         except Exception as exc:
             print(f"[WARN] Relationship persistence failed (non-fatal): {exc}")
 
-        # Build map data in the shape the frontend renderMap() expects
+        # Build map data — ONLY from accepted geo points.
+        # Run triangulation first to identify spatial outliers via DBSCAN,
+        # then build markers from the cluster points only.
         map_data = {}
         try:
-            if geo_data:
-                markers = []
-                for gp in geo_data:
+            if accepted_geo:
+                from app.geo_client import GeoDataPoint as GeoDP
+
+                # Convert to GeoDataPoint objects for triangulation
+                tri_points = []
+                for gp in accepted_geo:
                     lat = gp.get("lat")
                     lon = gp.get("lon") or gp.get("lng")
                     if lat is None or lon is None:
+                        continue
+                    tri_points.append(GeoDP(
+                        lat=float(lat), lon=float(lon),
+                        label=gp.get("label") or gp.get("name", ""),
+                        source=gp.get("source", "osint"),
+                        confidence=gp.get("confidence", 0.5),
+                        timestamp=gp.get("timestamp", ""),
+                    ))
+
+                # Run triangulation to cluster and reject spatial outliers
+                tri_result = None
+                outlier_coords: set[tuple[float, float]] = set()
+                if len(tri_points) >= 2:
+                    try:
+                        tri_result = _get_geo_client().triangulate(tri_points)
+                        if tri_result and tri_result.outliers:
+                            outlier_coords = {
+                                (round(o.lat, 6), round(o.lon, 6))
+                                for o in tri_result.outliers
+                            }
+                            print(
+                                f"[GEO] Triangulation rejected {len(tri_result.outliers)} "
+                                f"spatial outliers via {tri_result.method}"
+                            )
+                    except Exception as tri_exc:
+                        print(f"[DEBUG] Triangulation skipped: {tri_exc}")
+
+                # Build markers from accepted + non-outlier points only
+                markers = []
+                for gp in accepted_geo:
+                    lat = gp.get("lat")
+                    lon = gp.get("lon") or gp.get("lng")
+                    if lat is None or lon is None:
+                        continue
+                    coord_key = (round(float(lat), 6), round(float(lon), 6))
+                    if coord_key in outlier_coords:
                         continue
                     desc_parts = []
                     if gp.get("method"):
@@ -1404,6 +1488,7 @@ def create_app():
                         "confidence": gp.get("confidence", 0.5),
                         "description": " | ".join(desc_parts) if desc_parts else "",
                     })
+
                 if markers:
                     lats = [m["lat"] for m in markers]
                     lngs = [m["lng"] for m in markers]
@@ -1414,30 +1499,22 @@ def create_app():
                             [min(lats), min(lngs)],
                             [max(lats), max(lngs)],
                         ) if len(markers) > 1 else 10,
+                        "points_rejected": len(rejected_geo) + len(outlier_coords),
+                        "points_accepted": len(markers),
                     }
-                    if len(markers) >= 2:
-                        try:
-                            from app.geo_client import GeoDataPoint as GeoDP
-                            tri_points = [
-                                GeoDP(
-                                    lat=m["lat"], lon=m["lng"],
-                                    label=m.get("label", ""),
-                                    source=m.get("source_type", "osint"),
-                                    confidence=m.get("confidence", 0.5),
-                                )
-                                for m in markers
-                            ]
-                            tri_result = _get_geo_client().triangulate(tri_points)
-                            if tri_result and tri_result.center_lat:
-                                map_data["triangulation"] = {
-                                    "center": {"lat": tri_result.center_lat, "lng": tri_result.center_lon},
-                                    "confidence_radius": tri_result.radius_m,
-                                    "source_points": [{"lat": m["lat"], "lng": m["lng"]} for m in markers],
-                                    "method": tri_result.method,
-                                    "confidence": tri_result.confidence,
-                                }
-                        except Exception as tri_exc:
-                            print(f"[DEBUG] Auto-triangulation skipped: {tri_exc}")
+                    if tri_result and tri_result.center_lat:
+                        map_data["triangulation"] = {
+                            "center": {"lat": tri_result.center_lat, "lng": tri_result.center_lon},
+                            "confidence_radius": tri_result.radius_m,
+                            "source_points": [{"lat": m["lat"], "lng": m["lng"]} for m in markers],
+                            "method": tri_result.method,
+                            "confidence": tri_result.confidence,
+                        }
+                    print(
+                        f"[GEO] Map: {len(markers)} markers rendered, "
+                        f"{len(rejected_geo)} below confidence, "
+                        f"{len(outlier_coords)} spatial outliers removed"
+                    )
         except Exception as exc:
             print(f"[WARN] Map data construction failed (non-fatal): {exc}")
 
@@ -1638,7 +1715,8 @@ def create_app():
         osint_context = _findings_to_context(findings_dict)
         if initial_dork_context:
             osint_context += "\n\n--- INITIAL WEB COLLECTION ---\n" + initial_dork_context
-        geo_context = _geo_points_to_text(findings_dict.get("geo_points", []))
+        enrich_accepted_geo, _ = _filter_geo_points(findings_dict.get("geo_points", []))
+        geo_context = _geo_points_to_text(enrich_accepted_geo)
 
         # Extract entities from document for cross-referencing
         entities_data = findings_dict.get("entities", [])
@@ -1840,11 +1918,23 @@ def create_app():
                 f"Point count: {tri_dict.get('point_count')}"
             )
 
-        # Build map data in the shape the frontend renderMap() expects
+        # Build map data — use only accepted (non-outlier) points from
+        # the triangulation.  Outliers and low-confidence points are excluded.
         map_data = {}
         try:
+            # Determine which points are accepted by the geolocation assessment
+            if triangulation and triangulation.cluster_points:
+                accepted_pts = triangulation.cluster_points
+                outlier_count = len(triangulation.outliers) if triangulation.outliers else 0
+            else:
+                accepted_pts = [
+                    gp for gp in geo_points
+                    if gp.confidence >= GEO_CONFIDENCE_FLOOR
+                ] or geo_points
+                outlier_count = 0
+
             markers = []
-            for gp in geo_points:
+            for gp in accepted_pts:
                 markers.append({
                     "lat": gp.lat,
                     "lng": gp.lon,
@@ -1854,34 +1944,36 @@ def create_app():
                     "description": gp.raw.get("city", "") if isinstance(gp.raw, dict) else "",
                 })
 
-            lats = [gp.lat for gp in geo_points]
-            lons = [gp.lon for gp in geo_points]
-            center = [sum(lats) / len(lats), sum(lons) / len(lons)] if lats else [20, 0]
+            if markers:
+                lats = [m["lat"] for m in markers]
+                lngs = [m["lng"] for m in markers]
+                center = [sum(lats) / len(lats), sum(lngs) / len(lngs)]
 
-            map_data = {
-                "markers": markers,
-                "center": center,
-                "zoom": geo_client._auto_zoom(
-                    [min(lats), min(lons)],
-                    [max(lats), max(lons)],
-                ) if len(lats) > 1 else 10,
-            }
-
-            if triangulation and triangulation.center_lat and triangulation.center_lon:
-                source_pts = [
-                    {"lat": gp.lat, "lng": gp.lon}
-                    for gp in (triangulation.cluster_points or geo_points)
-                ]
-                map_data["triangulation"] = {
-                    "center": {
-                        "lat": triangulation.center_lat,
-                        "lng": triangulation.center_lon,
-                    },
-                    "confidence_radius": triangulation.radius_m or 500,
-                    "source_points": source_pts,
-                    "method": triangulation.method,
-                    "confidence": triangulation.confidence,
+                map_data = {
+                    "markers": markers,
+                    "center": center,
+                    "zoom": geo_client._auto_zoom(
+                        [min(lats), min(lngs)],
+                        [max(lats), max(lngs)],
+                    ) if len(markers) > 1 else 10,
+                    "points_accepted": len(markers),
+                    "points_rejected": len(geo_points) - len(accepted_pts),
                 }
+
+                if triangulation and triangulation.center_lat and triangulation.center_lon:
+                    map_data["triangulation"] = {
+                        "center": {
+                            "lat": triangulation.center_lat,
+                            "lng": triangulation.center_lon,
+                        },
+                        "confidence_radius": triangulation.radius_m or 500,
+                        "source_points": [{"lat": m["lat"], "lng": m["lng"]} for m in markers],
+                        "method": triangulation.method,
+                        "confidence": triangulation.confidence,
+                    }
+
+                if outlier_count:
+                    print(f"[GEO] Triangulate: {outlier_count} spatial outliers removed from map")
         except Exception as exc:
             print(f"[WARN] Map data construction failed (non-fatal): {exc}")
 

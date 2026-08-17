@@ -448,6 +448,18 @@ To disable authentication entirely during development, set `AUTH_ENABLED=false` 
 
 **Free tier:** GeoLite2 is free with registration. Updated every 2 weeks. Falls back to ipapi.co free tier if no database is present.
 
+### Geolocation Quality Control
+
+| Env Variable | Description | Default |
+|---|---|---|
+| `GEO_CONFIDENCE_FLOOR` | Minimum confidence to accept a geo point for map/report (0.0-1.0) | `0.6` |
+
+The geolocation assessment applies two-stage filtering:
+1. **Confidence floor** — points below `GEO_CONFIDENCE_FLOOR` are rejected (removes NLP text mentions, low-confidence OCR, unreliable IP lookups)
+2. **Spatial outlier rejection** — DBSCAN clustering identifies and removes geographic outliers that don't cluster with the majority of evidence
+
+Only accepted points appear on the map and in the LLM analysis context. Rejected point counts are shown in the map legend and server logs.
+
 ---
 
 ### Google Geocoding (Optional)
