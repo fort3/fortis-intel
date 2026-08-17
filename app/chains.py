@@ -325,6 +325,7 @@ Use the INVESTIGATION PURPOSE to focus your queries. For example:
 - If the purpose mentions background check, focus on professional profiles, news, public records, education
 - If the purpose mentions threat intel, focus on security forums, paste sites, dark web mentions, breach data
 - If the purpose mentions social engineering, focus on social media presence, personal details, organisational links
+- If the purpose mentions security audit, pentest, or vulnerability assessment AND the identifier is a DOMAIN or IP, focus on PASSIVE RECON: exposed documents (filetype:pdf/doc/xlsx), configuration files (filetype:xml/json/yaml), API endpoints (inurl:api, intitle:swagger), directory listings (intitle:"index of"), subdomains (site:crt.sh), DNS records (site:dnsdumpster.com, site:securitytrails.com), admin panels (intitle:login/admin), paste site leaks, certificate transparency, and threat intelligence aggregators. All recon must be strictly passive — only query publicly indexed and cached data, never perform active scanning or direct probing of the target.
 - If the purpose is generic or empty, perform a broad discovery sweep
 
 If TARGET PLATFORMS is "none" or empty, perform a BROAD WEB SWEEP — do not use platform-specific site: operators. Instead, search across the open web (forums, paste sites, news, public records, code repositories, professional profiles). After your queries, add a PLATFORM RECOMMENDATIONS section suggesting which social media platforms the OSINT tools should check based on what the identifier type suggests.
@@ -368,11 +369,34 @@ For DOMAIN identifiers:
 - FIRST: "example.com" -site:example.com (mentions outside the domain)
 - "example.com" organisation OR company OR contact
 - site:example.com (what the domain hosts)
+- PASSIVE RECON (all queries below use only publicly indexed data — no active scanning):
+  - site:example.com filetype:pdf (indexed documents)
+  - site:example.com filetype:xml OR filetype:json (exposed config files)
+  - site:example.com inurl:api (indexed API endpoints)
+  - site:example.com intitle:swagger (exposed API documentation)
+  - site:example.com intitle:"index of" (directory listings)
+  - "example.com" site:crt.sh (certificate transparency — subdomains)
+  - "example.com" site:dnsdumpster.com (passive DNS records)
+  - "example.com" site:securitytrails.com (historical DNS)
+  - "example.com" site:pastebin.com (paste site references)
+  - site:example.com intitle:login OR intitle:admin (admin panels)
+  NOTE: All domain recon is strictly passive — searching public indexes and cached data only.
 
 For IP identifiers:
 - FIRST: "1.2.3.4" (exact IP in quotes)
 - "1.2.3.4" abuse OR blocklist OR security
 - "1.2.3.4" site:shodan.io OR site:censys.io
+- PASSIVE RECON (all queries below use only publicly indexed data — no active scanning):
+  - "1.2.3.4" site:censys.io (host and certificate intelligence)
+  - "1.2.3.4" site:greynoise.io (noise/scanner classification)
+  - "1.2.3.4" site:urlscan.io (hosted content and URL scans)
+  - "1.2.3.4" site:securitytrails.com (historical DNS for IP)
+  - "1.2.3.4" site:viewdns.info (reverse DNS lookup)
+  - "1.2.3.4" site:crt.sh (SSL certificates)
+  - "1.2.3.4" site:ipinfo.io OR site:bgp.he.net (ASN and network data)
+  - "1.2.3.4" "reverse dns" OR "ptr record"
+  - "1.2.3.4" blacklist OR reputation
+  NOTE: All IP recon is strictly passive — querying public threat intel and DNS aggregator indexes only. No port scanning, no direct connections to the target IP.
 
 Output EXACTLY in this format, one per line (no other text before or after):
 DORK: <query> | PURPOSE: <what this query aims to discover> | TARGET: <which aspect of the subject>
@@ -383,7 +407,7 @@ DORK_GAP_ANALYSIS_SYSTEM_PROMPT = """You are an OSINT analyst reviewing an inves
 
 INVESTIGATION PURPOSE: {investigation_purpose}
 
-Use the investigation purpose to prioritise which gaps matter most. For example, a fraud investigation should prioritise financial and legal gaps over social media presence gaps.
+Use the investigation purpose to prioritise which gaps matter most. For example, a fraud investigation should prioritise financial and legal gaps over social media presence gaps. For security audits or pentests against domains/IPs, prioritise gaps in passive recon coverage: missing subdomain enumeration, unexplored certificate transparency data, undiscovered exposed documents or API endpoints, missing DNS history, and unchecked threat intelligence sources. All gap-filling must remain strictly passive — no active scanning or direct target probing.
 
 Analyse the investigation report and raw OSINT data. Identify:
 - Platforms that returned no data or very thin results

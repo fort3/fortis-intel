@@ -481,16 +481,47 @@ def _run_initial_dorking(
             ("directory OR lookup OR owner", "Phone directory/lookup"),
         ],
         "domain": [
+            # General OSINT
             ("-site:{id}", "Mentions outside the domain itself"),
             ("site:linkedin.com", "Organisation LinkedIn page"),
             ("site:github.com", "Associated code repositories"),
             ("site:crunchbase.com OR site:dnb.com", "Business intelligence"),
+            # Passive recon — exposed documents
+            ("site:{id} filetype:pdf", "Indexed PDF documents (passive)"),
+            ("site:{id} filetype:doc OR filetype:xlsx", "Indexed Office documents (passive)"),
+            ("site:{id} filetype:xml OR filetype:json", "Exposed configuration files (passive)"),
+            ("site:{id} filetype:log OR filetype:sql OR filetype:bak", "Exposed logs/backups (passive)"),
+            # Passive recon — API surface
+            ("site:{id} inurl:api", "Indexed API endpoints (passive)"),
+            ("site:{id} intitle:swagger OR intitle:\"api docs\"", "Exposed API documentation (passive)"),
+            # Passive recon — subdomains & DNS via passive aggregators
+            ("site:crt.sh", "Certificate transparency — subdomain enumeration (passive)"),
+            ("site:dnsdumpster.com", "DNS records and subdomains (passive)"),
+            ("site:securitytrails.com", "Historical DNS and subdomain data (passive)"),
+            # Passive recon — infrastructure exposure
+            ("site:{id} intitle:\"index of\"", "Exposed directory listings (passive)"),
+            ("site:{id} intitle:login OR intitle:admin", "Login and admin panels (passive)"),
+            # Leak/paste references
+            ("site:pastebin.com OR site:paste.ee", "Paste site references (passive)"),
         ],
         "ip": [
-            ("site:shodan.io", "Shodan device intelligence"),
+            # General threat intel
+            ("site:shodan.io", "Shodan device intelligence (passive)"),
             ("site:abuseipdb.com", "Abuse reports"),
             ("site:virustotal.com", "Security analysis"),
             ("abuse OR blocklist OR security", "Security references"),
+            # Passive recon — host & certificate intel
+            ("site:censys.io", "Censys certificate and host data (passive)"),
+            ("site:greynoise.io", "Internet noise classification (passive)"),
+            ("site:urlscan.io", "URL scan results and hosted content (passive)"),
+            # Passive recon — DNS & network
+            ("site:securitytrails.com", "Historical DNS and hosting data (passive)"),
+            ("site:viewdns.info", "Reverse DNS and hosting lookup (passive)"),
+            ("\"reverse dns\" OR \"ptr record\"", "Reverse DNS / PTR records (passive)"),
+            ("site:crt.sh", "Certificate transparency logs (passive)"),
+            # Passive recon — reputation & ASN
+            ("site:ipinfo.io OR site:bgp.he.net", "Network and ASN intelligence (passive)"),
+            ("blacklist OR reputation OR malicious", "IP reputation references"),
         ],
         "keyword": [
             ("site:reddit.com", "Reddit discussions"),

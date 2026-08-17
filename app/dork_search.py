@@ -19,6 +19,7 @@ DORK_RATE_PER_MINUTE = int(os.environ.get("DORK_RATE_PER_MINUTE", "20"))
 DORK_RATE_PER_HOUR = int(os.environ.get("DORK_RATE_PER_HOUR", "60"))
 DORK_SEARCH_REGION = os.environ.get("DORK_SEARCH_REGION", "wt-wt")
 DORK_SEARCH_BACKEND = os.environ.get("DORK_SEARCH_BACKEND", "auto")
+DORK_SEARCH_TIMEOUT = int(os.environ.get("DORK_SEARCH_TIMEOUT", "30"))
 
 # ---------------------------------------------------------------------------
 # Data classes
@@ -145,13 +146,13 @@ class DorkSearchClient:
             if DORK_SEARCH_BACKEND != "auto":
                 search_kwargs["backend"] = DORK_SEARCH_BACKEND
 
-            with DDGS() as ddgs:
-                for r in ddgs.text(**search_kwargs):
-                    results.append(DorkResult(
-                        title=r.get("title", ""),
-                        url=r.get("href", ""),
-                        snippet=r.get("body", ""),
-                    ))
+            ddgs = DDGS(timeout=DORK_SEARCH_TIMEOUT)
+            for r in ddgs.text(**search_kwargs):
+                results.append(DorkResult(
+                    title=r.get("title", ""),
+                    url=r.get("href", ""),
+                    snippet=r.get("body", ""),
+                ))
             log.info("Dork search returned %d results for: %s", len(results), query[:80])
             return results
 
@@ -167,13 +168,13 @@ class DorkSearchClient:
                 except ImportError:
                     from duckduckgo_search import DDGS
                 results = []
-                with DDGS() as ddgs:
-                    for r in ddgs.text(query, max_results=max_results):
-                        results.append(DorkResult(
-                            title=r.get("title", ""),
-                            url=r.get("href", ""),
-                            snippet=r.get("body", ""),
-                        ))
+                ddgs = DDGS(timeout=DORK_SEARCH_TIMEOUT)
+                for r in ddgs.text(query, max_results=max_results):
+                    results.append(DorkResult(
+                        title=r.get("title", ""),
+                        url=r.get("href", ""),
+                        snippet=r.get("body", ""),
+                    ))
                 return results
             except Exception as exc2:
                 log.error("Dork search fallback failed for %r: %s", query[:80], exc2)
