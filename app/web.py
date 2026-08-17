@@ -993,6 +993,7 @@ def _process_single_identifier(identifier, identifier_type, platforms, depth,
         "subject_identifier": clean_id,
         "identifier_type": identifier_type,
         "elevated_authorization": elevated,
+        "purpose": "OSINT batch investigation",
     }
 
     analysis = ""
@@ -1765,6 +1766,7 @@ def create_app():
             "subject_identifier": clean_id,
             "identifier_type": identifier_type,
             "elevated_authorization": _is_admin(),
+            "purpose": investigation_purpose or "OSINT investigation",
         }
 
         result = gated_invoke(
@@ -2222,6 +2224,7 @@ def create_app():
             "metadata_summary": metadata_summary,
             "subject_context": subject_context or "No additional subject context provided.",
             "elevated_authorization": _is_admin(),
+            "purpose": "OSINT geolocation triangulation",
         }
 
         result = gated_invoke(
@@ -2275,7 +2278,12 @@ def create_app():
         """Batch OSINT investigation for multiple identifiers."""
         data = request.get_json(silent=True) or {}
         identifiers = data.get("identifiers", [])
+        identifier_type = data.get("identifier_type", "auto")
         depth = data.get("depth", "quick").strip().lower()
+
+        if isinstance(identifiers, str):
+            lines = [l.strip() for l in identifiers.replace(",", "\n").split("\n") if l.strip()]
+            identifiers = [{"identifier": l, "identifier_type": identifier_type} for l in lines]
 
         if not identifiers or not isinstance(identifiers, list):
             return jsonify({"error": "identifiers list is required"}), 400
@@ -2365,6 +2373,7 @@ def create_app():
                 "cross_entity_relationships": "Cross-entity analysis pending (Phase 0).",
                 "geo_aggregate": "Geographic aggregate data pending (Phase 0).",
                 "elevated_authorization": _is_admin(),
+                "purpose": "OSINT batch investigation synthesis",
             }
 
             try:

@@ -928,11 +928,18 @@ async function runBatchInvestigation() {
                 headers: {}
             });
         } else {
+            var idType = idTypeSelect ? idTypeSelect.value : 'auto';
+            var lines = rawText.split(/[\n,]+/).map(function(l) { return l.trim(); }).filter(Boolean);
+            var identifiersList = lines.map(function(line) {
+                return {
+                    identifier: line,
+                    identifier_type: idType === 'auto' ? autoDetectIdentifierType(line) : idType
+                };
+            });
             response = await fetchApi('/batch-investigate', {
                 method: 'POST',
                 body: JSON.stringify({
-                    identifiers: rawText,
-                    identifier_type: idTypeSelect ? idTypeSelect.value : 'auto',
+                    identifiers: identifiersList,
                     platforms: platforms
                 })
             });
