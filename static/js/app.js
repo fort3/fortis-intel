@@ -643,11 +643,6 @@ async function runInvestigation() {
         platforms.push(cb.value);
     });
 
-    if (platforms.length === 0) {
-        showToast('Please select at least one platform.', 'warning');
-        return;
-    }
-
     // Determine identifier type
     var idType = idTypeSelect ? idTypeSelect.value : 'auto';
     if (idType === 'auto') {
@@ -658,8 +653,11 @@ async function runInvestigation() {
     showResults();
     var content = document.getElementById('resultsContent');
     if (content) {
+        var scopeMsg = platforms.length > 0
+            ? 'across ' + platforms.length + ' platforms'
+            : 'via web dorking (all platforms)';
         content.innerHTML = '<div class="result-section"><p>Investigating <strong>' +
-            escapeHtml(subject.value.trim()) + '</strong> across ' + platforms.length + ' platforms...</p></div>';
+            escapeHtml(subject.value.trim()) + '</strong> ' + scopeMsg + '...</p></div>';
     }
 
     try {

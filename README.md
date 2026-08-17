@@ -18,6 +18,7 @@ An OSINT-driven intelligence and analysis platform for open-source intelligence 
 - **RAG Knowledge Base** -- Upload PDF and Markdown reports, index them with FAISS vectorstore, and ask natural-language questions with automatic KB feedback from previous analyses
 - **Analytical Scenarios** -- Generate pattern-of-life, network mapping, location prediction, and influence analysis from collected OSINT data with entity graph context
 - **Feed Monitoring** -- Set up keyword, username, and hashtag monitors with Celery background tasks and automatic enrichment
+- **GDPR & NIST CSF 2.0 Compliance** -- Tiered data retention, right to erasure (Art. 17), GDPR Art. 30 processing records, NIST CSF function mapping, system credential leak detection (subject PII is never blocked)
 - **ForgeChain Governance** -- Every LLM request passes through a 3-verifier consensus gate (rule, safety, consistency) before execution
 - **Elevated Authorization** -- Investigation endpoints support elevated authorization for privileged analysts handling sensitive cases
 - **Entity Relationship Graphs** -- Cytoscape.js-powered interactive graphs with click-to-drill-down entity detail popups; graph context fed directly to LLM for entity-aware analysis
@@ -64,6 +65,8 @@ An OSINT-driven intelligence and analysis platform for open-source intelligence 
 | Authentication | Google OAuth 2.0 |
 | Encryption | Fernet (ForgeChain token minting) |
 | Rate Limiting | Flask-Limiter |
+| Data Protection | GDPR Art. 17/30 compliance, tiered retention, system credential leak detection |
+| Compliance | NIST CSF 2.0 function mapping (GV, PR, DE, RS, RC) |
 
 ---
 
@@ -509,6 +512,15 @@ Configure either Slack, email, or both. Feed monitor findings will be sent as al
 | `DORK_MAX_SCRAPE_URLS` | Max URLs to deep-scrape per investigation (HIGH + MODERATE only) | `5` |
 | `SERPAPI_API_KEY` | Optional -- SerpAPI key for Google search results instead of DuckDuckGo | (none) |
 
+### Data Protection & Compliance Settings
+
+| Env Variable | Description | Default |
+|---|---|---|
+| `DATA_RETENTION_DAYS` | Base retention period for reports (PUBLIC/INTERNAL level) | `90` |
+| `CACHE_TTL_HOURS` | In-memory report cache TTL before automatic eviction | `24` |
+
+Retention is tiered by classification level: PUBLIC and INTERNAL use the full `DATA_RETENTION_DAYS`, RESTRICTED uses half, and CONFIDENTIAL uses one-third. Reports past their retention period are hard-deleted from SQLite on startup and via `POST /compliance/retention`.
+
 ---
 
 ### Feed Monitor & Knowledge Base Settings
@@ -644,7 +656,7 @@ Export reports in multiple formats:
 
 Every LLM invocation passes through ForgeChain, a 3-verifier consensus gate:
 
-1. **Rule Verifier** -- Checks inputs against OSINT-specific policies (prompt injection detection, minor protection, harassment detection, purpose documentation, identifier validation, sensitive data scanning)
+1. **Rule Verifier** -- Checks inputs against OSINT-specific policies (prompt injection detection, minor protection, harassment detection, purpose documentation, identifier validation, system credential leak detection). Note: subject PII (emails, SSNs, credit cards, etc.) is never blocked -- collecting that data is the core purpose of OSINT
 2. **Safety Verifier** (LLM-based) -- DeepSeek v4-pro evaluates the request for safety concerns, social engineering, and ethical compliance
 3. **Consistency Verifier** (LLM-based) -- DeepSeek v4-pro checks that the request is consistent with the stated intent
 
@@ -665,15 +677,26 @@ Both pipelines save their analysis results to the Knowledge Base after completio
 
 ### Web Intelligence Pipeline
 
-The web intelligence feature runs a 4-phase dork search pipeline at the end of each investigation:
+Web intelligence operates at **both ends** of the intelligence lifecycle -- collection first, validation last:
 
-1. **Gap Analysis Chain** (`dork_gap_analysis_chain`) -- Reviews the investigation report and raw OSINT data to identify intelligence gaps (platforms with no results, unanswered questions, thin coverage). Generates 3-5 targeted Google dork queries to fill those gaps.
-2. **Validation Chain** (`dork_validation_chain`) -- Generates 3-5 dork queries to cross-reference key findings against independent public sources.
-3. **Synthesis Chain** (`dork_synthesis_chain`) -- Integrates search results into the investigation. Rates each result as NEW_INTEL / CONFIRMED / CONTRADICTED / INCONCLUSIVE with HIGH / MODERATE / LOW confidence. Flags HIGH and MODERATE results for deep scraping.
-4. **Deep Synthesis Chain** (`dork_deep_synthesis_chain`) -- Only runs when deep scraping returns content. Enriches findings with full-page content from the highest-confidence URLs.
+**Phase 1: Initial Dorking (Collection)** -- Before OSINT collection begins, the LLM generates targeted dork queries based on the identifier type and selected platforms. Results inform the OSINT client's data gathering. If no platforms are selected, a broad web sweep is performed and the LLM recommends which platforms to check.
+
+**Phase 2: OSINT Collection** -- `osint_client.investigate()` runs with initial dork results available as context.
+
+**Phase 3: LLM Analysis** -- The investigation chain synthesises both dork results and platform OSINT data.
+
+**Phase 4: Final Dorking (Validation + Gap Analysis)** -- After analysis, a 4-step pipeline validates and enriches:
+1. **Gap Analysis Chain** (`dork_gap_analysis_chain`) -- Identifies intelligence gaps and generates fill queries
+2. **Validation Chain** (`dork_validation_chain`) -- Cross-references key findings against independent sources
+3. **Synthesis Chain** (`dork_synthesis_chain`) -- Integrates results, rates as NEW_INTEL / CONFIRMED / CONTRADICTED / INCONCLUSIVE with HIGH / MODERATE / LOW confidence
+4. **Deep Synthesis Chain** (`dork_deep_synthesis_chain`) -- Enriches findings with full-page content from HIGH/MODERATE confidence URLs
+
+**Phase 5: Dissemination** -- Final report includes both initial discovery and validation results.
+
+The pipeline uses 5 LLM chains total: `dork_collection_chain`, `dork_gap_analysis_chain`, `dork_validation_chain`, `dork_synthesis_chain`, `dork_deep_synthesis_chain`. All go through ForgeChain governance. Initial dorking is also wired into `/enrich` and `/batch-investigate`.
 
 **Security layers:**
-- All 4 chains go through ForgeChain's 3-verifier consensus gate
+- All 5 chains go through ForgeChain's 3-verifier consensus gate
 - Query sanitization blocks dangerous operators (`cache:`, `link:`), embedded URLs, base64 payloads, shell metacharacters (max 256 chars)
 - Search results and scraped content are NOT in `trusted_keys` -- full injection pattern scan applied
 - Only DuckDuckGo search API is called -- result URLs are only followed for HIGH/MODERATE confidence deep scraping
@@ -789,6 +812,56 @@ The investigation pipeline (`OSINTClient.investigate()`) runs geo extraction in 
 3. `_extract_video_geo()` -- Video keyframe analysis (requires OpenCV)
 4. `_geocode_entity_locations()` -- NLP-extracted place names geocoded to coordinates
 
+### Data Protection & Compliance
+
+The platform implements GDPR and NIST CSF 2.0 controls for lawful OSINT processing:
+
+**GDPR compliance:**
+
+| Article | Implementation |
+|---|---|
+| Art. 5 (Purpose limitation) | Investigation purpose field required for all investigation endpoints; data scoped to session IDs |
+| Art. 5 (Data minimisation) | Depth controls (quick/standard/deep) limit collection scope; LLM analysis filters noise |
+| Art. 6 (Lawful basis) | Investigation purpose documents legitimate interest or public task basis |
+| Art. 17 (Right to erasure) | `POST /data/subject-delete` hard-deletes all data for a subject across all stores |
+| Art. 25 (Data protection by design) | Sensitivity classification (PUBLIC/INTERNAL/RESTRICTED/CONFIDENTIAL) with tiered retention |
+| Art. 30 (Processing records) | `GET /compliance/processing-record` generates full GDPR Art. 30 record from current data state |
+| Art. 32 (Security of processing) | ForgeChain governance, authentication, rate limiting, input sanitisation, injection scanning |
+
+**PII handling policy:** Subject PII (emails, SSNs, credit cards, phone numbers, addresses, etc.) is **never blocked** by ForgeChain. An OSINT tool's purpose is to collect and analyse all publicly available data about investigation subjects. Only the **platform's own credentials** (API keys, private keys) are detected and blocked to prevent system secret leakage.
+
+**Tiered data retention:**
+
+| Classification | Retention Period | Description |
+|---|---|---|
+| PUBLIC | `DATA_RETENTION_DAYS` (default 90) | No PII, general trends only |
+| INTERNAL | `DATA_RETENTION_DAYS` (default 90) | Contains identifying details |
+| RESTRICTED | Half of `DATA_RETENTION_DAYS` (min 30) | Sensitive location or behavioural patterns |
+| CONFIDENTIAL | Third of `DATA_RETENTION_DAYS` (min 14) | Could endanger if disclosed |
+
+Reports past their retention period are hard-deleted from SQLite on startup and via `POST /compliance/retention`. In-memory cache entries expire after `CACHE_TTL_HOURS` (default 24).
+
+**NIST CSF 2.0 mapping:**
+
+| Function | Control |
+|---|---|
+| Govern (GV.PO) | ForgeChain governance policy -- 3-verifier consensus gate |
+| Govern (GV.RM) | Risk management via sensitivity classification |
+| Protect (PR.AA) | Google OAuth + session management; per-endpoint rate limiting |
+| Protect (PR.DS) | Input/output sanitisation, injection scanning, trusted/untrusted key separation |
+| Protect (PR.PS) | Security headers (CSP, HSTS, X-Frame-Options), dependency pinning |
+| Detect (DE.CM) | Prompt injection detection, harassment/stalking detection, minor protection |
+| Detect (DE.AE) | ForgeChain audit trail (ForgeBlocks), verifier vote logging |
+| Respond (RS.AN) | Policy veto blocks with reason codes, fail-open with low confidence logging |
+| Respond (RS.MI) | Rate limiting, query sanitisation, confidence-gated deep scraping |
+| Recover (RC.CO) | Graceful degradation when APIs unavailable |
+
+**Compliance endpoints (admin only):**
+- `GET /compliance/processing-record` -- GDPR Art. 30 processing record
+- `POST /compliance/retention` -- Enforce tiered retention policy
+- `POST /data/subject-delete` -- Right to erasure for a subject identifier
+- `GET /compliance/classification` -- View classification levels and NIST mapping
+
 ---
 
 ## Project Structure
@@ -805,7 +878,7 @@ Fortis-Intelligence-Hub/
 |-- app/
 |   |-- __init__.py
 |   |-- web.py                   # Flask app factory + all routes
-|   |-- chains.py                # LLM prompt templates (12 chains: 8 OSINT + 4 web intelligence)
+|   |-- chains.py                # LLM prompt templates (13 chains: 8 OSINT + 5 web intelligence)
 |   |-- llm.py                   # DeepSeek LLM factory
 |   |-- http_client.py           # Thread-safe HTTP session factory (curl_cffi / requests)
 |   |-- osint_client.py          # OSINT aggregator (unified geo pipeline, domain/IP intel)
@@ -816,6 +889,7 @@ Fortis-Intelligence-Hub/
 |   |-- metadata_extractor.py    # EXIF, NER, language detection
 |   |-- dork_search.py            # DuckDuckGo dork search client + rate limiter
 |   |-- dork_sanitizer.py         # Query/result sanitization + anti-exfiltration
+|   |-- compliance.py            # GDPR/NIST compliance: retention, erasure, processing records
 |   |-- web_scraper.py           # News, WHOIS, DNS, DNSdumpster, reverse DNS/IP, RSS
 |   |-- export.py                # PDF/Markdown export
 |   |-- export_ioc.py            # STIX, CSV, JSON export

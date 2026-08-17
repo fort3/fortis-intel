@@ -381,6 +381,7 @@ def _run_initial_dorking(
     platforms: list[str],
     session_id: str,
     user_hash: str,
+    purpose: str = "Initial web collection for OSINT investigation",
 ) -> dict:
     """Phase 1 dorking: generate and execute collection dork queries BEFORE OSINT collection.
 
@@ -400,6 +401,7 @@ def _run_initial_dorking(
         "subject_identifier": subject_identifier,
         "identifier_type": identifier_type,
         "platforms": platforms_str,
+        "purpose": purpose,
     }
     collection_result = gated_invoke(
         collection_chain, collection_input,
@@ -474,6 +476,7 @@ def _run_final_dorking(
     entities_summary: str,
     session_id: str,
     user_hash: str,
+    purpose: str = "OSINT investigation — final validation and gap analysis",
 ) -> dict:
     """Run the 4-phase dork search pipeline (gap-fill + validate + synthesise + deep scrape).
 
@@ -491,6 +494,7 @@ def _run_final_dorking(
         "analysis_text": analysis_text,
         "osint_summary": osint_summary,
         "entities_summary": entities_summary,
+        "purpose": purpose,
     }
     gap_result = gated_invoke(
         gap_chain, gap_input,
@@ -512,6 +516,7 @@ def _run_final_dorking(
     val_input = {
         "analysis_text": analysis_text,
         "entities_summary": entities_summary,
+        "purpose": purpose,
     }
     val_result = gated_invoke(
         val_chain, val_input,
@@ -574,6 +579,7 @@ def _run_final_dorking(
         "analysis_text": analysis_text,
         "gap_fill_results": gap_fill_text,
         "validation_results": validation_text,
+        "purpose": purpose,
     }
     synth_result = gated_invoke(
         synth_chain, synth_input,
@@ -627,6 +633,7 @@ def _run_final_dorking(
                 "analysis_text": analysis_text,
                 "initial_synthesis": synthesis_text,
                 "scraped_content": scraped_content,
+                "purpose": purpose,
             }
             deep_result = gated_invoke(
                 deep_chain, deep_input,
@@ -668,6 +675,7 @@ def _process_single_identifier(identifier, identifier_type, platforms, depth,
                 platforms=platforms,
                 session_id=session_id or f"batch_{clean_id}",
                 user_hash=user_hash,
+                purpose="Batch OSINT investigation — initial web collection",
             )
             if dork_data and dork_data.get("text"):
                 initial_dork_context = dork_data["text"]
@@ -989,7 +997,9 @@ def create_app():
                 print(f"  Error: {error_msg}")
                 return jsonify({"error": error_msg}), 400
 
-            # Enforce in-memory report cache limit
+            # Enforce TTL + size limits on in-memory report cache
+            from app.compliance import evict_expired_cache
+            evict_expired_cache(stored_reports)
             if len(stored_reports) >= _MAX_STORED_REPORTS:
                 oldest_key = min(
                     stored_reports,
@@ -1195,6 +1205,7 @@ def create_app():
                     platforms=platforms,
                     session_id=session_id,
                     user_hash=user_hash,
+                    purpose=investigation_purpose or "OSINT investigation — initial web collection",
                 )
                 if initial_dork_data and initial_dork_data.get("text"):
                     initial_dork_context = initial_dork_data["text"]
@@ -1369,6 +1380,7 @@ def create_app():
                     entities_summary=entities_text,
                     session_id=session_id,
                     user_hash=user_hash,
+                    purpose=investigation_purpose or "OSINT investigation — final validation",
                 )
                 if web_intelligence and web_intelligence.get("text"):
                     analysis += "\n\n---\n\n## Web Intelligence — Validation & Gap Analysis\n\n" + web_intelligence["text"]
@@ -1478,6 +1490,7 @@ def create_app():
                     platforms=[],
                     session_id=enrich_session_id,
                     user_hash=user_hash,
+                    purpose=investigation_purpose or "Document enrichment — initial web collection",
                 )
                 if initial_dork_data and initial_dork_data.get("text"):
                     initial_dork_context = initial_dork_data["text"]
@@ -2742,6 +2755,91 @@ def create_app():
         })
 
     # ================================================================
+    #  COMPLIANCE / DATA PROTECTION ROUTES
+    # ================================================================
+
+    @app.route("/compliance/processing-record", methods=["GET"])
+    @login_required
+    @admin_required
+    def compliance_processing_record():
+        """GDPR Article 30 processing record."""
+        from app.compliance import generate_processing_record
+        record = generate_processing_record(get_report_store())
+        return jsonify(record)
+
+    @app.route("/compliance/retention", methods=["POST"])
+    @login_required
+    @admin_required
+    def compliance_enforce_retention():
+        """Enforce data retention policy — hard-delete reports past their retention period."""
+        from app.compliance import enforce_retention, evict_expired_cache
+        cache_evicted = evict_expired_cache(stored_reports)
+        db_deleted = enforce_retention(get_report_store())
+
+        if db_deleted > 0:
+            try:
+                rebuild_knowledge_base(get_report_store())
+                print(f"[COMPLIANCE] KB rebuilt after retention enforcement")
+            except Exception as exc:
+                print(f"[WARN] KB rebuild after retention failed: {exc}")
+
+        return jsonify({
+            "cache_evicted": cache_evicted,
+            "db_deleted": db_deleted,
+            "message": f"Retention enforced: {db_deleted} DB records deleted, {cache_evicted} cache entries evicted",
+        })
+
+    @app.route("/data/subject-delete", methods=["POST"])
+    @login_required
+    @admin_required
+    @limiter.limit("10 per hour")
+    def data_subject_delete():
+        """Right to erasure (GDPR Art. 17) — delete ALL data for a subject."""
+        from app.compliance import erase_subject_data
+        data = request.get_json(silent=True) or {}
+        subject = data.get("subject_identifier", "").strip()
+
+        if not subject:
+            return jsonify({"error": "subject_identifier is required"}), 400
+
+        summary = erase_subject_data(
+            report_store=get_report_store(),
+            subject_identifier=subject,
+            stored_reports=stored_reports,
+        )
+
+        total_deleted = (
+            summary["reports_deleted"]
+            + summary["subjects_deleted"]
+            + summary["geo_points_deleted"]
+            + summary["relationships_deleted"]
+            + summary["cache_entries_removed"]
+        )
+
+        if summary["reports_deleted"] > 0:
+            try:
+                rebuild_knowledge_base(get_report_store())
+                print(f"[COMPLIANCE] KB rebuilt after subject erasure")
+            except Exception as exc:
+                print(f"[WARN] KB rebuild after erasure failed: {exc}")
+
+        return jsonify({
+            "erasure_summary": summary,
+            "total_records_deleted": total_deleted,
+            "message": f"All data for '{subject}' has been erased",
+        })
+
+    @app.route("/compliance/classification", methods=["GET"])
+    @login_required
+    def compliance_classification():
+        """Return data classification levels and retention policies."""
+        from app.compliance import CLASSIFICATION_LEVELS, NIST_CSF_MAPPING
+        return jsonify({
+            "classification_levels": CLASSIFICATION_LEVELS,
+            "nist_csf_mapping": NIST_CSF_MAPPING,
+        })
+
+    # ================================================================
     #  ADMIN ROUTES
     # ================================================================
 
@@ -2889,7 +2987,7 @@ def create_app():
         except Exception as exc:
             print(f"[STARTUP] KB rebuild failed: {exc}")
 
-    # Archive stale KB reports
+    # Archive stale KB reports + enforce retention policy
     try:
         store = get_report_store()
         archived = store.archive_stale()
@@ -2898,6 +2996,15 @@ def create_app():
             _rebuild_kb_from_store()
     except Exception as exc:
         print(f"[STARTUP] KB retention cleanup failed: {exc}")
+
+    try:
+        from app.compliance import enforce_retention
+        deleted = enforce_retention(get_report_store())
+        if deleted > 0:
+            print(f"[STARTUP] Retention: hard-deleted {deleted} expired reports")
+            _rebuild_kb_from_store()
+    except Exception as exc:
+        print(f"[STARTUP] Retention enforcement failed (non-fatal): {exc}")
 
     # Check OSINT source availability
     try:
