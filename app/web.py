@@ -110,6 +110,31 @@ stored_reports: dict = {}
 _MAX_STORED_REPORTS = 500
 _KB_CONTEXT_MAX_CHARS = 2000
 
+_shared_osint_client: OSINTClient | None = None
+_shared_geo_client: GeoClient | None = None
+_shared_feed_monitor: FeedMonitor | None = None
+
+
+def _get_osint_client() -> OSINTClient:
+    global _shared_osint_client
+    if _shared_osint_client is None:
+        _shared_osint_client = OSINTClient()
+    return _shared_osint_client
+
+
+def _get_geo_client() -> GeoClient:
+    global _shared_geo_client
+    if _shared_geo_client is None:
+        _shared_geo_client = GeoClient()
+    return _shared_geo_client
+
+
+def _get_feed_monitor() -> FeedMonitor:
+    global _shared_feed_monitor
+    if _shared_feed_monitor is None:
+        _shared_feed_monitor = FeedMonitor()
+    return _shared_feed_monitor
+
 # ── Helper functions ───────────────────────────────────────────────
 
 
@@ -807,8 +832,8 @@ def create_app():
         user_hash = _get_user_hash()
 
         # Phase 0: OSINT collection (stubs will return minimal data)
-        osint_client = OSINTClient()
-        geo_client = GeoClient()
+        osint_client = _get_osint_client()
+        geo_client = _get_geo_client()
 
         try:
             findings = osint_client.investigate(clean_id, platforms=platforms, depth=depth)
@@ -893,7 +918,7 @@ def create_app():
                                 )
                                 for m in markers
                             ]
-                            tri_result = GeoClient().triangulate(tri_points)
+                            tri_result = _get_geo_client().triangulate(tri_points)
                             if tri_result and tri_result.center_lat:
                                 map_data["triangulation"] = {
                                     "center": {"lat": tri_result.center_lat, "lng": tri_result.center_lon},
@@ -1033,7 +1058,7 @@ def create_app():
         user_hash = _get_user_hash()
 
         # Phase 0: OSINT collection
-        osint_client = OSINTClient()
+        osint_client = _get_osint_client()
         try:
             findings = osint_client.investigate(clean_id, depth="standard")
             findings_dict = asdict(findings)
@@ -1160,7 +1185,7 @@ def create_app():
         session_id = f"tri_{uuid.uuid4().hex[:16]}"
         user_hash = _get_user_hash()
 
-        geo_client = GeoClient()
+        geo_client = _get_geo_client()
 
         from app.geo_client import GeoDataPoint as GeoDP
         geo_points = []
@@ -1385,8 +1410,8 @@ def create_app():
             return jsonify({"error": "No valid identifiers provided"}), 400
 
         # Process in parallel
-        osint_client = OSINTClient()
-        geo_client = GeoClient()
+        osint_client = _get_osint_client()
+        geo_client = _get_geo_client()
         platforms = list(SOCIAL_PLATFORMS.keys())
 
         elevated = _is_admin()
@@ -2142,7 +2167,7 @@ def create_app():
         }
 
         try:
-            monitor = FeedMonitor()
+            monitor = _get_feed_monitor()
             result = monitor.create_monitor(config)
             return jsonify(result)
         except Exception as exc:
@@ -2154,7 +2179,7 @@ def create_app():
     def monitor_pause(monitor_id):
         """Pause a feed monitor."""
         try:
-            monitor = FeedMonitor()
+            monitor = _get_feed_monitor()
             result = monitor.pause_monitor(monitor_id)
             return jsonify(result)
         except Exception as exc:
@@ -2166,7 +2191,7 @@ def create_app():
     def monitor_resume(monitor_id):
         """Resume a paused feed monitor."""
         try:
-            monitor = FeedMonitor()
+            monitor = _get_feed_monitor()
             result = monitor.resume_monitor(monitor_id)
             return jsonify(result)
         except Exception as exc:
@@ -2178,7 +2203,7 @@ def create_app():
     def monitor_delete(monitor_id):
         """Delete a feed monitor."""
         try:
-            monitor = FeedMonitor()
+            monitor = _get_feed_monitor()
             result = monitor.delete_monitor(monitor_id)
             return jsonify(result)
         except Exception as exc:
@@ -2190,7 +2215,7 @@ def create_app():
     def monitor_list():
         """List all feed monitors."""
         try:
-            monitor = FeedMonitor()
+            monitor = _get_feed_monitor()
             monitors = monitor.list_monitors()
             return jsonify({"monitors": monitors})
         except Exception as exc:
@@ -2202,7 +2227,7 @@ def create_app():
     def monitor_watch():
         """List pending findings from feed monitors."""
         try:
-            monitor = FeedMonitor()
+            monitor = _get_feed_monitor()
             findings = monitor.get_pending_findings()
             return jsonify({"findings": findings})
         except Exception as exc:
@@ -2214,7 +2239,7 @@ def create_app():
     def monitor_approve(finding_id):
         """Approve a monitor finding for further investigation."""
         try:
-            monitor = FeedMonitor()
+            monitor = _get_feed_monitor()
             result = monitor.approve_finding(finding_id)
             return jsonify(result)
         except Exception as exc:
@@ -2229,7 +2254,7 @@ def create_app():
         reason = data.get("reason")
 
         try:
-            monitor = FeedMonitor()
+            monitor = _get_feed_monitor()
             result = monitor.dismiss_finding(finding_id, reason=reason)
             return jsonify(result)
         except Exception as exc:
