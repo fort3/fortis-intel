@@ -219,8 +219,10 @@ def _build_geo_summary_html(map_data: dict | None) -> str:
 
     return (
         f'<div class="section">'
+        f'<div class="section-header">'
         f'<h2 class="section-title">Geospatial Data Points</h2>'
         f'<div class="section-rule"></div>'
+        f'</div>'
         f'{tri_html}'
         f'<table>'
         f'<tr><th>Label</th><th>Coordinates</th><th>Source</th><th>Conf.</th><th>Details</th></tr>'
@@ -254,8 +256,10 @@ def _build_chart_html(charts: dict) -> str:
         rows_html += f"<tr>{cells}</tr>"
     return (
         f'<div class="section">'
+        f'<div class="section-header">'
         f'<h2 class="section-title">Visual Analytics</h2>'
         f'<div class="section-rule"></div>'
+        f'</div>'
         f'<table class="chart-grid">{rows_html}</table>'
         f'</div>'
     )
@@ -268,8 +272,10 @@ def _build_map_html(map_snapshot_b64: str | None) -> str:
         map_snapshot_b64 = f"data:image/png;base64,{map_snapshot_b64}"
     return (
         f'<div class="section" style="text-align:center;">'
+        f'<div class="section-header">'
         f'<h2 class="section-title">Geographic Overview</h2>'
         f'<div class="section-rule"></div>'
+        f'</div>'
         f'<div class="media-frame">'
         f'<img src="{html_escape(map_snapshot_b64)}" class="media-img">'
         f'</div>'
@@ -284,8 +290,10 @@ def _build_graph_html(graph_b64: str | None) -> str:
         graph_b64 = f"data:image/png;base64,{graph_b64}"
     return (
         f'<div class="section" style="text-align:center;">'
+        f'<div class="section-header">'
         f'<h2 class="section-title">Entity Relationship Graph</h2>'
         f'<div class="section-rule"></div>'
+        f'</div>'
         f'<div class="media-frame">'
         f'<img src="{html_escape(graph_b64)}" class="media-img">'
         f'</div>'
@@ -379,23 +387,27 @@ def _build_section_html(heading: str, body_md: str, section_num: int,
     if is_executive:
         return (
             f'<div class="section exec-section">'
+            f'<div class="section-header">'
             f'<div class="exec-label">KEY FINDINGS</div>'
             f'<div class="section-num-line">'
             f'<span class="section-num">{num_str}</span>'
             f'</div>'
             f'<h2 class="section-title exec-title">{heading_escaped}</h2>'
             f'<div class="exec-rule"></div>'
+            f'</div>'
             f'<div class="exec-body">{body_html}</div>'
             f'</div>'
         )
 
     return (
         f'<div class="section">'
+        f'<div class="section-header">'
         f'<div class="section-num-line">'
         f'<span class="section-num">{num_str}</span>'
         f'</div>'
         f'<h2 class="section-title">{heading_escaped}</h2>'
         f'<div class="section-rule"></div>'
+        f'</div>'
         f'{body_html}'
         f'</div>'
     )
@@ -656,7 +668,7 @@ body {{
     page-break-after: always;
 }}
 .toc-heading {{
-    font-size: 10pt;
+    font-size: 11pt;
     font-weight: 700;
     color: {PURPLE_BRIGHT};
     letter-spacing: 3px;
@@ -697,8 +709,13 @@ body {{
     margin: 8px 0;
     page-break-inside: auto;
 }}
+.section-header {{
+    page-break-inside: avoid;
+    page-break-after: avoid;
+}}
 .section-num-line {{
     margin-bottom: 2px;
+    page-break-after: avoid;
 }}
 .section-num {{
     font-family: "Courier New", Courier, monospace;
@@ -708,7 +725,7 @@ body {{
     letter-spacing: 1px;
 }}
 .section-title {{
-    font-size: 10pt;
+    font-size: 11pt;
     font-weight: 700;
     color: {PURPLE_BRIGHT};
     text-transform: uppercase;
@@ -720,6 +737,7 @@ body {{
     height: 1px;
     background: {BORDER};
     margin: 6px 0 12px 0;
+    page-break-after: avoid;
 }}
 
 /* ========== EXECUTIVE SUMMARY ========== */
@@ -741,11 +759,13 @@ body {{
 .exec-title {{
     font-size: 11pt;
     color: {TEXT_BRIGHT};
+    page-break-after: avoid;
 }}
 .exec-rule {{
     height: 1px;
     background: {PURPLE_DARK};
     margin: 4px 0 12px 0;
+    page-break-after: avoid;
 }}
 .exec-body {{
     font-size: 9.5pt;
@@ -768,7 +788,7 @@ h1 {{
     page-break-after: avoid;
 }}
 h2 {{
-    font-size: 10pt;
+    font-size: 11pt;
     color: {PURPLE_BRIGHT};
     font-weight: 700;
     text-transform: uppercase;
@@ -778,7 +798,7 @@ h2 {{
     page-break-after: avoid;
 }}
 h3 {{
-    font-size: 9.5pt;
+    font-size: 10pt;
     color: {TEXT_BRIGHT};
     font-weight: 700;
     margin-top: 10px;
@@ -786,15 +806,18 @@ h3 {{
     page-break-after: avoid;
 }}
 h4 {{
-    font-size: 9pt;
+    font-size: 9.5pt;
     color: {TEXT_BRIGHT};
     font-weight: 700;
     margin-top: 8px;
     margin-bottom: 3px;
+    page-break-after: avoid;
 }}
 p {{
     margin: 4px 0;
     color: {TEXT_PRIMARY};
+    orphans: 3;
+    widows: 3;
 }}
 ul, ol {{
     padding-left: 16px;
@@ -805,6 +828,8 @@ li {{
     margin: 2px 0;
     color: {TEXT_PRIMARY};
     line-height: 1.5;
+    orphans: 2;
+    widows: 2;
 }}
 strong {{
     color: {TEXT_BRIGHT};

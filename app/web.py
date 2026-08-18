@@ -76,6 +76,7 @@ from app.export_ioc import convert_to_stix21, convert_to_csv, convert_to_json
 from app.charts import generate_investigation_charts
 from app.intel_graph import (
     build_investigation_graph,
+    build_entity_graph,
     graph_to_cytoscape_json,
     graph_context,
     cache_graph,
@@ -1604,8 +1605,23 @@ def create_app():
 
         # Build entity graph
         entities_data = findings_dict.get("entities", [])
+        normalized_entities = []
+        for e in entities_data:
+            ne = dict(e)
+            if "entity_type" in ne and "type" not in ne:
+                ne["type"] = ne["entity_type"]
+            if "entity_value" in ne and "name" not in ne:
+                ne["name"] = ne["entity_value"]
+            normalized_entities.append(ne)
         try:
-            entity_graph = build_investigation_graph(entities_data)
+            entity_graph = build_entity_graph(normalized_entities)
+            # Add investigation subject as central hub node
+            subject_nid = f"{identifier_type}:{clean_id.strip().lower().replace(' ', '_')[:80]}"
+            if subject_nid not in entity_graph:
+                entity_graph.add_node(subject_nid, type=identifier_type, label=clean_id)
+            for nid in list(entity_graph.nodes()):
+                if nid != subject_nid and not entity_graph.has_edge(subject_nid, nid):
+                    entity_graph.add_edge(subject_nid, nid, relationship="associated_with")
             graph_json = graph_to_cytoscape_json(entity_graph)
             entity_graph_ctx = graph_context(entity_graph, max_chars=4000)
             graph_cache_key = cache_graph(entity_graph, session_id)

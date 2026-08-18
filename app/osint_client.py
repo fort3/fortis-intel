@@ -400,10 +400,18 @@ class OSINTClient:
                                     or any(po.platform == p for po in findings.posts))
 
         try:
-            from app.intel_graph import build_investigation_graph, graph_to_cytoscape_json
+            from app.intel_graph import build_entity_graph, graph_to_cytoscape_json
             entities_data = [asdict(e) for e in findings.entities]
-            if entities_data:
-                g = build_investigation_graph(entities_data)
+            normalized = []
+            for e in entities_data:
+                ne = dict(e)
+                if "entity_type" in ne and "type" not in ne:
+                    ne["type"] = ne["entity_type"]
+                if "entity_value" in ne and "name" not in ne:
+                    ne["name"] = ne["entity_value"]
+                normalized.append(ne)
+            if normalized:
+                g = build_entity_graph(normalized)
                 findings.entity_graph = graph_to_cytoscape_json(g)
         except Exception as exc:
             log.error("Entity graph construction failed: %s", exc)
