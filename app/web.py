@@ -59,6 +59,7 @@ from app.chains import (
     get_dork_validation_chain,
     get_dork_synthesis_chain,
     get_dork_deep_synthesis_chain,
+    get_report_consolidation_chain,
 )
 from app.rag_store import (
     build_vectorstore,
@@ -1791,7 +1792,7 @@ def create_app():
         analysis = result.content
         sensitivity = findings_dict.get("sensitivity_level", "INTERNAL")
 
-        # ── Phase 5: Final Dorking (Validation + Gap Analysis) ────────
+        # ── Phase 5: Final Dorking + Report Consolidation ────────
         web_intelligence = None
         if web_search_enabled and DORK_VALIDATION_ENABLED:
             try:
@@ -1808,10 +1809,61 @@ def create_app():
                     purpose=investigation_purpose or "OSINT investigation — final validation",
                 )
                 if web_intelligence and web_intelligence.get("text"):
-                    analysis += "\n\n---\n\n## Web Intelligence — Validation & Gap Analysis\n\n" + web_intelligence["text"]
-                    print(f"[DORK] Final dorking appended ({web_intelligence['queries_run']} queries)")
+                    print(f"[DORK] Final dorking complete ({web_intelligence['queries_run']} queries), running consolidation...")
             except Exception as exc:
                 print(f"[WARN] Final dorking failed (non-fatal): {exc}")
+
+        # ── Phase 6: Report Consolidation ────────
+        # Merge initial analysis + web intel + civilian harm into a single cohesive brief
+        if web_intelligence and web_intelligence.get("text"):
+            harm_summary = "No civilian harm data."
+            if civilian_harm_data and civilian_harm_data.get("flagged_count", 0) > 0:
+                harm_lines = [
+                    f"Scored {civilian_harm_data['total_scored']} items. "
+                    f"{civilian_harm_data['flagged_count']} flagged "
+                    f"(max score: {civilian_harm_data.get('max_score', 0):.2f}).",
+                    "Distribution: " + ", ".join(
+                        f"{k}: {v}" for k, v in civilian_harm_data.get("distribution", {}).items()
+                    ),
+                ]
+                for item in civilian_harm_data.get("flagged", [])[:5]:
+                    hs = item.get("harm_score", {})
+                    harm_lines.append(
+                        f"- [{hs.get('classification', '?')} {hs.get('score', 0):.2f}] "
+                        f"({item.get('platform', '?')}) {item.get('content', '')[:200]}"
+                    )
+                harm_summary = "\n".join(harm_lines)
+
+            try:
+                consolidation_chain = get_report_consolidation_chain()
+                consolidation_input = {
+                    "initial_analysis": analysis,
+                    "web_intelligence": web_intelligence["text"],
+                    "civilian_harm_summary": harm_summary,
+                    "subject_identifier": clean_id,
+                    "identifier_type": identifier_type,
+                    "purpose": investigation_purpose or "OSINT investigation — report consolidation",
+                    "elevated_authorization": _is_admin(),
+                }
+                consolidation_result = gated_invoke(
+                    chain=consolidation_chain,
+                    chain_input=consolidation_input,
+                    chain_name="report_consolidation_chain",
+                    endpoint="/investigate",
+                    session_id=session_id,
+                    mode="osint",
+                    user_hash=user_hash,
+                    trusted_keys={"initial_analysis"},
+                )
+                if consolidation_result.success:
+                    analysis = consolidation_result.content
+                    print("[CONSOLIDATION] Report consolidated successfully")
+                else:
+                    analysis += "\n\n---\n\n## Web Intelligence\n\n" + web_intelligence["text"]
+                    print(f"[CONSOLIDATION] Blocked ({consolidation_result.reason}), falling back to append")
+            except Exception as exc:
+                analysis += "\n\n---\n\n## Web Intelligence\n\n" + web_intelligence["text"]
+                print(f"[WARN] Consolidation failed ({exc}), falling back to append")
 
         # Save to knowledge base
         report_id = _save_to_kb(
@@ -2277,6 +2329,14 @@ def create_app():
     def batch_investigate():
         """Batch OSINT investigation for multiple identifiers."""
         data = request.get_json(silent=True) or {}
+        if not data and request.form:
+            data = dict(request.form)
+            if "platforms" in data and isinstance(data["platforms"], str):
+                try:
+                    data["platforms"] = json.loads(data["platforms"])
+                except (json.JSONDecodeError, TypeError):
+                    pass
+
         identifiers = data.get("identifiers", [])
         identifier_type = data.get("identifier_type", "auto")
         depth = data.get("depth", "quick").strip().lower()
@@ -2284,6 +2344,23 @@ def create_app():
         if isinstance(identifiers, str):
             lines = [l.strip() for l in identifiers.replace(",", "\n").split("\n") if l.strip()]
             identifiers = [{"identifier": l, "identifier_type": identifier_type} for l in lines]
+
+        # Handle file upload (CSV)
+        uploaded_file = request.files.get("file")
+        if uploaded_file and not identifiers:
+            try:
+                import csv
+                import io
+                content = uploaded_file.read().decode("utf-8")
+                uploaded_file.seek(0)
+                reader = csv.reader(io.StringIO(content))
+                for row in reader:
+                    if row and row[0].strip():
+                        ident = row[0].strip()
+                        id_type = row[1].strip().lower() if len(row) > 1 and row[1].strip() else identifier_type
+                        identifiers.append({"identifier": ident, "identifier_type": id_type})
+            except Exception:
+                return jsonify({"error": "Failed to parse uploaded file"}), 400
 
         if not identifiers or not isinstance(identifiers, list):
             return jsonify({"error": "identifiers list is required"}), 400

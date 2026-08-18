@@ -1564,9 +1564,6 @@ function renderAnalysis(data) {
         if (data.civilian_harm) {
             html += renderCivilianHarmSection(data.civilian_harm);
         }
-        if (data.web_intelligence) {
-            html += renderWebIntelligenceSection(data.web_intelligence);
-        }
 
         content.innerHTML = html;
     }
