@@ -2872,6 +2872,15 @@ async function runImageAnalysis() {
             fd.append('images', fileInput.files[i]);
         }
 
+        var modForensics = document.getElementById('imgModForensics');
+        var modStego = document.getElementById('imgModStego');
+        var modSearch = document.getElementById('imgModSearch');
+        var modVision = document.getElementById('imgModVision');
+        fd.append('mod_forensics', modForensics && modForensics.checked ? '1' : '0');
+        fd.append('mod_stego', modStego && modStego.checked ? '1' : '0');
+        fd.append('mod_search', modSearch && modSearch.checked ? '1' : '0');
+        fd.append('mod_vision', modVision && modVision.checked ? '1' : '0');
+
         var response = await fetchApi('/analyze-image', {
             method: 'POST',
             body: fd,
@@ -3394,16 +3403,33 @@ function renderImageAnalysisSection(images) {
         // Reverse search
         if (img.reverse_search) {
             var rs = img.reverse_search;
+            var totalMatches = 0;
             var engineSections = [
                 { key: 'yandex_results', label: 'Yandex' },
                 { key: 'google_lens_results', label: 'Google Lens' },
                 { key: 'bing_results', label: 'Bing' },
             ];
+            for (var ci = 0; ci < engineSections.length; ci++) {
+                var ce = rs[engineSections[ci].key];
+                if (ce && ce.matches) totalMatches += ce.matches.length;
+            }
+            if (rs.tineye_results) totalMatches += rs.tineye_results.length;
+
+            var enginesStr = (rs.engines_searched && rs.engines_searched.length)
+                ? rs.engines_searched.join(', ') : 'none';
+            h += '<div class="img-analysis-row"><strong>Reverse Search:</strong> ';
+            if (totalMatches > 0) {
+                h += '<span class="wi-badge ch-badge-low">' + totalMatches + ' match(es)</span> ';
+            } else {
+                h += '<span class="wi-badge ch-badge-info">No matches</span> ';
+            }
+            h += '<span class="ch-platform">Engines: ' + escapeHtml(enginesStr) + '</span></div>';
+
             for (var ei = 0; ei < engineSections.length; ei++) {
                 var eng = engineSections[ei];
                 var eData = rs[eng.key];
                 if (eData && eData.matches && eData.matches.length) {
-                    h += '<div class="img-analysis-row"><strong>' + eng.label + ':</strong> ' +
+                    h += '<div class="img-analysis-row" style="padding-left:1.2em"><strong>' + eng.label + ':</strong> ' +
                         eData.matches.length + ' match(es)';
                     if (eData.search_url) {
                         h += ' <a href="' + escapeHtml(eData.search_url) + '" target="_blank" class="wi-link">[open search]</a>';
@@ -3411,27 +3437,27 @@ function renderImageAnalysisSection(images) {
                     h += '</div>';
                     for (var em = 0; em < Math.min(eData.matches.length, 3); em++) {
                         var ematch = eData.matches[em];
-                        h += '<div class="wi-meta"><a href="' + escapeHtml(ematch.url) +
+                        h += '<div class="wi-meta" style="padding-left:1.6em"><a href="' + escapeHtml(ematch.url) +
                             '" target="_blank" class="wi-link">' + escapeHtml(ematch.title || ematch.url) + '</a></div>';
                     }
                 } else if (eData && eData.search_url) {
-                    h += '<div class="img-analysis-row"><strong>' + eng.label + ':</strong> ' +
-                        '<a href="' + escapeHtml(eData.search_url) + '" target="_blank" class="wi-link">[open search]</a></div>';
+                    h += '<div class="img-analysis-row" style="padding-left:1.2em"><strong>' + eng.label + ':</strong> ' +
+                        'no matches <a href="' + escapeHtml(eData.search_url) + '" target="_blank" class="wi-link">[open search]</a></div>';
                 }
             }
             if (rs.tineye_results && rs.tineye_results.length) {
-                h += '<div class="img-analysis-row"><strong>TinEye:</strong> ' +
+                h += '<div class="img-analysis-row" style="padding-left:1.2em"><strong>TinEye:</strong> ' +
                     rs.tineye_results.length + ' match(es)</div>';
                 for (var t = 0; t < Math.min(rs.tineye_results.length, 3); t++) {
                     var tm = rs.tineye_results[t];
-                    h += '<div class="wi-meta">' + escapeHtml(tm.domain || '') +
+                    h += '<div class="wi-meta" style="padding-left:1.6em">' + escapeHtml(tm.domain || '') +
                         (tm.crawl_date ? ' (' + escapeHtml(tm.crawl_date) + ')' : '') + '</div>';
                 }
             }
             if (rs.search_urls) {
                 var urlEntries = Object.entries(rs.search_urls);
                 if (urlEntries.length) {
-                    h += '<div class="img-analysis-row"><strong>Search URLs:</strong> ';
+                    h += '<div class="img-analysis-row" style="padding-left:1.2em"><strong>Search URLs:</strong> ';
                     for (var su = 0; su < urlEntries.length; su++) {
                         if (su > 0) h += ' &middot; ';
                         h += '<a href="' + escapeHtml(urlEntries[su][1]) + '" target="_blank" class="wi-link">' +
@@ -3440,13 +3466,15 @@ function renderImageAnalysisSection(images) {
                     h += '</div>';
                 }
             }
+            if (rs.perceptual_hashes) {
+                h += '<div class="wi-meta" style="padding-left:1.2em">Hashes: pHash=' +
+                    escapeHtml(rs.perceptual_hashes.phash || '') + ' dHash=' +
+                    escapeHtml(rs.perceptual_hashes.dhash || '') + '</div>';
+            }
             if (rs.similar_cached && rs.similar_cached.length) {
-                h += '<div class="img-analysis-row"><strong>Similar cached:</strong> ' +
+                h += '<div class="img-analysis-row" style="padding-left:1.2em"><strong>Similar cached:</strong> ' +
                     rs.similar_cached.length + ' image(s) with avg distance ' +
                     rs.similar_cached[0].distance + '</div>';
-            }
-            if (rs.engines_searched && rs.engines_searched.length) {
-                h += '<div class="wi-meta">Engines queried: ' + rs.engines_searched.join(', ') + '</div>';
             }
         }
 

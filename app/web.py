@@ -2095,6 +2095,11 @@ def create_app():
         if not request.files:
             return jsonify({"error": "No image files uploaded"}), 400
 
+        run_forensics = IMAGE_FORENSICS_ENABLED and request.form.get("mod_forensics", "1") == "1"
+        run_stego = IMAGE_STEGO_ENABLED and request.form.get("mod_stego", "1") == "1"
+        run_search = IMAGE_SEARCH_ENABLED and request.form.get("mod_search", "1") == "1"
+        run_vision = IMAGE_VISION_ENABLED and request.form.get("mod_vision", "1") == "1"
+
         results = []
         for f in request.files.getlist("images"):
             if not f or not f.filename:
@@ -2105,13 +2110,13 @@ def create_app():
                 continue
             try:
                 img_result = {"filename": f.filename}
-                if IMAGE_SEARCH_ENABLED:
+                if run_search:
                     img_result["reverse_search"] = reverse_image_search(file_bytes, f.filename)
-                if IMAGE_FORENSICS_ENABLED:
+                if run_forensics:
                     img_result["forensics"] = analyze_image_forensics(file_bytes, f.filename)
-                if IMAGE_STEGO_ENABLED:
+                if run_stego:
                     img_result["steganography"] = detect_steganography(file_bytes, f.filename)
-                if IMAGE_VISION_ENABLED:
+                if run_vision:
                     img_result["vision"] = clip_analyze_image(file_bytes, f.filename)
                 results.append(img_result)
             except Exception as exc:
@@ -2120,10 +2125,10 @@ def create_app():
         return jsonify({
             "results": results,
             "modules": {
-                "reverse_search": IMAGE_SEARCH_ENABLED,
-                "forensics": IMAGE_FORENSICS_ENABLED,
-                "steganography": IMAGE_STEGO_ENABLED,
-                "vision": IMAGE_VISION_ENABLED,
+                "reverse_search": run_search,
+                "forensics": run_forensics,
+                "steganography": run_stego,
+                "vision": run_vision,
             },
         })
 
