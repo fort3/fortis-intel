@@ -583,8 +583,10 @@ Four-module image forensics and intelligence pipeline.
 #### Modules
 
 **1. Reverse Image Search**
-- TinEye API lookup for exact and near-duplicate matches across the web (requires `TINEYE_API_KEY`)
-- Generates search URLs for Google Lens, Yandex Images, and Bing Visual Search
+- Searches Yandex, Google Lens, and Bing using PicImageSearch (free, no API key required)
+- Yandex CBIR is particularly strong for finding people and faces
+- Returns matching pages with titles, URLs, and working search links you can open in a browser
+- Optional TinEye API for exact-match detection (requires paid `TINEYE_API_KEY`)
 - Perceptual hash cache (pHash, dHash, aHash) detects similar images across investigations
 
 **2. Error Level Analysis (ELA)**
@@ -619,7 +621,7 @@ Four-module image forensics and intelligence pipeline.
   - **Forensics**: Verdict (AUTHENTIC / POSSIBLY / LIKELY MANIPULATED), confidence, flags
   - **Steganography**: Verdict (NO STEGANOGRAPHY / POSSIBLE / LIKELY), confidence, estimated payload
   - **Classification**: Top-5 OSINT categories with confidence, detected landmarks, safety rating
-  - **Reverse Search**: TinEye matches, search URLs, similar cached images with hash distance
+  - **Reverse Search**: Yandex/Google Lens/Bing matches with clickable links, working search URLs, similar cached images
 
 #### Configuration
 

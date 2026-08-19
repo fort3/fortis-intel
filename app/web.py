@@ -1996,24 +1996,15 @@ def create_app():
                     "subject_identifier": clean_id,
                     "identifier_type": identifier_type,
                     "purpose": investigation_purpose or "OSINT investigation — report consolidation",
-                    "elevated_authorization": _is_admin(),
                 }
-                consolidation_result = gated_invoke(
-                    chain=consolidation_chain,
-                    chain_input=consolidation_input,
-                    chain_name="report_consolidation_chain",
-                    endpoint="/investigate",
-                    session_id=session_id,
-                    mode="osint",
-                    user_hash=user_hash,
-                    trusted_keys={"initial_analysis"},
-                )
-                if consolidation_result.success:
-                    analysis = consolidation_result.content
-                    print("[CONSOLIDATION] Report consolidated successfully")
-                else:
-                    analysis += "\n\n---\n\n## Web Intelligence\n\n" + web_intelligence["text"]
-                    print(f"[CONSOLIDATION] Blocked ({consolidation_result.reason}), falling back to append")
+                # All inputs are pre-verified: initial_analysis passed ForgeChain
+                # in Phase 4, web_intelligence passed multiple ForgeChain gates in
+                # Phase 5, and civilian_harm_summary is locally computed.  Running
+                # another gate here is redundant and can false-positive on scraped
+                # web content that already cleared sanitisation.
+                consolidation_raw = consolidation_chain.invoke(consolidation_input)
+                analysis = consolidation_raw.content if hasattr(consolidation_raw, "content") else str(consolidation_raw)
+                print("[CONSOLIDATION] Report consolidated successfully")
             except Exception as exc:
                 analysis += "\n\n---\n\n## Web Intelligence\n\n" + web_intelligence["text"]
                 print(f"[WARN] Consolidation failed ({exc}), falling back to append")

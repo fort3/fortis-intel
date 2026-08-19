@@ -15,7 +15,7 @@ An OSINT-driven intelligence and analysis platform for open-source intelligence 
 - **Media Geo-Extraction** -- Automatic EXIF GPS extraction from social media images and video keyframe analysis (OCR + landmark geocoding via OpenCV)
 - **AI-Powered Analysis** -- DeepSeek LLM generates investigation reports, pattern-of-life analyses, network mapping, and influence assessments
 - **Web Intelligence** -- LLM autonomously searches the public web via Google dork queries (DuckDuckGo) to fill intelligence gaps and validate findings, with confidence-gated deep scraping of high-value results. Expanded passive recon cheatsheets for domain, IP, and email identifiers. Improved circuit breaker that correctly distinguishes "no results" from actual failures
-- **Image OSINT** -- Four-module image analysis pipeline: reverse image search (TinEye API + Yandex + perceptual hash deduplication), Error Level Analysis (ELA) with clone detection for forensic tampering assessment, steganography detection (LSB extraction, RS analysis, sample pairs), and CLIP zero-shot classification for scene/object/landmark recognition and safety screening. All modules run on uploaded images during investigations and via the dedicated `/analyze-image` endpoint
+- **Image OSINT** -- Four-module image analysis pipeline: reverse image search (Yandex CBIR + Google Lens + Bing via PicImageSearch, optional TinEye API + perceptual hash deduplication), Error Level Analysis (ELA) with clone detection for forensic tampering assessment, steganography detection (LSB extraction, RS analysis, sample pairs), and CLIP zero-shot classification for scene/object/landmark recognition and safety screening. All modules run on uploaded images during investigations and via the dedicated `/analyze-image` endpoint
 - **Civilian Harm Classifier** -- Bellingcat-inspired semantic similarity scoring using sentence-transformers with multilingual conflict keyword density. Automatically flags CRITICAL/HIGH/MODERATE content across all investigation flows (investigation, batch, scenario, Q&A, feed monitor). Distribution bar, flagged item cards, and concept badges in the UI
 - **Separated LLM Pipeline** -- RAG (FAISS vectorstore) for document Q&A only; Knowledge Graph (NetworkX entity relationships) for OSINT multi-source enrichment -- no token waste from parallel injection
 - **RAG Knowledge Base** -- Upload PDF and Markdown reports, index them with FAISS vectorstore, and ask natural-language questions with automatic KB feedback from previous analyses
@@ -843,7 +843,7 @@ The platform includes four image analysis modules that run on uploaded images du
 
 | Module | Function | Dependencies | API Key |
 |---|---|---|---|
-| **Reverse Image Search** | TinEye match lookup, Yandex/Google Lens/Bing URLs, perceptual hash dedup cache | imagehash, Pillow | `TINEYE_API_KEY` (optional) |
+| **Reverse Image Search** | Yandex CBIR + Google Lens + Bing reverse search (PicImageSearch), perceptual hash dedup cache | PicImageSearch, imagehash, Pillow | None (free); `TINEYE_API_KEY` optional |
 | **Error Level Analysis** | JPEG re-compression forensics, clone detection via block matching, metadata strip detection | Pillow, numpy | None |
 | **Steganography Detection** | LSB extraction, RS analysis, sample pairs statistical test | Pillow, numpy | None |
 | **CLIP Vision** | Zero-shot image classification (22 OSINT categories), landmark detection (50 locations), content safety screening | sentence-transformers (CLIP model) | None |
@@ -854,7 +854,7 @@ All modules degrade gracefully -- missing optional dependencies disable individu
 
 | Variable | Default | Description |
 |---|---|---|
-| `TINEYE_API_KEY` | (none) | TinEye reverse image search API key |
+| `TINEYE_API_KEY` | (none) | Optional TinEye API key (paid) for exact-match search |
 | `IMAGE_SEARCH_ENABLED` | `true` | Toggle reverse image search module |
 | `IMAGE_FORENSICS_ENABLED` | `true` | Toggle ELA/forensics module |
 | `IMAGE_STEGO_ENABLED` | `true` | Toggle steganography detection module |
@@ -974,7 +974,7 @@ Fortis-Intelligence-Hub/
 |   |-- llm.py                   # DeepSeek LLM factory
 |   |-- http_client.py           # Thread-safe HTTP session factory (curl_cffi / requests)
 |   |-- osint_client.py          # OSINT aggregator (unified geo pipeline, domain/IP intel)
-|   |-- image_search.py          # Reverse image search (TinEye, Yandex, perceptual hash)
+|   |-- image_search.py          # Reverse image search (Yandex, Google Lens, Bing, perceptual hash)
 |   |-- image_forensics.py       # ELA tampering detection + clone detection
 |   |-- image_stego.py           # Steganography detection (LSB, RS analysis, sample pairs)
 |   |-- image_vision.py          # CLIP zero-shot classification + landmark detection

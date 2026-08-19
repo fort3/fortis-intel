@@ -3394,6 +3394,31 @@ function renderImageAnalysisSection(images) {
         // Reverse search
         if (img.reverse_search) {
             var rs = img.reverse_search;
+            var engineSections = [
+                { key: 'yandex_results', label: 'Yandex' },
+                { key: 'google_lens_results', label: 'Google Lens' },
+                { key: 'bing_results', label: 'Bing' },
+            ];
+            for (var ei = 0; ei < engineSections.length; ei++) {
+                var eng = engineSections[ei];
+                var eData = rs[eng.key];
+                if (eData && eData.matches && eData.matches.length) {
+                    h += '<div class="img-analysis-row"><strong>' + eng.label + ':</strong> ' +
+                        eData.matches.length + ' match(es)';
+                    if (eData.search_url) {
+                        h += ' <a href="' + escapeHtml(eData.search_url) + '" target="_blank" class="wi-link">[open search]</a>';
+                    }
+                    h += '</div>';
+                    for (var em = 0; em < Math.min(eData.matches.length, 3); em++) {
+                        var ematch = eData.matches[em];
+                        h += '<div class="wi-meta"><a href="' + escapeHtml(ematch.url) +
+                            '" target="_blank" class="wi-link">' + escapeHtml(ematch.title || ematch.url) + '</a></div>';
+                    }
+                } else if (eData && eData.search_url) {
+                    h += '<div class="img-analysis-row"><strong>' + eng.label + ':</strong> ' +
+                        '<a href="' + escapeHtml(eData.search_url) + '" target="_blank" class="wi-link">[open search]</a></div>';
+                }
+            }
             if (rs.tineye_results && rs.tineye_results.length) {
                 h += '<div class="img-analysis-row"><strong>TinEye:</strong> ' +
                     rs.tineye_results.length + ' match(es)</div>';
@@ -3403,10 +3428,25 @@ function renderImageAnalysisSection(images) {
                         (tm.crawl_date ? ' (' + escapeHtml(tm.crawl_date) + ')' : '') + '</div>';
                 }
             }
+            if (rs.search_urls) {
+                var urlEntries = Object.entries(rs.search_urls);
+                if (urlEntries.length) {
+                    h += '<div class="img-analysis-row"><strong>Search URLs:</strong> ';
+                    for (var su = 0; su < urlEntries.length; su++) {
+                        if (su > 0) h += ' &middot; ';
+                        h += '<a href="' + escapeHtml(urlEntries[su][1]) + '" target="_blank" class="wi-link">' +
+                            escapeHtml(urlEntries[su][0].replace(/_/g, ' ')) + '</a>';
+                    }
+                    h += '</div>';
+                }
+            }
             if (rs.similar_cached && rs.similar_cached.length) {
                 h += '<div class="img-analysis-row"><strong>Similar cached:</strong> ' +
                     rs.similar_cached.length + ' image(s) with avg distance ' +
                     rs.similar_cached[0].distance + '</div>';
+            }
+            if (rs.engines_searched && rs.engines_searched.length) {
+                h += '<div class="wi-meta">Engines queried: ' + rs.engines_searched.join(', ') + '</div>';
             }
         }
 
