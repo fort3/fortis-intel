@@ -61,7 +61,14 @@ from app.chains import (
     get_dork_synthesis_chain,
     get_dork_deep_synthesis_chain,
     get_report_consolidation_chain,
+    get_competing_hypotheses_chain,
 )
+from app.bias_audit import run_bias_audit
+from app.self_consistency import (
+    run_self_consistency_check,
+    SELF_CONSISTENCY_ENABLED,
+)
+from app.provenance import ProvenanceTrail
 from app.rag_store import (
     build_vectorstore,
     load_vectorstore,
@@ -88,6 +95,7 @@ from app.intel_graph import (
 )
 from app.forge import gated_invoke
 from app.forge.config import FORGE_ENABLED
+from app.forge.grounding_verifier import verify_grounding
 from app.forge.chain_store import get_chain_store
 from app.forge.replay import get_session_replay
 from app.osint_client import OSINTClient
@@ -175,15 +183,25 @@ def _save_to_kb(
     entity_count: int = 0,
     source_count: int = 0,
     tags: list[str] | None = None,
+    source_type: str = "llm_analysis",
 ) -> str | None:
-    """Save a report to the ReportStore and index it in the FAISS knowledge base."""
+    """Save a report to the ReportStore and index it in the FAISS knowledge base.
+
+    Args:
+        source_type: Provenance tag for the RAG contamination guard.
+            "llm_analysis" (default) for LLM-generated reports,
+            "uploaded_document" for user-uploaded documents,
+            "primary_source" for raw OSINT data.
+    """
     try:
         report_id = uuid.uuid4().hex
         user_hash = _get_user_hash()
 
         chunk_count = 0
         try:
-            chunk_count = add_to_knowledge_base(analysis_text, report_id)
+            chunk_count = add_to_knowledge_base(
+                analysis_text, report_id, source_type=source_type,
+            )
         except Exception as exc:
             print(f"[WARN] KB vectorstore update failed (non-fatal): {exc}")
 
@@ -214,12 +232,19 @@ def _save_to_kb(
 
 
 def _get_kb_context(query: str) -> str:
-    """Query the global FAISS knowledge base for supplemental context."""
+    """Query the global FAISS knowledge base for supplemental context.
+
+    Chunks tagged as LLM-generated are automatically labelled with
+    ``[PRIOR ANALYSIS - not a primary source]`` by the RAG contamination
+    guard in ``query_knowledge_base`` so the downstream LLM can
+    distinguish primary evidence from derived analysis.
+    """
     try:
-        chunks = query_knowledge_base(query, k=3)
-        if not chunks:
+        results = query_knowledge_base(query, k=3)
+        if not results:
             return ""
-        kb_text = "\n\n".join(chunks)
+        # results is a list of dicts with 'content', 'source_type', 'score'
+        kb_text = "\n\n".join(r["content"] for r in results)
         if len(kb_text) > _KB_CONTEXT_MAX_CHARS:
             kb_text = kb_text[:_KB_CONTEXT_MAX_CHARS] + "..."
         return f"\n\n=== Prior Intelligence (Knowledge Base) ===\n{kb_text}"
@@ -228,12 +253,22 @@ def _get_kb_context(query: str) -> str:
         return ""
 
 
+def _report_type_to_source_type(report_type: str) -> str:
+    """Map a ReportStore report_type to a RAG contamination guard source_type."""
+    if report_type == "ingestion":
+        return "uploaded_document"
+    return "llm_analysis"
+
+
 def _rebuild_kb_from_store() -> int:
     """Rebuild the FAISS knowledge base from all in-KB reports."""
     try:
         store = get_report_store()
         reports = store.get_all_in_kb()
-        texts = [(r.report_id, r.analysis_text) for r in reports]
+        texts = [
+            (r.report_id, r.analysis_text, _report_type_to_source_type(r.report_type))
+            for r in reports
+        ]
         count = rebuild_knowledge_base(texts)
         print(f"[KB] Rebuilt with {count} chunks from {len(texts)} reports")
         return count
@@ -324,7 +359,9 @@ def _findings_to_context(findings_dict: dict) -> str:
     if profiles:
         parts.append(f"=== Social Profiles ({len(profiles)}) ===")
         for p in profiles[:20]:
-            line = f"  [{p.get('platform', '?')}] @{p.get('username', '?')} - {p.get('display_name', '')}"
+            rel = p.get("source_reliability", {})
+            rel_tag = f", Reliability: {rel['grade']}" if rel.get("grade") else ""
+            line = f"  [{p.get('platform', '?')}{rel_tag}] @{p.get('username', '?')} - {p.get('display_name', '')}"
             parts.append(line)
             bio = p.get("bio", "")
             if bio:
@@ -339,14 +376,18 @@ def _findings_to_context(findings_dict: dict) -> str:
         for post in posts[:15]:
             ts = post.get("timestamp", "")
             content = post.get("content", "")[:200]
-            parts.append(f"  [{post.get('platform', '?')}] {ts}: {content}")
+            rel = post.get("source_reliability", {})
+            rel_tag = f", Reliability: {rel['grade']}" if rel.get("grade") else ""
+            parts.append(f"  [{post.get('platform', '?')}{rel_tag}] {ts}: {content}")
 
     web_mentions = findings_dict.get("web_mentions", [])
     if web_mentions:
         parts.append(f"\n=== Web Mentions ({len(web_mentions)}) ===")
         for wm in web_mentions[:10]:
+            rel = wm.get("source_reliability", {})
+            rel_tag = f", Reliability: {rel['grade']}" if rel.get("grade") else ""
             parts.append(
-                f"  [{wm.get('domain', '?')}] {wm.get('source_title', '')}: "
+                f"  [{wm.get('domain', '?')}{rel_tag}] {wm.get('source_title', '')}: "
                 f"{wm.get('snippet', '')[:200]}"
             )
 
@@ -372,7 +413,9 @@ def _findings_to_context(findings_dict: dict) -> str:
         for e in entities[:20]:
             conf = e.get("confidence", 0)
             conf_str = f"{conf:.0%}" if isinstance(conf, float) else str(conf)
-            parts.append(f"  [{e.get('entity_type', '?')}] {e.get('entity_value', '?')} (confidence: {conf_str})")
+            rel = e.get("source_reliability", {})
+            rel_tag = f", Reliability: {rel['grade']}" if rel.get("grade") else ""
+            parts.append(f"  [{e.get('entity_type', '?')}{rel_tag}] {e.get('entity_value', '?')} (confidence: {conf_str})")
 
     timeline = findings_dict.get("timeline", [])
     if timeline:
@@ -383,7 +426,10 @@ def _findings_to_context(findings_dict: dict) -> str:
     metadata = findings_dict.get("metadata", {})
     domain_intel = metadata.get("domain_intel", {})
     if domain_intel:
-        parts.append(f"\n=== Domain Intelligence: {domain_intel.get('domain', '?')} ===")
+        domain_rel = metadata.get("domain_intel_reliability", {})
+        whois_rel = domain_rel.get("whois", {})
+        whois_grade = f" [Reliability: {whois_rel['grade']}]" if whois_rel.get("grade") else ""
+        parts.append(f"\n=== Domain Intelligence{whois_grade}: {domain_intel.get('domain', '?')} ===")
         whois = domain_intel.get("whois", {})
         if whois.get("registrar"):
             parts.append(f"  Registrar: {whois['registrar']}")
@@ -414,7 +460,9 @@ def _findings_to_context(findings_dict: dict) -> str:
 
     ip_intel = metadata.get("ip_intel", {})
     if ip_intel:
-        parts.append(f"\n=== IP Intelligence: {ip_intel.get('ip', '?')} ===")
+        ip_rel = metadata.get("ip_intel_reliability", {})
+        ip_grade = f" [Reliability: {ip_rel['grade']}]" if ip_rel.get("grade") else ""
+        parts.append(f"\n=== IP Intelligence{ip_grade}: {ip_intel.get('ip', '?')} ===")
         if ip_intel.get("reverse_dns"):
             parts.append(f"  Reverse DNS: {ip_intel['reverse_dns']}")
         co = ip_intel.get("co_hosted_domains", [])
@@ -1322,6 +1370,7 @@ def create_app():
                 analysis_text=text,
                 subject_identifier=file.filename,
                 sensitivity_level="INTERNAL",
+                source_type="uploaded_document",
             )
 
             # MITRE technique extraction
@@ -1511,6 +1560,7 @@ def create_app():
             analysis_text=f"Q: {question}\n\nA: {answer}",
             subject_identifier=question[:100],
             sensitivity_level="INTERNAL",
+            source_type="llm_analysis",
         )
 
         if session_id and session_id in stored_reports:
@@ -1598,6 +1648,7 @@ def create_app():
 
         session_id = f"inv_{uuid.uuid4().hex[:16]}"
         user_hash = _get_user_hash()
+        provenance = ProvenanceTrail(clean_id, identifier_type)
 
         # ── Phase 1: Initial Dorking (Collection) ─────────────────────
         # Runs BEFORE platform backfill so the LLM sees the user's actual
@@ -1638,6 +1689,17 @@ def create_app():
         except Exception as exc:
             print(f"[ERROR] OSINT investigation failed: {exc}")
             return jsonify({"error": "OSINT collection failed. Please try again."}), 500
+
+        provenance.record_collection(
+            platforms=findings_dict.get("platforms_queried", platforms),
+            findings_summary={
+                "profiles": len(findings_dict.get("profiles", [])),
+                "posts": len(findings_dict.get("posts", [])),
+                "web_mentions": len(findings_dict.get("web_mentions", [])),
+                "entities": len(findings_dict.get("entities", [])),
+                "geo_points": len(findings_dict.get("geo_points", [])),
+            },
+        )
 
         # ── Phase 2b: Process uploaded media for EXIF geo ─────────────
         if media_files:
@@ -1944,6 +2006,11 @@ def create_app():
 
         analysis = result.content
         sensitivity = findings_dict.get("sensitivity_level", "INTERNAL")
+        provenance.record_analysis(
+            chain_name="investigation_chain",
+            analysis_text=analysis,
+            forgechain_block_id=result.block_id or "",
+        )
 
         # ── Phase 5: Final Dorking + Report Consolidation ────────
         web_intelligence = None
@@ -2009,6 +2076,88 @@ def create_app():
                 analysis += "\n\n---\n\n## Web Intelligence\n\n" + web_intelligence["text"]
                 print(f"[WARN] Consolidation failed ({exc}), falling back to append")
 
+        # ── Phase 7: Output Grounding Verification ────────
+        grounding_result = None
+        try:
+            grounding_result = verify_grounding(analysis, full_osint_context)
+            print(
+                f"[GROUNDING] {grounding_result['verdict']}: "
+                f"{grounding_result['grounded_ratio']:.0%} claims grounded "
+                f"({grounding_result['total_claims']} total, "
+                f"{grounding_result['ungrounded_claims']} ungrounded)"
+            )
+        except Exception as exc:
+            print(f"[WARN] Grounding verification failed (non-fatal): {exc}")
+
+        if grounding_result:
+            provenance.record_verification(
+                "Grounding Verification",
+                grounding_result.get("verdict", ""),
+                f"{grounding_result.get('grounded_ratio', 0):.0%} grounded",
+            )
+
+        # ── Phase 7b: Self-Consistency Check (optional) ────────
+        self_consistency_result = None
+        if SELF_CONSISTENCY_ENABLED:
+            try:
+                self_consistency_result = run_self_consistency_check(
+                    chain=chain,
+                    chain_input=chain_input,
+                    primary_output=analysis,
+                    gated_invoke_fn=gated_invoke,
+                    gated_invoke_kwargs={
+                        "chain_name": "investigation_chain",
+                        "endpoint": "/investigate",
+                        "mode": "osint",
+                        "session_id": session_id,
+                        "user_hash": user_hash,
+                        "trusted_keys": {"osint_data", "geo_data", "entity_graph_context"},
+                    },
+                )
+                print(
+                    f"[CONSISTENCY] {self_consistency_result['verdict']}: "
+                    f"{self_consistency_result['consistency_ratio']:.0%} stable "
+                    f"({self_consistency_result['runs_completed']} runs)"
+                )
+            except Exception as exc:
+                print(f"[WARN] Self-consistency check failed (non-fatal): {exc}")
+
+        # ── Phase 8: Competing Hypotheses (ACH) ────────
+        competing_hypotheses = None
+        try:
+            ach_chain = get_competing_hypotheses_chain()
+            ach_input = {
+                "analysis_text": analysis,
+                "osint_summary": full_osint_context[:6000],
+            }
+            ach_raw = ach_chain.invoke(ach_input)
+            competing_hypotheses = ach_raw.content if hasattr(ach_raw, "content") else str(ach_raw)
+            print(f"[ACH] Competing hypotheses generated ({len(competing_hypotheses)} chars)")
+        except Exception as exc:
+            print(f"[WARN] Competing hypotheses generation failed (non-fatal): {exc}")
+
+        # ── Phase 9: Bias Audit ────────
+        bias_audit_result = None
+        try:
+            bias_audit_result = run_bias_audit(
+                report_text=analysis,
+                findings_dict=findings_dict,
+                platforms_queried=findings_dict.get("platforms_queried", platforms),
+            )
+            print(
+                f"[BIAS] Audit complete: {bias_audit_result['overall_risk']} "
+                f"({len(bias_audit_result['warnings'])} warnings)"
+            )
+        except Exception as exc:
+            print(f"[WARN] Bias audit failed (non-fatal): {exc}")
+
+        if bias_audit_result:
+            provenance.record_verification(
+                "Bias Audit",
+                bias_audit_result.get("overall_risk", ""),
+                f"{len(bias_audit_result.get('warnings', []))} warnings",
+            )
+
         # Save to knowledge base
         report_id = _save_to_kb(
             source_route="/investigate",
@@ -2020,6 +2169,7 @@ def create_app():
             platforms_queried=findings_dict.get("platforms_queried", platforms),
             entity_count=len(entities_data),
             source_count=len(findings_dict.get("platforms_queried", [])),
+            source_type="llm_analysis",
         )
 
         # Cache in-memory for follow-up queries and export
@@ -2084,6 +2234,15 @@ def create_app():
             response["web_intelligence"] = wi_data
         if civilian_harm_data:
             response["civilian_harm"] = civilian_harm_data
+        if grounding_result:
+            response["grounding_verification"] = grounding_result
+        if competing_hypotheses:
+            response["competing_hypotheses"] = competing_hypotheses
+        if bias_audit_result:
+            response["bias_audit"] = bias_audit_result
+        if self_consistency_result:
+            response["self_consistency"] = self_consistency_result
+        response["provenance"] = provenance.to_dict()
 
         return jsonify(response)
 
@@ -2245,6 +2404,17 @@ def create_app():
         analysis = result.content
         sensitivity = findings_dict.get("sensitivity_level", "INTERNAL")
 
+        # Output grounding verification
+        enrich_grounding = None
+        try:
+            enrich_grounding = verify_grounding(analysis, osint_context)
+            print(
+                f"[GROUNDING] /enrich {enrich_grounding['verdict']}: "
+                f"{enrich_grounding['grounded_ratio']:.0%} grounded"
+            )
+        except Exception as exc:
+            print(f"[WARN] Grounding verification failed in /enrich (non-fatal): {exc}")
+
         report_id = _save_to_kb(
             source_route="/enrich",
             report_type="enrichment",
@@ -2253,9 +2423,10 @@ def create_app():
             identifier_type=identifier_type,
             sensitivity_level=sensitivity,
             entity_count=len(entities_data),
+            source_type="llm_analysis",
         )
 
-        return jsonify({
+        enrich_resp = {
             "report_id": report_id,
             "session_id": enrich_session_id,
             "analysis": analysis,
@@ -2263,7 +2434,10 @@ def create_app():
             "identifier": clean_id,
             "entity_count": len(entities_data),
             "metadata": findings_dict.get("metadata", {}),
-        })
+        }
+        if enrich_grounding:
+            enrich_resp["grounding_verification"] = enrich_grounding
+        return jsonify(enrich_resp)
 
     @app.route("/triangulate", methods=["POST"])
     @login_required
@@ -2513,6 +2687,7 @@ def create_app():
             analysis_text=analysis,
             sensitivity_level="RESTRICTED",
             tags=["geolocation", "triangulation"],
+            source_type="llm_analysis",
         )
 
         response = {
@@ -2688,6 +2863,7 @@ def create_app():
                 subject_identifier=f"Batch: {len(successful)} entities",
                 entity_count=sum(r.get("entity_count", 0) for r in successful),
                 tags=["batch"],
+                source_type="llm_analysis",
             )
 
         batch_harm = None
@@ -2780,11 +2956,23 @@ def create_app():
 
         analysis = result.content
 
+        # Output grounding verification
+        scenario_grounding = None
+        try:
+            scenario_grounding = verify_grounding(analysis, osint_data)
+            print(
+                f"[GROUNDING] /scenario {scenario_grounding['verdict']}: "
+                f"{scenario_grounding['grounded_ratio']:.0%} grounded"
+            )
+        except Exception as exc:
+            print(f"[WARN] Grounding verification failed in /scenario (non-fatal): {exc}")
+
         report_id = _save_to_kb(
             source_route="/scenario",
             report_type="scenario",
             analysis_text=analysis,
             tags=[scenario_type, "scenario"],
+            source_type="llm_analysis",
         )
 
         scenario_resp = {
@@ -2796,6 +2984,8 @@ def create_app():
         scenario_harm = _score_text_for_harm(osint_data)
         if scenario_harm:
             scenario_resp["civilian_harm"] = scenario_harm
+        if scenario_grounding:
+            scenario_resp["grounding_verification"] = scenario_grounding
         return jsonify(scenario_resp)
 
     # ================================================================

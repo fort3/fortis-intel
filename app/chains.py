@@ -57,6 +57,7 @@ RULES:
 2. Cite sources when referencing specific documents or data points.
 3. If the context does not contain enough information to answer, state that explicitly rather than guessing.
 4. Use markdown formatting: ## headers for sections, bullet points (-) for lists, **bold** for emphasis.
+5. Context marked as [PRIOR ANALYSIS] is from previous LLM-generated reports, not primary sources. Treat it as secondary reference only -- do not cite it as evidence. Prefer primary source context when available.
 
 DOCUMENT CONTEXT:
 {context}
@@ -78,6 +79,14 @@ PRINCIPLES:
 - Omit any section with no relevant data — do not write "No data available."
 - Be direct. Lead with the most important finding. Cut filler and hedging.
 - Use markdown: ## headers, bullet points (-), **bold** for key findings.
+
+SOURCE RELIABILITY (NATO Admiralty System):
+Each finding includes a reliability grade (A-F) where A = Completely reliable through F = Cannot be judged.
+- Weight claims by source reliability: prefer A-B sources over C-D sources when findings conflict.
+- When citing a source, include its reliability grade: (Twitter [C], HIGH) or (WHOIS [A], MODERATE).
+- Flag findings that rely solely on low-reliability sources (D-F) with an explicit caveat.
+- If high-reliability sources (A-B) contradict low-reliability sources (D-F), favour the high-reliability data.
+- In the Executive Summary, note the overall reliability profile of the evidence base.
 
 OSINT DATA:
 {osint_data}
@@ -113,6 +122,15 @@ Only if temporal data spans multiple events. Chronological, concise — one line
 
 ## Intelligence Gaps & Recommendations
 What is missing, what to collect next, and prioritized next steps. Combine gaps and recommendations — do not separate them into two sections.
+
+CLAIM GROUNDING RULES:
+- Every factual claim MUST cite the specific OSINT source that supports it. Do not assert facts that are not present in the data above.
+- Distinguish between CONFIRMED facts (directly stated in source data), INFERRED conclusions (logical deduction from multiple data points), and ASSUMPTIONS (plausible but unverified). Mark each:
+  - [CONFIRMED] — directly present in source data with citation
+  - [INFERRED] — deduced from multiple data points, cite all contributing sources
+  - [ASSUMED] — plausible extrapolation, explicitly flag as unverified
+- If data is insufficient to support a claim, state "Insufficient data" rather than speculating.
+- Do NOT generate specific dates, usernames, URLs, email addresses, or statistics unless they appear verbatim in the OSINT data.
 
 INTELLIGENCE BRIEF:"""
 
@@ -663,6 +681,62 @@ report_consolidation_prompt = ChatPromptTemplate.from_messages([
     ("system", REPORT_CONSOLIDATION_SYSTEM_PROMPT),
 ])
 
+# ── Competing Hypotheses (ACH) ───────────────────────────────────────
+
+COMPETING_HYPOTHESES_SYSTEM_PROMPT = """You are a senior intelligence analyst applying Analysis of Competing Hypotheses (ACH) to an OSINT investigation report.
+
+PURPOSE:
+Force structured evaluation of alternative explanations for the same evidence. Prevent confirmation bias by systematically testing whether the data supports explanations the primary analyst may not have considered.
+
+INVESTIGATION REPORT:
+{analysis_text}
+
+RAW OSINT DATA (abbreviated):
+{osint_summary}
+
+TASK:
+1. Identify the 2-3 primary conclusions/claims from the report.
+2. For EACH primary conclusion, generate 2 alternative hypotheses that could explain the same evidence differently. Alternatives should be plausible, not contrived.
+3. For each hypothesis (original + alternatives), evaluate EVERY key piece of evidence as:
+   - CONSISTENT: evidence supports this hypothesis
+   - INCONSISTENT: evidence contradicts this hypothesis
+   - NEUTRAL: evidence neither supports nor contradicts
+4. Rank hypotheses by how many inconsistencies each has. The hypothesis with the fewest inconsistencies is the strongest.
+5. Identify diagnostic evidence — evidence that distinguishes between hypotheses (consistent with one, inconsistent with another). This is the most valuable evidence.
+
+OUTPUT FORMAT:
+
+## Competing Hypotheses Assessment
+
+### Conclusion 1: [restate the primary conclusion]
+
+**H1 (Original):** [the report's conclusion]
+**H2 (Alternative):** [plausible alternative explanation]
+**H3 (Alternative):** [another plausible alternative]
+
+| Evidence | H1 | H2 | H3 |
+|----------|----|----|-----|
+| [evidence item] | CONSISTENT | INCONSISTENT | NEUTRAL |
+| ... | ... | ... | ... |
+
+**Diagnostic evidence:** [evidence that most strongly distinguishes between hypotheses]
+**Strongest hypothesis:** H[n] — [brief justification]
+**Confidence adjustment:** [Should original confidence be maintained, raised, or lowered? Why?]
+
+### Conclusion 2: [repeat pattern]
+...
+
+## Key Assumptions
+List 3-5 hidden assumptions in the original analysis that, if wrong, would change the conclusions.
+
+## Collection Priorities
+What additional evidence would definitively distinguish between the remaining hypotheses? Prioritised list.
+"""
+
+competing_hypotheses_prompt = ChatPromptTemplate.from_messages([
+    ("system", COMPETING_HYPOTHESES_SYSTEM_PROMPT),
+])
+
 # ---------------------------------------------------------------------------
 # Chain singletons
 # ---------------------------------------------------------------------------
@@ -681,6 +755,7 @@ _dork_validation_chain = None
 _dork_synthesis_chain = None
 _dork_deep_synthesis_chain = None
 _report_consolidation_chain = None
+_competing_hypotheses_chain = None
 _chat_intent_chain = None
 
 
@@ -879,6 +954,19 @@ def get_report_consolidation_chain():
     return _report_consolidation_chain
 
 
+def get_competing_hypotheses_chain():
+    """ACH chain — generates competing hypotheses for primary conclusions."""
+    global _competing_hypotheses_chain
+    if _competing_hypotheses_chain is None:
+        _competing_hypotheses_chain = (
+            RunnablePassthrough()
+            | competing_hypotheses_prompt
+            | get_analyst_llm()
+            | StrOutputParser()
+        )
+    return _competing_hypotheses_chain
+
+
 __all__ = [
     "get_rag_chain",
     "get_investigation_chain",
@@ -894,5 +982,6 @@ __all__ = [
     "get_dork_synthesis_chain",
     "get_dork_deep_synthesis_chain",
     "get_report_consolidation_chain",
+    "get_competing_hypotheses_chain",
     "get_chat_intent_chain",
 ]

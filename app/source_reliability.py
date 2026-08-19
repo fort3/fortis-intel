@@ -1,0 +1,336 @@
+"""NATO Admiralty System source reliability tagging for OSINT findings.
+
+Provides reliability grading (A-F) for each source platform and
+information credibility assessment (1-6) for collected data.
+
+Grades:
+    A = Completely reliable
+    B = Usually reliable
+    C = Fairly reliable
+    D = Not usually reliable
+    E = Unreliable
+    F = Cannot be judged
+
+Information credibility:
+    1 = Confirmed by other independent sources
+    2 = Probably true (consistent with known facts)
+    3 = Possibly true (not confirmed, not contradicted)
+    4 = Doubtful (inconsistent with known facts)
+    5 = Improbable (contradicted by known facts)
+    6 = Cannot be judged
+"""
+
+from __future__ import annotations
+
+import logging
+from datetime import datetime, timezone
+from typing import Any
+
+log = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# Grade definitions
+# ---------------------------------------------------------------------------
+
+GRADE_LABELS: dict[str, str] = {
+    "A": "Completely reliable",
+    "B": "Usually reliable",
+    "C": "Fairly reliable",
+    "D": "Not usually reliable",
+    "E": "Unreliable",
+    "F": "Cannot be judged",
+}
+
+GRADE_ORDER = list(GRADE_LABELS.keys())  # A=0 .. F=5
+
+CREDIBILITY_LABELS: dict[str, str] = {
+    "1": "Confirmed by other independent sources",
+    "2": "Probably true",
+    "3": "Possibly true",
+    "4": "Doubtful",
+    "5": "Improbable",
+    "6": "Cannot be judged",
+}
+
+# ---------------------------------------------------------------------------
+# Platform -> base grade mapping
+# ---------------------------------------------------------------------------
+
+_PLATFORM_GRADES: dict[str, str] = {
+    # A -- Official registry records, legally scrutinized
+    "whois": "A",
+    "dns": "A",
+    "ssl_cert": "A",
+    # B -- Structured scans / editorial oversight
+    "shodan": "B",
+    "news": "B",
+    "newsapi": "B",
+    # C -- Platform-verified possible / published content
+    "twitter": "C",
+    "x": "C",
+    "reddit": "C",
+    "youtube": "C",
+    "instagram": "C",
+    "facebook": "C",
+    "rss_feed": "C",
+    "rss": "C",
+    # D -- No identity verification / anonymous by default
+    "telegram": "D",
+    "mastodon": "D",
+    "tiktok": "D",
+    # E -- Unknown provenance / unvetted results
+    "web_scrape": "E",
+    "dork_search": "E",
+    # F -- Cannot be judged
+    "unknown": "F",
+}
+
+
+def _grade_index(grade: str) -> int:
+    """Return numeric index for a grade (A=0, F=5)."""
+    try:
+        return GRADE_ORDER.index(grade.upper())
+    except ValueError:
+        return 5  # default to F
+
+
+def _index_to_grade(index: int) -> str:
+    """Clamp index to valid range and return grade letter."""
+    clamped = max(0, min(index, len(GRADE_ORDER) - 1))
+    return GRADE_ORDER[clamped]
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+
+def get_source_reliability(
+    platform: str,
+    metadata: dict[str, Any] | None = None,
+) -> dict[str, str]:
+    """Return a reliability assessment for a given source platform.
+
+    Args:
+        platform: Source platform key (e.g. ``"twitter"``, ``"whois"``).
+        metadata: Optional dict with keys such as ``verified``,
+            ``account_age_days``, ``followers``, ``karma`` that can
+            upgrade or downgrade the base grade.
+
+    Returns:
+        Dict with ``grade``, ``label``, ``credibility``, and ``rationale``.
+    """
+    platform_key = platform.strip().lower()
+    base_grade = _PLATFORM_GRADES.get(platform_key, "F")
+    rationale_parts: list[str] = []
+
+    # Base rationale
+    if base_grade == "A":
+        rationale_parts.append("Official registry/technical records")
+    elif base_grade == "B":
+        rationale_parts.append("Structured scan data or editorially vetted")
+    elif base_grade == "C":
+        rationale_parts.append("Platform-verified possible; content unvetted")
+    elif base_grade == "D":
+        rationale_parts.append("No identity verification on platform")
+    elif base_grade == "E":
+        rationale_parts.append("Unknown provenance; unvetted content")
+    else:
+        rationale_parts.append("Source reliability cannot be judged")
+
+    grade_idx = _grade_index(base_grade)
+
+    # Metadata-based adjustments
+    if metadata:
+        # Verified account -> upgrade by 1 grade
+        if metadata.get("verified"):
+            grade_idx = max(grade_idx - 1, 0)
+            rationale_parts.append("Verified account (+1)")
+
+        # Account age > 2 years -> upgrade by 1 (cap at B)
+        account_age_days = metadata.get("account_age_days")
+        if account_age_days is None and metadata.get("created_at"):
+            try:
+                created = datetime.fromisoformat(
+                    str(metadata["created_at"]).replace("Z", "+00:00")
+                )
+                now = datetime.now(tz=timezone.utc)
+                account_age_days = (now - created).days
+            except (ValueError, TypeError):
+                account_age_days = None
+
+        if account_age_days is not None and account_age_days > 730:
+            new_idx = max(grade_idx - 1, 1)  # cap at B (index 1)
+            if new_idx < grade_idx:
+                grade_idx = new_idx
+                rationale_parts.append("Account age >2 years (+1, cap B)")
+
+        # Very few followers/karma -> downgrade by 1
+        followers = metadata.get("followers")
+        karma = metadata.get("karma")
+        engagement = followers if followers is not None else karma
+        if engagement is not None and engagement < 50:
+            grade_idx = min(grade_idx + 1, 5)
+            rationale_parts.append("Very low engagement (-1)")
+
+    final_grade = _index_to_grade(grade_idx)
+
+    # Default credibility based on grade
+    credibility = _default_credibility(final_grade)
+
+    return {
+        "grade": final_grade,
+        "label": GRADE_LABELS[final_grade],
+        "credibility": credibility,
+        "rationale": "; ".join(rationale_parts),
+    }
+
+
+def _default_credibility(grade: str) -> str:
+    """Map a reliability grade to a default information credibility score."""
+    return {
+        "A": "2",  # Probably true
+        "B": "2",  # Probably true
+        "C": "3",  # Possibly true
+        "D": "3",  # Possibly true
+        "E": "6",  # Cannot be judged
+        "F": "6",  # Cannot be judged
+    }.get(grade, "6")
+
+
+def get_information_credibility(data: dict[str, Any]) -> str:
+    """Rate information credibility 1-6.
+
+    1 = Confirmed by other independent sources
+    2 = Probably true (consistent with known facts)
+    3 = Possibly true (not confirmed, not contradicted)
+    4 = Doubtful (inconsistent with known facts)
+    5 = Improbable (contradicted by known facts)
+    6 = Cannot be judged
+
+    For now, uses heuristics based on the data dict. Full cross-referencing
+    credibility assessment will be implemented in a future phase.
+    """
+    if not data:
+        return "6"
+
+    source_count = data.get("source_count", 0)
+    confidence = data.get("confidence", 0)
+
+    # Multiple corroborating sources -> confirmed
+    if source_count >= 3 and confidence >= 0.8:
+        return "1"
+
+    # Two sources or high confidence -> probably true
+    if source_count >= 2 or confidence >= 0.7:
+        return "2"
+
+    # Single source with moderate confidence -> possibly true
+    if source_count >= 1 and confidence >= 0.4:
+        return "3"
+
+    # Low confidence -> doubtful
+    if 0 < confidence < 0.3:
+        return "4"
+
+    # Default: cannot be judged
+    return "6"
+
+
+def tag_profile_reliability(
+    platform: str,
+    verified: bool = False,
+    followers: int = 0,
+    created_at: str | None = None,
+) -> dict[str, str]:
+    """Convenience wrapper to tag a social profile with reliability."""
+    meta: dict[str, Any] = {
+        "verified": verified,
+        "followers": followers,
+    }
+    if created_at:
+        meta["created_at"] = created_at
+    return get_source_reliability(platform, metadata=meta)
+
+
+def tag_post_reliability(
+    platform: str,
+    author_verified: bool = False,
+    author_followers: int = 0,
+) -> dict[str, str]:
+    """Convenience wrapper to tag a social post with reliability."""
+    meta: dict[str, Any] = {
+        "verified": author_verified,
+        "followers": author_followers,
+    }
+    return get_source_reliability(platform, metadata=meta)
+
+
+def tag_web_mention_reliability(
+    mention_type: str,
+    domain: str = "",
+) -> dict[str, str]:
+    """Tag a web mention with reliability based on its type."""
+    # Map mention types to platform keys
+    type_map = {
+        "news": "news",
+        "news_deep": "news",
+        "rss": "rss_feed",
+        "web_scrape": "web_scrape",
+        "dork": "dork_search",
+    }
+    platform_key = type_map.get(mention_type, "web_scrape")
+    return get_source_reliability(platform_key)
+
+
+def tag_entity_reliability(
+    enrichment_sources: list[str],
+) -> dict[str, str]:
+    """Tag an enriched entity based on its enrichment sources.
+
+    Uses the highest-reliability source as the base grade.
+    """
+    if not enrichment_sources:
+        return get_source_reliability("unknown")
+
+    # Find the best grade among all enrichment sources
+    best_idx = 5  # start at F
+    for src in enrichment_sources:
+        src_lower = src.strip().lower()
+        # Map enrichment source names to platform keys
+        source_map = {
+            "whois": "whois",
+            "dns": "dns",
+            "dnsdumpster": "dns",
+            "reverse_dns": "dns",
+            "reverse_ip": "dns",
+            "ip_geolocation": "shodan",
+            "ip_intel": "shodan",
+            "domain_intel": "whois",
+            "social_search": "twitter",
+            "news": "news",
+            "nlp": "web_scrape",
+        }
+        mapped = source_map.get(src_lower, src_lower)
+        grade = _PLATFORM_GRADES.get(mapped, "F")
+        idx = _grade_index(grade)
+        if idx < best_idx:
+            best_idx = idx
+
+    best_grade = _index_to_grade(best_idx)
+    return {
+        "grade": best_grade,
+        "label": GRADE_LABELS[best_grade],
+        "credibility": _default_credibility(best_grade),
+        "rationale": f"Based on enrichment sources: {', '.join(enrichment_sources)}",
+    }
+
+
+def format_reliability_tag(reliability: dict[str, str]) -> str:
+    """Format a reliability dict as a compact inline tag.
+
+    Example: ``[B - Usually reliable]``
+    """
+    grade = reliability.get("grade", "F")
+    label = reliability.get("label", GRADE_LABELS.get(grade, "?"))
+    return f"[{grade} - {label}]"

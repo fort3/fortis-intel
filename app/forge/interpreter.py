@@ -24,6 +24,7 @@ CHAIN_DESCRIPTIONS = {
     "dork_synthesis_chain": "Web search synthesis — integrates search results into investigation",
     "dork_deep_synthesis_chain": "Deep synthesis — enriches findings with full-page scraped content",
     "report_consolidation_chain": "Report consolidation — merges initial analysis with web intelligence into unified brief",
+    "competing_hypotheses_chain": "Competing hypotheses (ACH) — generates alternative explanations to counter confirmation bias",
     "chat_intent_chain": "Chat intent classifier — routes user messages to appropriate OSINT pipeline",
     # Image analysis (no LLM chains — these are local processing modules)
     "image_reverse_search": "Reverse image search via TinEye API and perceptual hash cache",

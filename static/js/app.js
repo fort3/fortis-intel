@@ -1005,6 +1005,9 @@ async function runBatchInvestigation() {
             if (data.civilian_harm) {
                 html += renderCivilianHarmSection(data.civilian_harm);
             }
+            if (data.grounding_verification) {
+                html += renderGroundingSection(data.grounding_verification);
+            }
 
             content.innerHTML = html;
         }
@@ -1222,7 +1225,8 @@ async function runScenario() {
             session_id: data.session_id,
             identifier: scenarioType,
             identifier_type: 'scenario',
-            civilian_harm: data.civilian_harm || null
+            civilian_harm: data.civilian_harm || null,
+            grounding_verification: data.grounding_verification || null
         });
 
         // Store for export
@@ -1232,7 +1236,8 @@ async function runScenario() {
             sensitivity_level: 'INTERNAL',
             identifier: scenarioType,
             identifier_type: 'scenario',
-            civilian_harm: data.civilian_harm || null
+            civilian_harm: data.civilian_harm || null,
+            grounding_verification: data.grounding_verification || null
         };
 
         showToast('Scenario analysis complete.', 'success');
@@ -1648,6 +1653,21 @@ function renderAnalysis(data) {
         }
         if (data.civilian_harm) {
             html += renderCivilianHarmSection(data.civilian_harm);
+        }
+        if (data.grounding_verification) {
+            html += renderGroundingSection(data.grounding_verification);
+        }
+        if (data.bias_audit) {
+            html += renderBiasAuditSection(data.bias_audit);
+        }
+        if (data.self_consistency) {
+            html += renderSelfConsistencySection(data.self_consistency);
+        }
+        if (data.competing_hypotheses) {
+            html += renderCompetingHypothesesSection(data.competing_hypotheses);
+        }
+        if (data.provenance) {
+            html += renderProvenanceSection(data.provenance);
         }
         if (data.image_analysis && data.image_analysis.length > 0) {
             html += renderImageAnalysisSection(data.image_analysis);
@@ -3329,6 +3349,263 @@ function renderCivilianHarmSection(harm) {
             h += '</div>';
         }
         h += '</div>';
+    }
+
+    h += '</div></div>';
+    return h;
+}
+
+function renderGroundingSection(grounding) {
+    if (!grounding || !grounding.total_claims) return '';
+
+    var verdict = grounding.verdict || 'WELL_GROUNDED';
+    var ratio = grounding.grounded_ratio || 0;
+    var pct = (ratio * 100).toFixed(0);
+    var total = grounding.total_claims || 0;
+    var grounded = grounding.grounded_claims || 0;
+    var weak = grounding.weakly_grounded_claims || 0;
+    var ungrounded = grounding.ungrounded_claims || 0;
+    var details = grounding.ungrounded_details || [];
+    var warnings = grounding.warnings || [];
+
+    // Badge styling based on verdict
+    var badgeColor, badgeLabel;
+    if (verdict === 'WELL_GROUNDED') {
+        badgeColor = '#22c55e';
+        badgeLabel = 'WELL GROUNDED';
+    } else if (verdict === 'PARTIALLY_GROUNDED') {
+        badgeColor = '#eab308';
+        badgeLabel = 'PARTIALLY GROUNDED';
+    } else {
+        badgeColor = '#ef4444';
+        badgeLabel = 'POORLY GROUNDED';
+    }
+
+    var h = '<div class="result-section grounding-section">' +
+        '<div class="ch-header" onclick="this.parentElement.classList.toggle(\'ch-collapsed\')">' +
+        '<h4>Analysis Grounding</h4>' +
+        '<span class="ch-methodology" style="background:' + badgeColor + ';color:#fff;padding:2px 8px;border-radius:4px;font-size:0.75rem">' +
+        badgeLabel + '</span>' +
+        '<span class="ch-summary">' + pct + '% of claims grounded in source data</span>' +
+        '<span class="ch-toggle">&#9660;</span></div>' +
+        '<div class="ch-body">';
+
+    // Stats bar
+    h += '<div class="ch-distribution">';
+    if (grounded > 0) {
+        var gPct = (grounded / total * 100).toFixed(0);
+        h += '<div class="ch-bar-segment" style="width:' + gPct +
+            '%;background:#22c55e" title="Grounded: ' + grounded + '">' +
+            (gPct >= 10 ? 'G ' + grounded : '') + '</div>';
+    }
+    if (weak > 0) {
+        var wPct = (weak / total * 100).toFixed(0);
+        h += '<div class="ch-bar-segment" style="width:' + wPct +
+            '%;background:#eab308" title="Weakly grounded: ' + weak + '">' +
+            (wPct >= 10 ? 'W ' + weak : '') + '</div>';
+    }
+    if (ungrounded > 0) {
+        var uPct = (ungrounded / total * 100).toFixed(0);
+        h += '<div class="ch-bar-segment" style="width:' + uPct +
+            '%;background:#ef4444" title="Ungrounded: ' + ungrounded + '">' +
+            (uPct >= 10 ? 'U ' + ungrounded : '') + '</div>';
+    }
+    h += '</div>';
+
+    // Legend
+    h += '<div class="ch-legend">';
+    if (grounded > 0) {
+        h += '<span class="ch-legend-item"><span class="ch-dot" style="background:#22c55e"></span>Grounded: ' + grounded + '</span>';
+    }
+    if (weak > 0) {
+        h += '<span class="ch-legend-item"><span class="ch-dot" style="background:#eab308"></span>Weakly grounded: ' + weak + '</span>';
+    }
+    if (ungrounded > 0) {
+        h += '<span class="ch-legend-item"><span class="ch-dot" style="background:#ef4444"></span>Ungrounded: ' + ungrounded + '</span>';
+    }
+    h += '<span class="ch-legend-item" style="margin-left:auto;opacity:0.7">Total claims: ' + total + '</span>';
+    h += '</div>';
+
+    // Warnings
+    if (warnings.length > 0) {
+        h += '<div style="margin:0.5rem 0;padding:0.4rem 0.6rem;background:rgba(234,179,8,0.1);border-left:3px solid #eab308;border-radius:2px;font-size:0.85rem">';
+        for (var w = 0; w < warnings.length; w++) {
+            h += '<div>' + escapeHtml(warnings[w]) + '</div>';
+        }
+        h += '</div>';
+    }
+
+    // Ungrounded claim details (expandable)
+    if (details.length > 0) {
+        h += '<details class="intel-card" style="margin-top:0.5rem"><summary style="cursor:pointer;font-weight:600">' +
+            'Ungrounded Claims (' + details.length + ')</summary>';
+        for (var d = 0; d < details.length; d++) {
+            var item = details[d];
+            var simPct = ((item.max_similarity || 0) * 100).toFixed(0);
+            h += '<div class="ch-item" style="border-left:3px solid #ef4444;padding-left:0.6rem;margin:0.4rem 0">' +
+                '<div class="ch-content" style="font-size:0.85rem">' + escapeHtml(item.claim || '') + '</div>' +
+                '<div style="font-size:0.75rem;opacity:0.7;margin-top:0.2rem">' +
+                'Similarity: ' + simPct + '% &middot; Closest source: ' +
+                escapeHtml((item.closest_source || '').substring(0, 150)) +
+                (item.closest_source && item.closest_source.length > 150 ? '...' : '') +
+                '</div></div>';
+        }
+        h += '</details>';
+    }
+
+    h += '</div></div>';
+    return h;
+}
+
+function renderSelfConsistencySection(sc) {
+    if (!sc || !sc.total_claims) return '';
+
+    var verdict = sc.verdict || 'CONSISTENT';
+    var ratio = sc.consistency_ratio || 0;
+    var pct = (ratio * 100).toFixed(0);
+    var stable = sc.stable_claims || 0;
+    var unstable = sc.unstable_claims || 0;
+    var total = sc.total_claims || 0;
+    var runs = sc.runs_completed || 0;
+    var details = sc.unstable_details || [];
+
+    var badgeColor = verdict === 'CONSISTENT' ? '#22c55e' : verdict === 'MOSTLY_CONSISTENT' ? '#eab308' : '#ef4444';
+
+    var h = '<div class="result-section self-consistency-section">' +
+        '<div class="ch-header" onclick="this.parentElement.classList.toggle(\'ch-collapsed\')">' +
+        '<h4>Self-Consistency Check</h4>' +
+        '<span class="ch-methodology" style="background:' + badgeColor + ';color:#fff;padding:2px 8px;border-radius:4px;font-size:0.75rem">' +
+        verdict.replace(/_/g, ' ') + '</span>' +
+        '<span class="ch-summary">' + pct + '% stable across ' + runs + ' runs</span>' +
+        '<span class="ch-toggle">&#9660;</span></div>' +
+        '<div class="ch-body">';
+
+    h += '<div style="font-size:0.85rem;margin-bottom:0.5rem">' +
+        '<strong>' + stable + '</strong> stable claims, <strong>' + unstable + '</strong> unstable out of ' + total + ' total</div>';
+
+    if (details.length > 0) {
+        h += '<details class="intel-card" style="margin-top:0.3rem"><summary style="cursor:pointer;font-weight:600">' +
+            'Unstable Claims (' + details.length + ')</summary>';
+        for (var d = 0; d < details.length; d++) {
+            var item = details[d];
+            h += '<div style="border-left:3px solid #eab308;padding-left:0.6rem;margin:0.4rem 0;font-size:0.85rem">' +
+                '<div>' + escapeHtml(item.claim || '') + '</div>' +
+                '<div style="font-size:0.75rem;opacity:0.7;margin-top:0.15rem">' +
+                'Appeared in ' + item.appearances + '/' + item.total_runs + ' runs</div></div>';
+        }
+        h += '</details>';
+    }
+
+    if (sc.error) {
+        h += '<div style="font-size:0.8rem;opacity:0.6;margin-top:0.3rem">' + escapeHtml(sc.error) + '</div>';
+    }
+
+    h += '</div></div>';
+    return h;
+}
+
+function renderBiasAuditSection(audit) {
+    if (!audit) return '';
+
+    var risk = audit.overall_risk || 'HEALTHY';
+    var score = audit.score || 0;
+    var checks = audit.checks || [];
+    var warnings = audit.warnings || [];
+    var recommendations = audit.recommendations || [];
+
+    var badgeColor = risk === 'HIGH' ? '#ef4444' : risk === 'ELEVATED' ? '#eab308' : '#22c55e';
+    var badgeLabel = risk === 'HIGH' ? 'HIGH RISK' : risk === 'ELEVATED' ? 'ELEVATED' : 'HEALTHY';
+
+    var h = '<div class="result-section bias-audit-section">' +
+        '<div class="ch-header" onclick="this.parentElement.classList.toggle(\'ch-collapsed\')">' +
+        '<h4>Analysis Bias Audit</h4>' +
+        '<span class="ch-methodology" style="background:' + badgeColor + ';color:#fff;padding:2px 8px;border-radius:4px;font-size:0.75rem">' +
+        badgeLabel + '</span>' +
+        '<span class="ch-summary">' + warnings.length + ' bias warning' + (warnings.length !== 1 ? 's' : '') + '</span>' +
+        '<span class="ch-toggle">&#9660;</span></div>' +
+        '<div class="ch-body">';
+
+    for (var ci = 0; ci < checks.length; ci++) {
+        var check = checks[ci];
+        var name = (check.name || '').replace(/_/g, ' ');
+        var flagged = check.flagged;
+        var icon = flagged ? '&#x26A0;' : '&#x2714;';
+        var color = flagged ? '#eab308' : '#22c55e';
+        h += '<div style="display:flex;align-items:flex-start;gap:0.5rem;margin:0.4rem 0;font-size:0.85rem">' +
+            '<span style="color:' + color + ';flex-shrink:0">' + icon + '</span>' +
+            '<div><strong style="text-transform:capitalize">' + escapeHtml(name) + '</strong>';
+        if (flagged && check.warning) {
+            h += '<div style="opacity:0.85;margin-top:0.15rem">' + escapeHtml(check.warning) + '</div>';
+        } else if (check.detail) {
+            h += '<div style="opacity:0.6;margin-top:0.15rem">' + escapeHtml(check.detail) + '</div>';
+        } else if (!flagged) {
+            h += '<span style="opacity:0.6;margin-left:0.5rem">No issues detected</span>';
+        }
+        h += '</div></div>';
+    }
+
+    if (recommendations.length > 0) {
+        h += '<details class="intel-card" style="margin-top:0.5rem"><summary style="cursor:pointer;font-weight:600">Recommendations (' + recommendations.length + ')</summary>';
+        for (var ri = 0; ri < recommendations.length; ri++) {
+            h += '<div style="font-size:0.85rem;padding:0.3rem 0;border-bottom:1px solid rgba(255,255,255,0.05)">' + escapeHtml(recommendations[ri]) + '</div>';
+        }
+        h += '</details>';
+    }
+
+    h += '</div></div>';
+    return h;
+}
+
+function renderCompetingHypothesesSection(hypothesesText) {
+    if (!hypothesesText) return '';
+
+    var h = '<div class="result-section competing-hypotheses-section">' +
+        '<div class="ch-header" onclick="this.parentElement.classList.toggle(\'ch-collapsed\')">' +
+        '<h4>Competing Hypotheses (ACH)</h4>' +
+        '<span class="ch-summary">Alternative explanations assessed</span>' +
+        '<span class="ch-toggle">&#9660;</span></div>' +
+        '<div class="ch-body">' +
+        '<div class="analysis-content">' + renderMarkdown(hypothesesText) + '</div>' +
+        '</div></div>';
+    return h;
+}
+
+function renderProvenanceSection(prov) {
+    if (!prov || !prov.steps || !prov.steps.length) return '';
+
+    var h = '<div class="result-section provenance-section">' +
+        '<div class="ch-header" onclick="this.parentElement.classList.toggle(\'ch-collapsed\')">' +
+        '<h4>Provenance Trail</h4>' +
+        '<span class="ch-summary">' + prov.total_steps + ' step' + (prov.total_steps !== 1 ? 's' : '') +
+        ' &middot; chain of custody</span>' +
+        '<span class="ch-toggle">&#9660;</span></div>' +
+        '<div class="ch-body">';
+
+    h += '<div style="font-size:0.8rem;opacity:0.6;margin-bottom:0.5rem">Subject: ' +
+        escapeHtml(prov.subject || '') + ' (' + escapeHtml(prov.identifier_type || '') +
+        ') &middot; Started: ' + escapeHtml((prov.created || '').replace('T', ' ').substring(0, 19)) + '</div>';
+
+    var stageColors = {
+        'osint_collection': '#3b82f6',
+        'llm_analysis': '#8b5cf6',
+        'web_intelligence': '#06b6d4',
+        'verification': '#22c55e',
+    };
+
+    for (var si = 0; si < prov.steps.length; si++) {
+        var step = prov.steps[si];
+        var color = stageColors[step.stage] || '#6b7280';
+        var time = (step.timestamp || '').replace('T', ' ').substring(11, 19);
+        h += '<div style="display:flex;gap:0.6rem;margin:0.3rem 0;font-size:0.85rem;align-items:flex-start">' +
+            '<span style="flex-shrink:0;width:1.4rem;height:1.4rem;border-radius:50%;background:' + color +
+            ';color:#fff;display:flex;align-items:center;justify-content:center;font-size:0.7rem;font-weight:700">' +
+            step.step + '</span>' +
+            '<div><strong>' + escapeHtml(step.action || '') + '</strong>' +
+            '<div style="font-size:0.75rem;opacity:0.7">' +
+            escapeHtml(step.detail || '') +
+            (step.data_hash ? ' &middot; hash: ' + escapeHtml(step.data_hash) : '') +
+            (time ? ' &middot; ' + time : '') +
+            '</div></div></div>';
     }
 
     h += '</div></div>';

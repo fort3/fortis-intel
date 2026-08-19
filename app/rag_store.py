@@ -209,8 +209,20 @@ def verify_kb_on_startup() -> bool:
         return False
 
 
-def add_to_knowledge_base(text: str, report_id: str) -> int:
+def add_to_knowledge_base(
+    text: str,
+    report_id: str,
+    source_type: str = "llm_analysis",
+) -> int:
     """Chunk text and merge into the global Knowledge Base vectorstore.
+
+    Args:
+        text: The text content to index.
+        report_id: Unique identifier for the source report.
+        source_type: Provenance tag for RAG contamination guard.
+            "llm_analysis" -- LLM-generated report (default).
+            "primary_source" -- raw OSINT data.
+            "uploaded_document" -- user-uploaded document.
 
     Returns the number of chunks added.
     """
@@ -223,10 +235,16 @@ def add_to_knowledge_base(text: str, report_id: str) -> int:
     if not chunks:
         return 0
 
+    # Attach provenance metadata to every chunk for RAG contamination guard
+    metadatas = [
+        {"source_type": source_type, "report_id": report_id[:8]}
+        for _ in chunks
+    ]
+
     with _kb_lock:
         kbp = _kb_path()
         embedder = get_embedder()
-        new_vs = FAISS.from_texts(chunks, embedder)
+        new_vs = FAISS.from_texts(chunks, embedder, metadatas=metadatas)
 
         if knowledge_base_exists():
             try:
@@ -259,26 +277,90 @@ def add_to_knowledge_base(text: str, report_id: str) -> int:
     return len(chunks)
 
 
-def query_knowledge_base(query: str, k: int = 3) -> list[str]:
+_MIN_COSINE_SIMILARITY = 0.3
+"""Minimum cosine similarity for a KB chunk to be considered relevant.
+
+With BGE normalized embeddings the FAISS L2^2 score relates to cosine
+similarity via: cos_sim = 1 - score / 2.  We convert and filter so that
+low-relevance chunks never pollute the LLM context.
+"""
+
+
+def query_knowledge_base(
+    query: str,
+    k: int = 3,
+    filter_llm_content: bool = False,
+) -> list[dict]:
     """Retrieve the top-k most relevant KB chunks for a query.
 
     The BGE query instruction prefix is applied automatically by the
     embedder so the model can distinguish queries from passages.
+
+    Args:
+        query: The search query.
+        k: Maximum number of results.
+        filter_llm_content: When True, exclude chunks tagged as
+            ``source_type: "llm_analysis"`` entirely.  When False
+            (default, for backward compatibility), LLM-generated chunks
+            are still returned but their content is prefixed with
+            ``[PRIOR ANALYSIS - not a primary source]`` so the LLM
+            understands they are derived, not primary evidence.
+
+    Returns:
+        A list of dicts, each with keys ``content`` (str),
+        ``source_type`` (str), and ``score`` (float, cosine similarity).
     """
     try:
         vs = _load_kb_vs()
         if vs is None:
             return []
-        docs = vs.similarity_search(query, k=k)
-        return [doc.page_content for doc in docs]
+
+        # Fetch extra candidates so we still have enough after filtering
+        fetch_k = k * 3 if filter_llm_content else k
+        docs_and_scores = vs.similarity_search_with_score(query, k=fetch_k)
+
+        results: list[dict] = []
+        for doc, l2_sq_score in docs_and_scores:
+            # Convert FAISS L2^2 distance to cosine similarity
+            # (valid for unit-normalised embeddings)
+            cosine_sim = 1.0 - l2_sq_score / 2.0
+
+            if cosine_sim < _MIN_COSINE_SIMILARITY:
+                continue
+
+            source_type = doc.metadata.get("source_type", "unknown") if doc.metadata else "unknown"
+
+            if filter_llm_content and source_type == "llm_analysis":
+                continue
+
+            content = doc.page_content
+            # Label LLM-generated content so downstream prompts treat it
+            # as secondary reference, not primary evidence.
+            if not filter_llm_content and source_type == "llm_analysis":
+                content = "[PRIOR ANALYSIS - not a primary source] " + content
+
+            results.append({
+                "content": content,
+                "source_type": source_type,
+                "score": round(cosine_sim, 4),
+            })
+
+            if len(results) >= k:
+                break
+
+        return results
     except Exception as exc:
         print(f"[WARN] KB query failed: {exc}")
         _invalidate_kb_cache()
         return []
 
 
-def rebuild_knowledge_base(reports: list[tuple[str, str]]) -> int:
-    """Rebuild the entire KB from a list of (report_id, text) tuples.
+def rebuild_knowledge_base(reports: list) -> int:
+    """Rebuild the entire KB from a list of report tuples.
+
+    Accepts either ``(report_id, text)`` pairs (legacy) or
+    ``(report_id, text, source_type)`` triples.  When *source_type* is
+    omitted it defaults to ``"llm_analysis"``.
 
     Replaces the existing KB wholesale. Returns total chunks indexed.
     """
@@ -292,10 +374,19 @@ def rebuild_knowledge_base(reports: list[tuple[str, str]]) -> int:
 
     splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=150)
     all_chunks: list[str] = []
-    for report_id, text in reports:
+    all_metadatas: list[dict] = []
+    for item in reports:
+        report_id = item[0]
+        text = item[1]
+        source_type = item[2] if len(item) >= 3 else "llm_analysis"
         if text and text.strip():
             prefixed = f"[report:{report_id[:8]}] {text}"
-            all_chunks.extend(splitter.split_text(prefixed))
+            chunks = splitter.split_text(prefixed)
+            all_chunks.extend(chunks)
+            all_metadatas.extend(
+                {"source_type": source_type, "report_id": report_id[:8]}
+                for _ in chunks
+            )
 
     if not all_chunks:
         return 0
@@ -303,7 +394,7 @@ def rebuild_knowledge_base(reports: list[tuple[str, str]]) -> int:
     with _kb_lock:
         kbp = _kb_path()
         os.makedirs(kbp, exist_ok=True)
-        vs = FAISS.from_texts(all_chunks, get_embedder())
+        vs = FAISS.from_texts(all_chunks, get_embedder(), metadatas=all_metadatas)
         vs.save_local(kbp)
         _write_hmac(kbp)
         _invalidate_kb_cache()

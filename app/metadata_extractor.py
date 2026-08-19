@@ -1,7 +1,8 @@
 """Metadata extraction utilities for Fortis Intelligence Hub.
 
 Phase 1: All extraction methods are functional. ``extract_exif()`` uses
-Pillow or exifread. NLP entity extraction requires spaCy with
+Pillow or exifread. NLP entity extraction requires spaCy — loads
+``xx_ent_wiki_sm`` (multilingual) when available, falls back to
 ``en_core_web_sm``. Language detection requires ``langdetect``.
 """
 
@@ -76,6 +77,13 @@ class MetadataBundle:
 # Extractor
 # ---------------------------------------------------------------------------
 
+_SPACY_MODEL_PREFERENCE = [
+    "xx_ent_wiki_sm",   # multilingual NER (covers 100+ languages)
+    "en_core_web_trf",  # transformer-based English (highest accuracy)
+    "en_core_web_sm",   # small English (fastest, lowest accuracy)
+]
+
+
 class MetadataExtractor:
     """Extract and normalise metadata from images, text, and other content.
 
@@ -83,6 +91,7 @@ class MetadataExtractor:
     """
 
     _nlp = None
+    _nlp_model_name: str | None = None
 
     def __init__(self):
         log.info(
@@ -355,18 +364,43 @@ class MetadataExtractor:
             "all_detected": all_detected,
         }
 
+    @staticmethod
+    def _load_spacy_model():
+        """Load the best available spaCy model, trying multilingual first."""
+        if MetadataExtractor._nlp is not None:
+            return
+
+        for model_name in _SPACY_MODEL_PREFERENCE:
+            try:
+                MetadataExtractor._nlp = spacy.load(model_name)
+                MetadataExtractor._nlp_model_name = model_name
+                log.info("Loaded spaCy model: %s", model_name)
+                return
+            except OSError:
+                continue
+
+        log.warning(
+            "No spaCy model found (tried %s). Install one with: "
+            "python -m spacy download xx_ent_wiki_sm",
+            ", ".join(_SPACY_MODEL_PREFERENCE),
+        )
+
     def extract_entities_nlp(
         self,
         text: str,
+        detected_language: str = "",
     ) -> list[dict[str, Any]]:
         """Extract named entities from text using NLP.
 
         Args:
             text: Input text.
+            detected_language: ISO 639-1 language code (e.g. "en", "ar",
+                "uk"). Used to flag when the model may have reduced
+                accuracy for the detected language.
 
         Returns:
             List of entity dicts with ``type``, ``value``, ``start``,
-            ``end`` keys (empty if required library is missing).
+            ``end``, ``confidence`` keys.
         """
         if not HAS_SPACY:
             log.warning("spacy is not installed — returning empty list")
@@ -376,8 +410,23 @@ class MetadataExtractor:
             return []
 
         try:
-            if not hasattr(MetadataExtractor, "_nlp") or MetadataExtractor._nlp is None:
-                MetadataExtractor._nlp = spacy.load("en_core_web_sm")
+            self._load_spacy_model()
+            if MetadataExtractor._nlp is None:
+                return []
+
+            model_name = MetadataExtractor._nlp_model_name or ""
+            is_multilingual = model_name.startswith("xx_")
+            is_english_only = model_name.startswith("en_")
+
+            non_english = detected_language and detected_language != "en"
+            language_penalty = 0.0
+            if non_english and is_english_only:
+                language_penalty = 0.15
+                log.debug(
+                    "NER language mismatch: text is '%s' but model is '%s' — "
+                    "applying %.0f%% confidence penalty",
+                    detected_language, model_name, language_penalty * 100,
+                )
 
             doc = MetadataExtractor._nlp(text)
 
@@ -396,12 +445,14 @@ class MetadataExtractor:
                 count = freq[key]
                 token_len = len(ent.text.split())
                 score = min(0.4 + 0.1 * count + 0.05 * token_len, 0.95)
+                score = max(score - language_penalty, 0.1)
                 entities.append({
                     "type": ent.label_,
                     "value": ent.text,
                     "start": ent.start_char,
                     "end": ent.end_char,
                     "confidence": round(score, 2),
+                    "ner_model": model_name,
                 })
             return entities
         except Exception as exc:

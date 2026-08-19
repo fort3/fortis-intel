@@ -23,6 +23,13 @@ def _win32_thread_init():
 
 from app.constants import SOCIAL_PLATFORMS
 from app.http_client import create_session
+from app.source_reliability import (
+    tag_profile_reliability,
+    tag_post_reliability,
+    tag_web_mention_reliability,
+    tag_entity_reliability,
+    get_source_reliability,
+)
 
 log = logging.getLogger(__name__)
 
@@ -44,6 +51,7 @@ class SocialProfile:
     profile_image_url: str = ""
     geo_data: dict[str, Any] = field(default_factory=dict)
     raw: dict[str, Any] = field(default_factory=dict)
+    source_reliability: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -65,6 +73,7 @@ class SocialPost:
     language: str = ""
     sentiment: float | None = None
     raw: dict[str, Any] = field(default_factory=dict)
+    source_reliability: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -77,6 +86,7 @@ class WebMention:
     mention_type: str = ""
     relevance_score: float = 0.0
     raw: dict[str, Any] = field(default_factory=dict)
+    source_reliability: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -92,6 +102,7 @@ class EnrichedEntity:
     confidence: float = 0.0
     enrichment_sources: list[str] = field(default_factory=list)
     raw: dict[str, Any] = field(default_factory=dict)
+    source_reliability: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -371,7 +382,10 @@ class OSINTClient:
             lang_info = self._extractor.detect_language_region([all_text[:5000]])
             findings.metadata["language"] = lang_info
 
-            entities_raw = self._extractor.extract_entities_nlp(all_text[:10000])
+            detected_lang = lang_info.get("language", "") if lang_info else ""
+            entities_raw = self._extractor.extract_entities_nlp(
+                all_text[:10000], detected_language=detected_lang,
+            )
             seen = set()
             for ent in entities_raw:
                 key = (ent.get("type", ""), ent.get("value", ""))
@@ -398,6 +412,9 @@ class OSINTClient:
         findings.source_count = sum(1 for p in resolved_platforms
                                     if any(pr.platform == p for pr in findings.profiles)
                                     or any(po.platform == p for po in findings.posts))
+
+        # ── Source reliability tagging (NATO Admiralty system) ─────
+        self._tag_reliability(findings)
 
         try:
             from app.intel_graph import build_entity_graph, graph_to_cytoscape_json
@@ -840,6 +857,70 @@ class OSINTClient:
 
         log.info("Geocoded %d/%d location entities", len(geo_points), len(location_ents))
         return geo_points
+
+    def _tag_reliability(self, findings: OSINTFindings) -> None:
+        """Tag all findings with NATO Admiralty reliability grades."""
+        # Build a lookup of verified status & followers per platform/username
+        profile_meta: dict[str, dict] = {}
+        for p in findings.profiles:
+            key = f"{p.platform}:{p.username}".lower()
+            profile_meta[key] = {
+                "verified": p.verified,
+                "followers": p.followers,
+                "created_at": p.created_at,
+            }
+
+        # Tag profiles
+        for p in findings.profiles:
+            p.source_reliability = tag_profile_reliability(
+                platform=p.platform,
+                verified=p.verified,
+                followers=p.followers,
+                created_at=p.created_at,
+            )
+
+        # Tag posts (check if author has a known profile for verification status)
+        for post in findings.posts:
+            author_key = f"{post.platform}:{post.author_username}".lower()
+            author_meta = profile_meta.get(author_key, {})
+            post.source_reliability = tag_post_reliability(
+                platform=post.platform,
+                author_verified=author_meta.get("verified", False),
+                author_followers=author_meta.get("followers", 0),
+            )
+
+        # Tag web mentions
+        for wm in findings.web_mentions:
+            wm.source_reliability = tag_web_mention_reliability(
+                mention_type=wm.mention_type,
+                domain=wm.domain,
+            )
+
+        # Tag entities
+        for ent in findings.entities:
+            ent.source_reliability = tag_entity_reliability(
+                enrichment_sources=ent.enrichment_sources,
+            )
+
+        # Tag domain/IP intel metadata
+        domain_intel = findings.metadata.get("domain_intel", {})
+        if domain_intel:
+            findings.metadata.setdefault("domain_intel_reliability", {})
+            for key in ("whois", "dns"):
+                if domain_intel.get(key):
+                    findings.metadata["domain_intel_reliability"][key] = (
+                        get_source_reliability(key)
+                    )
+
+        ip_intel = findings.metadata.get("ip_intel", {})
+        if ip_intel:
+            findings.metadata["ip_intel_reliability"] = get_source_reliability("dns")
+
+        log.info(
+            "Reliability tagged: %d profiles, %d posts, %d web mentions, %d entities",
+            len(findings.profiles), len(findings.posts),
+            len(findings.web_mentions), len(findings.entities),
+        )
 
     def _gather_text(self, findings: OSINTFindings) -> str:
         parts: list[str] = []

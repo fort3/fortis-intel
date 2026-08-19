@@ -45,6 +45,9 @@ Pillow>=12.3.0
 exifread>=3.0.0
 langdetect>=1.0.9
 spacy>=3.7.0
+# spaCy models (install via: python -m spacy download <name>)
+# xx_ent_wiki_sm — multilingual NER (recommended for OSINT)
+# en_core_web_sm — English-only NER (fallback)
 
 # === Video Geo (optional -- enables video frame analysis) ===
 opencv-python>=4.9.0
