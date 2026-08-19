@@ -344,6 +344,7 @@ const TOOL_TITLES = {
     batch: 'Batch Investigation',
     monitor: 'Feed Monitor',
     scenario: 'Scenarios',
+    imageanalysis: 'Image Analysis',
     qa: 'Q&A (RAG)'
 };
 
@@ -392,6 +393,7 @@ function selectTool(toolName) {
             batch: 'Run Batch',
             monitor: 'Create Monitor',
             scenario: 'Generate Scenario',
+            imageanalysis: 'Analyse Images',
             qa: 'Send'
         };
         submitBtn.innerHTML = '&#x25B6; ' + (labels[toolName] || 'Execute');
@@ -2845,6 +2847,62 @@ async function exportDrive(format) {
 /**
  * Dispatch the submit action based on the currently selected tool.
  */
+/* ====================================================================
+   IMAGE ANALYSIS
+   ==================================================================== */
+
+async function runImageAnalysis() {
+    var fileInput = document.getElementById('imageAnalysisFiles');
+    if (!fileInput || !fileInput.files || fileInput.files.length === 0) {
+        showToast('Please select at least one image to analyse.', 'warning');
+        return;
+    }
+
+    showLoading();
+    showResults();
+    var content = document.getElementById('resultsContent');
+    if (content) {
+        content.innerHTML = '<div class="result-section"><p>Analysing ' +
+            fileInput.files.length + ' image(s)...</p></div>';
+    }
+
+    try {
+        var fd = new FormData();
+        for (var i = 0; i < fileInput.files.length; i++) {
+            fd.append('images', fileInput.files[i]);
+        }
+
+        var response = await fetchApi('/analyze-image', {
+            method: 'POST',
+            body: fd,
+            headers: {}
+        });
+
+        if (!response.ok) {
+            var errData = await response.json();
+            throw new Error(errData.error || 'Image analysis failed');
+        }
+
+        var data = await response.json();
+
+        if (data.results && data.results.length > 0) {
+            var html = renderImageAnalysisSection(data.results);
+            if (content) content.innerHTML = html;
+        } else {
+            if (content) content.innerHTML = '<div class="result-section"><p>No analysis results returned.</p></div>';
+        }
+
+    } catch (error) {
+        showToast('Image analysis failed: ' + error.message, 'error');
+        if (content) {
+            content.innerHTML = '<div class="result-section result-error"><p>Error: ' +
+                escapeHtml(error.message) + '</p></div>';
+        }
+    } finally {
+        hideLoading();
+    }
+}
+
 function handleSubmit() {
     switch (currentTool) {
         case 'ingest':
@@ -2864,6 +2922,9 @@ function handleSubmit() {
             break;
         case 'scenario':
             runScenario();
+            break;
+        case 'imageanalysis':
+            runImageAnalysis();
             break;
         case 'qa':
             sendChatMessage();
@@ -3095,6 +3156,7 @@ document.addEventListener('DOMContentLoaded', function () {
     initDropZone('ingestDropZone', 'ingestFiles', 'ingestFileList', ['.pdf', '.md', '.txt']);
     initDropZone('geoImageDropZone', 'geoImages', 'geoImageFileList', ['image/*']);
     initDropZone('batchDropZone', 'batchFile', 'batchFileList', ['.csv', '.xlsx', '.xls']);
+    initDropZone('imageAnalysisDropZone', 'imageAnalysisFiles', 'imageAnalysisFileList', ['image/*']);
 
     // ---- Auto-detect Identifier Type ----
     var investSubject = document.getElementById('investSubject');

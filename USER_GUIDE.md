@@ -1,6 +1,6 @@
 # Fortis Intelligence Hub — User Guide
 
-**Version 1.0** | **Last Updated: August 2026**
+**Version 1.1** | **Last Updated: August 2026**
 
 ---
 
@@ -8,7 +8,8 @@
 
 1. [Introduction](#introduction)
 2. [Quick Start](#quick-start)
-3. [Core Features](#core-features)
+3. [UI Overview](#ui-overview)
+4. [Core Features](#core-features)
    - [Report Ingestion](#report-ingestion)
    - [Investigation](#investigation)
    - [Geolocation](#geolocation)
@@ -24,10 +25,8 @@
    - [Wayback Machine Integration](#wayback-machine-integration)
    - [Web Intelligence](#web-intelligence)
    - [ForgeChain Governance](#forgechain-governance)
-   - [Compliance Features](#compliance-features)
-4. [Example Use Cases](#example-use-cases)
-5. [Tips and Best Practices](#tips-and-best-practices)
-6. [UI Navigation & Shortcuts](#ui-navigation--shortcuts)
+5. [Example Use Cases](#example-use-cases)
+6. [Tips and Best Practices](#tips-and-best-practices)
 7. [Troubleshooting](#troubleshooting)
 
 ---
@@ -41,11 +40,12 @@
 - **Multi-platform OSINT**: Investigate across Twitter/X, Reddit, YouTube, Instagram, Mastodon, Facebook, TikTok, and Telegram
 - **Domain & IP Analysis**: WHOIS, DNS, reverse lookups, historical data via Wayback Machine
 - **Geolocation**: EXIF extraction, IP geolocation, clustering, triangulation
+- **Image Forensics**: ELA tampering detection, steganography, reverse search, CLIP classification
 - **AI-Powered Analysis**: RAG-based Q&A, entity extraction, LLM-driven insights
-- **Real-time Monitoring**: Background feed polling with auto-enrichment
+- **Feed Monitoring**: Background feed polling with Celery and auto-enrichment
 - **Civilian Harm Detection**: Bellingcat-inspired semantic scoring for conflict zones
-- **Advanced Export**: PDF, STIX 2.1, JSON, CSV, Google Drive integration
-- **Governance**: ForgeChain 3-verifier consensus for sensitive operations
+- **Multi-format Export**: PDF, STIX 2.1, JSON, CSV, Markdown, Google Drive
+- **Governance**: ForgeChain 3-verifier consensus for all LLM-driven operations
 
 ---
 
@@ -56,12 +56,11 @@
 **Scenario**: Investigate a Twitter/X username
 
 1. **Navigate to Investigation**
-   - Click **Investigation** in the main navigation menu
-   - The investigation form appears with a dark, cyberpunk-styled interface
+   - Click the **Investigation** tool card in the toolbar strip at the top of the workspace
 
 2. **Enter Your Target**
-   - In the **Identifier** field, type: `@example_user`
-   - The system auto-detects the identifier type (username)
+   - In the **Subject Identifier** field, type: `@example_user`
+   - Leave Identifier Type on **Auto-detect** (the system recognises usernames, emails, domains, and IPs)
 
 3. **Select Investigation Depth**
    - Choose **Standard** from the depth dropdown
@@ -69,27 +68,69 @@
    - Standard: API + web scraping (2-5 minutes)
    - Deep: All sources + metadata + entity extraction (5-15 minutes)
 
-4. **Optional: Enable Civilian Harm Scoring**
-   - Check **Enable Civilian Harm Analysis** if investigating conflict-related content
-   - This applies Bellingcat methodology to flag sensitive content
+4. **Run Investigation**
+   - Click **Investigate** at the bottom of the input panel
+   - A loading indicator shows collection is in progress
+   - Results appear in the right-hand results panel
 
-5. **Run Investigation**
-   - Click **Start Investigation**
-   - A progress indicator shows collection status
-   - Results appear in sections: Profile, Posts, Metadata, Entities
+5. **Review Results**
+   - **Analysis tab**: LLM-generated investigation report with profile data, posts, entities, and insights
+   - **Map tab**: Appears if geolocation data was found (EXIF, IP geo)
+   - **Graph tab**: Entity relationship graph rendered with Cytoscape.js
+   - **Civilian Harm**: If enabled, flagged content with severity scores appears in the analysis
 
-6. **Review Results**
-   - **Profile Summary**: Follower count, bio, location, verification status
-   - **Recent Posts**: Last 20-100 posts with timestamps and engagement
-   - **Entity Graph**: Click **View Graph** to see connections
-   - **Civilian Harm**: If enabled, see flagged content with severity scores
-
-7. **Export Your Findings**
-   - Click **Export** → **PDF** for a formatted report
-   - Choose TLP classification (WHITE, GREEN, AMBER, RED)
-   - Download includes executive summary, TOC, and dark theme styling
+6. **Export Your Findings**
+   - Use the export bar at the bottom of the results panel
+   - Click **PDF**, **MD**, **STIX**, **CSV**, **JSON**, or **Drive**
 
 **Congratulations!** You've completed your first investigation.
+
+---
+
+## UI Overview
+
+The interface is a single-page application (SPA) with no separate pages or settings screens. Everything is accessible from the main workspace.
+
+### Top Bar
+
+- **Logo**: Click to return to the welcome page
+- **OSINT Status**: Green dot indicates OSINT services are online
+- **User Info**: Your Google avatar and name (when OAuth is enabled)
+- **KB**: Opens the Knowledge Base slide-in panel
+- **Watch**: Opens the Feed Monitor slide-in panel to review findings
+- **Sign Out**: Logs out of the current session
+
+### Tool Cards
+
+A horizontal strip of 8 tool cards across the top of the workspace:
+- **Report Ingestion** — Upload PDF/Markdown documents
+- **Investigation** — OSINT investigation of a single target
+- **Geolocation** — GPS extraction, IP geolocation, map visualisation
+- **Batch Investigation** — Investigate multiple targets at once
+- **Feed Monitor** — Set up background monitoring
+- **Scenarios** — Run analytical scenarios (Pattern of Life, Network Mapping, etc.)
+- **Image Analysis** — Standalone forensics, steganography, reverse search, CLIP
+- **Q&A (RAG)** — Chat with your knowledge base
+
+Click a tool card to switch the input panel form. The active card is highlighted.
+
+### Split Panels
+
+- **Input Panel** (left, ~35%): Shows the form for the active tool. Submit button at the bottom.
+- **Results Panel** (right, ~65%): Shows results with tabs for Analysis, Map, Graph, and Charts. Export bar at the bottom.
+
+### Slide-in Panels
+
+- **Watch Panel**: Opened via the Watch button in the top bar. Shows feed monitor findings with Approve and Dismiss actions.
+- **Knowledge Base Panel**: Opened via the KB button. Shows uploaded documents with search, delete, toggle inclusion, rebuild index, and stats.
+
+### Keyboard Shortcuts
+
+| Shortcut | Action |
+|----------|--------|
+| `Esc` | Close the Watch or Knowledge Base panel |
+| `Enter` | Send message in Q&A chat |
+| `Tab` | Navigate form fields (browser default) |
 
 ---
 
@@ -97,7 +138,7 @@
 
 ### Report Ingestion
 
-Upload and analyze PDF or Markdown documents with AI-powered extraction.
+Upload and analyse PDF or Markdown documents with AI-powered extraction.
 
 #### How It Works
 
@@ -110,34 +151,20 @@ Extracted content is indexed into a FAISS vectorstore for semantic search and Q&
 
 #### Step-by-Step
 
-1. **Navigate to Reports**
-   - Click **Reports** in the main menu
-
-2. **Upload Document**
-   - Click **Upload New Report**
-   - Select PDF or Markdown file (max 50MB)
-   - Supported formats: `.pdf`, `.md`, `.markdown`
-
-3. **Wait for Processing**
-   - Progress bar shows extraction stages
-   - Processing time: 10 seconds to 2 minutes (depends on size)
-
-4. **Review Extraction**
-   - System displays:
-     - Total pages/sections extracted
-     - Key entities found (people, places, organizations)
-     - Summary statistics (word count, readability score)
-
-5. **Ask Questions**
-   - Navigate to **Q&A** tab
-   - Type natural language questions about the document
-   - Example: "What are the main findings about cybersecurity threats?"
+1. Click the **Report Ingestion** tool card
+2. Drag files into the upload zone or click to browse
+   - Supported formats: `.pdf`, `.md`, `.txt`
+   - Max file size: 50 MB each
+3. Optionally add comma-separated tags (e.g. `threat-intel, q3-review`)
+4. Click **Ingest Reports**
+5. The system extracts text, splits into chunks, and indexes into the knowledge base
+6. Use the **Q&A** tool or **Knowledge Base** panel to search and query the content
 
 #### Use Cases
 
 - **Threat Intelligence Reports**: Extract IOCs, TTPs, attribution
 - **News Articles**: Verify claims, extract dates and locations
-- **Research Papers**: Summarize findings, compare methodologies
+- **Research Papers**: Summarise findings, compare methodologies
 - **Legal Documents**: Search for specific clauses, entities, dates
 
 ---
@@ -153,6 +180,8 @@ The system automatically identifies:
 - **Email**: `user@example.com` (breach databases, social profiles)
 - **Domain**: `example.com`, `www.example.com` (WHOIS, DNS, subdomains)
 - **IP Address**: `8.8.8.8` (geolocation, reverse DNS, co-hosted domains)
+
+You can also manually set the identifier type via the dropdown.
 
 #### Investigation Depths
 
@@ -178,144 +207,81 @@ The system automatically identifies:
 - Wayback Machine historical data (for domains)
 - Best for: Comprehensive dossiers, legal evidence
 
+#### Investigation Form Options
+
+- **Subject Identifier**: The target to investigate
+- **Identifier Type**: Auto-detect or manual selection (username, email, phone, domain, name, IP, keyword)
+- **Platforms**: Checkboxes for Twitter/X, Reddit, Telegram, Instagram, YouTube, Mastodon, Facebook, TikTok
+- **Investigation Depth**: Quick, Standard, or Deep
+- **Investigation Purpose**: Free-text field describing the scope and reason
+- **Media Files**: Upload images/videos for EXIF geo extraction + image forensics + CLIP classification (run automatically alongside the investigation)
+- **Search Web for Missing Intel**: Checkbox (default: on) — enables the Web Intelligence dork search pipeline
+
 #### Platform-Specific Features
 
 **Twitter/X**
-1. Enter username: `@username` or `username`
-2. Results include:
-   - Profile: Bio, location, follower/following counts, join date
-   - Recent tweets (with retweets, likes, replies)
-   - Engagement metrics
-   - Account verification status
-   - Linked accounts (via bio URLs)
+- Profile: Bio, location, follower/following counts, join date
+- Recent tweets with engagement metrics
+- Account verification status
+- Linked accounts via bio URLs
 
 **Reddit**
-1. Enter username: `u/username` or just `username`
-2. Results include:
-   - Karma scores (post/comment)
-   - Subreddit activity breakdown
-   - Recent posts and comments
-   - Account age and cake day
-   - Awarded posts
+- Karma scores (post/comment)
+- Subreddit activity breakdown
+- Recent posts and comments
+- Account age
 
 **Domain Investigation**
-1. Enter domain: `example.com`
-2. Results include:
-   - **WHOIS**: Registrant, registrar, creation/expiration dates
-   - **DNS Records**: A, MX, TXT, CNAME records
-   - **Subdomains**: DNSdumpster enumeration (10-500 discovered)
-   - **HTTP Headers**: Server info, security headers, cookies
-   - **Reverse DNS/IP**: Co-hosted domains on same IP
-   - **Wayback Machine**: Historical snapshots, content changes, subdomain discovery
+- **WHOIS**: Registrant, registrar, creation/expiration dates
+- **DNS Records**: A, MX, TXT, CNAME records
+- **Subdomains**: DNSdumpster enumeration
+- **HTTP Headers**: Server info, security headers, cookies
+- **Reverse DNS/IP**: Co-hosted domains on same IP
+- **Wayback Machine**: Historical snapshots, subdomain discovery
 
 **IP Address Investigation**
-1. Enter IP: `8.8.8.8`
-2. Results include:
-   - **Geolocation**: Country, city, coordinates, ISP, ASN
-   - **Reverse DNS**: Hostnames pointing to this IP
-   - **Reverse IP**: Other domains hosted on same IP (co-hosting analysis)
-   - **Threat Intelligence**: Blacklist status, abuse reports
+- **Geolocation**: Country, city, coordinates, ISP, ASN
+- **Reverse DNS**: Hostnames pointing to this IP
+- **Reverse IP**: Other domains hosted on same IP
 
-#### Web Intelligence (Dork Search)
+#### Civilian Harm Analysis (Optional)
 
-For deep web investigations, the system includes LLM-driven dork query generation.
-
-**Phases:**
-1. **Initial Dorking**: LLM generates targeted Google dork queries
-2. **OSINT Collection**: DuckDuckGo scraping (no API key needed)
-3. **Analysis**: Extract insights, patterns, IOCs
-4. **Gap Analysis**: Identify missing information, generate follow-up queries
-5. **Validation + Deep Scrape**: Re-verify findings, extract full page content
-
-**How to Use:**
-1. In the Investigation form, check **Enable Web Intelligence**
-2. System automatically generates dork queries based on target
-3. Circuit breaker prevents infinite loops (max 3 validation cycles)
-4. Results include:
-   - Discovered URLs with relevance scores
-   - Extracted content snippets
-   - False-positive detection log
-   - LLM-synthesized insights
-
-**Example Queries Generated:**
-- Username: `"username" site:twitter.com OR site:reddit.com`
-- Domain: `site:example.com filetype:pdf OR filetype:doc`
-- Email: `"user@example.com" -site:example.com`
-
-#### Civilian Harm Classifier
-
-When investigating conflict zones or sensitive events, enable this feature for automated content flagging.
-
-**Methodology** (based on Bellingcat research):
-- Sentence-transformers semantic similarity scoring
-- Multilingual keyword matching (English, Arabic, Ukrainian, Russian)
-- Concept detection: violence, displacement, infrastructure damage, casualties
-
-**Scoring Levels:**
-- 🟢 **Low** (0.0-0.3): General news, no harm indicators
-- 🟡 **Medium** (0.3-0.6): Conflict mentions, protests, mild violence
-- 🟠 **High** (0.6-0.8): Direct harm descriptions, casualties, displacement
-- 🔴 **Critical** (0.8-1.0): Explicit violence, war crimes, mass casualties
-
-**How to Use:**
-1. Check **Enable Civilian Harm Analysis** in investigation form
-2. System scores all collected posts/comments/media
-3. Results show:
-   - **Distribution Bar**: Visual breakdown of severity levels
-   - **Flagged Items**: Posts sorted by score (highest first)
-   - **Concept Badges**: Tags like `violence`, `displacement`, `infrastructure`
-   - **Context**: Matched keywords and semantic similarity scores
-
-**Toggle:**
-- Can be disabled via environment variable: `CIVILIAN_HARM_ENABLED=false`
+Check **Enable Civilian Harm Analysis** in the investigation form to apply Bellingcat-inspired scoring to all collected content. See the [Civilian Harm Classifier](#civilian-harm-classifier) section for details.
 
 ---
 
 ### Geolocation
 
-Upload images or videos for GPS coordinate extraction, IP geolocation, and map visualization.
+Upload images or enter IP addresses for GPS coordinate extraction, geolocation, and map visualisation.
+
+#### Input Tabs
+
+The geolocation form has four tabs:
+
+1. **Images**: Upload images (JPEG, PNG, TIFF) for EXIF GPS extraction
+2. **Social Posts**: Paste social media URLs or text with location mentions
+3. **IP Addresses**: Enter IP addresses (one per line) for geolocation lookup
+4. **Manual**: Enter coordinates (lat/lng pairs) or street addresses
 
 #### Features
 
 - **EXIF GPS Extraction**: Pull coordinates from image metadata
-- **IP Geolocation**: Geolocate IP addresses from logs or screenshots
+- **IP Geolocation**: Geolocate IP addresses via API lookup
 - **Clustering**: DBSCAN algorithm groups nearby locations
 - **Triangulation**: Combine multiple partial coordinates
-- **Video Keyframe Analysis**: Extract frames, analyze each for GPS data
-- **Interactive Maps**: Leaflet.js with cluster markers, fullscreen mode
+- **Interactive Maps**: Leaflet.js with cluster markers, fullscreen mode, heatmap layer
+- **Map Snapshot**: Camera button on the map exports a PNG screenshot
 
 #### Step-by-Step
 
-1. **Navigate to Geolocation**
-   - Click **Geolocation** in main menu
-
-2. **Upload Media**
-   - Click **Upload Image/Video**
-   - Supported formats: JPG, PNG, HEIC, MP4, MOV, AVI
-   - Max file size: 100MB
-
-3. **Automatic Processing**
-   - System extracts EXIF data
-   - For videos: extracts keyframes (every 30 frames)
-   - GPS coordinates displayed in table
-
-4. **Map Visualization**
-   - Coordinates plotted on interactive Leaflet map
-   - Cluster markers for nearby points
-   - Click marker to see: timestamp, device info, altitude
-   - **Fullscreen Mode**: Click fullscreen icon for detailed view
-
-5. **Clustering Analysis**
-   - System applies DBSCAN clustering
-   - Shows:
-     - Cluster count
-     - Points per cluster
-     - Centroid coordinates (average location)
-   - Useful for: Identifying frequented locations, home/work detection
-
-6. **Export**
-   - Export coordinates as CSV or GeoJSON
-   - Include in investigation reports automatically
+1. Click the **Geolocation** tool card
+2. Select the appropriate tab (Images, Social Posts, IP, or Manual)
+3. Upload files or enter data
+4. Click **Geolocate**
+5. Results appear in the Analysis tab with extracted coordinates
+6. The Map tab shows an interactive Leaflet map with markers and clustering
+7. Use the fullscreen button on the map for detailed viewing
+8. Export results via the export bar (included in PDF/MD/JSON exports)
 
 #### Use Cases
 
@@ -334,97 +300,57 @@ Ask natural language questions about uploaded documents and the knowledge base.
 
 - **RAG Architecture**: Retrieval-Augmented Generation with FAISS vectorstore
 - **Semantic Search**: Finds relevant document chunks (not just keyword matching)
-- **Knowledge Base Integration**: Searches across all uploaded reports + investigation results
+- **Knowledge Base Integration**: Searches across all uploaded reports and investigation results
 - **Civilian Harm Context**: Automatically flags answers related to conflict/harm
 
 #### Step-by-Step
 
-1. **Navigate to Q&A**
-   - Click **Q&A** in main menu
+1. Click the **Q&A (RAG)** tool card
+2. The input panel shows a chat interface
+3. Type your question in the chat input and press **Enter** or click the send button
+4. The system retrieves relevant document chunks and generates an answer
+5. Responses appear in the chat as AI messages
 
-2. **Select Document Scope** (optional)
-   - **All Documents**: Searches entire knowledge base
-   - **Specific Report**: Dropdown to select individual uploaded report
+#### Example Queries
 
-3. **Ask Your Question**
-   - Type question in natural language
-   - Examples:
-     - "What threats are mentioned in the Q3 report?"
-     - "Who is the CEO of Acme Corp?"
-     - "When did the incident occur?"
-     - "List all IP addresses mentioned"
-
-4. **Review Answer**
-   - System displays:
-     - **Answer**: LLM-generated response
-     - **Source**: Which document(s) the answer came from
-     - **Confidence**: Similarity score (0.0-1.0)
-     - **Context**: Relevant excerpts with highlighting
-
-5. **Civilian Harm Alert** (if applicable)
-   - Red banner appears if answer relates to conflict/harm
-   - Shows: "This content may contain references to civilian harm or violence"
-
-#### Advanced Queries
-
-- **Comparison**: "How does the 2025 report differ from 2024?"
-- **Summarization**: "Summarize the key findings in under 100 words"
-- **Extraction**: "List all CVEs mentioned across all reports"
-- **Temporal**: "What events happened between March and June 2025?"
+- "What threats are mentioned in the Q3 report?"
+- "Who is the CEO of Acme Corp?"
+- "When did the incident occur?"
+- "List all IP addresses mentioned"
+- "Summarise the key findings in under 100 words"
 
 ---
 
 ### Feed Monitor
 
-Real-time monitoring of keywords, usernames, hashtags, or topics across platforms.
+Background monitoring of keywords, usernames, hashtags, or locations across platforms.
 
 #### Features
 
-- **Celery Background Polling**: Async task processing
-- **Flexible Intervals**: 5 to 240 minutes
-- **Auto-Enrichment**: New posts automatically analyzed with LLM
+- **Celery Background Polling**: Async task processing with beat scheduler
+- **Flexible Intervals**: 5 minutes to 4 hours
+- **Auto-Enrichment**: New posts automatically analysed with LLM
 - **Civilian Harm Scoring**: All monitored content scored for sensitivity
-- **Watch Panel**: Dedicated UI for reviewing flagged items
+- **Watch Panel**: Slide-in panel for reviewing findings (Approve / Dismiss)
 
 #### Step-by-Step
 
-1. **Navigate to Feed Monitor**
-   - Click **Feed Monitor** in main menu
+1. Click the **Feed Monitor** tool card
+2. Fill in the monitor form:
+   - **Monitor Type**: Keyword, Username, Hashtag, or Location Radius
+   - **Query**: The term to monitor (e.g. `#Kharkiv`, `@username`, `"civilian casualties"`)
+   - **Platforms**: Select one or more (Twitter, Reddit, Telegram, Mastodon, Instagram, YouTube, Facebook, TikTok)
+   - **Check Interval**: How often to poll (5 min to 4 hours)
+   - **Alert Threshold**: All findings, High confidence only, or Geo matches only
+3. Click **Start Monitor**
+4. Celery beat scheduler begins background polling
 
-2. **Create New Monitor**
-   - Click **+ New Monitor**
-   - Fill in form:
-     - **Name**: Descriptive label (e.g., "Ukraine Conflict - Kharkiv")
-     - **Type**: Keyword, Username, Hashtag, or Topic
-     - **Query**: The term to monitor (e.g., `#Kharkiv`, `@username`, `"civilian casualties"`)
-     - **Platforms**: Select one or more (Twitter, Reddit, Telegram, etc.)
-     - **Interval**: Polling frequency (default: 15 minutes)
-     - **Enable Civilian Harm**: Check if monitoring conflict/sensitive topics
+#### Reviewing Findings
 
-3. **Activate Monitor**
-   - Click **Activate**
-   - Celery beat scheduler starts background polling
-   - Initial collection begins immediately
-
-4. **Watch Panel**
-   - New items appear in real-time (refresh every 30s)
-   - Each item shows:
-     - Platform icon
-     - Author username
-     - Content preview
-     - Timestamp
-     - Civilian harm score (if enabled)
-     - **Action Buttons**: Dismiss, Flag, Add to Investigation
-
-5. **Review Flagged Items**
-   - Filter by severity: Critical, High, Medium, Low
-   - Click item to see full content + context
-   - Mark as reviewed or escalate
-
-6. **Manage Monitors**
-   - **Pause**: Temporarily stop polling (data retained)
-   - **Edit**: Change interval or query
-   - **Delete**: Remove monitor and all collected data
+1. Click the **Watch** button in the top bar to open the Watch panel
+2. Findings appear with platform, author, content preview, and timestamps
+3. For each finding, click **Approve** to keep or **Dismiss** to discard
+4. Click **Clear All Findings** to reset the panel
 
 #### Best Practices
 
@@ -434,7 +360,6 @@ Real-time monitoring of keywords, usernames, hashtags, or topics across platform
   - Breaking news: 5-10 minutes
   - General monitoring: 30-60 minutes
   - Low-priority: 120-240 minutes
-- **Regular Review**: Check watch panel at least daily to catch critical items
 
 ---
 
@@ -444,60 +369,20 @@ Pre-built analytical frameworks for common investigation patterns.
 
 #### Available Scenarios
 
-1. **Pattern of Life**
-   - Analyzes posting times, locations, language patterns
-   - Identifies daily routines, sleep schedules, work hours
-   - Best for: Profiling suspects, OPSEC audits
-
-2. **Network Mapping**
-   - Extracts mentions, interactions, co-authors
-   - Builds relationship graph
-   - Best for: Uncovering networks, influence operations
-
-3. **Location Prediction**
-   - Uses historical geolocation data + time-based patterns
-   - Predicts future locations or current whereabouts
-   - Best for: Missing persons, surveillance planning
-
-4. **Influence Analysis**
-   - Measures reach, engagement, amplification
-   - Identifies key influencers and narrative spread
-   - Best for: Disinformation campaigns, propaganda detection
+1. **Pattern of Life** — Analyses posting times, locations, language patterns to identify routines
+2. **Network Mapping** — Extracts mentions, interactions, co-authors to build relationship maps
+3. **Location Prediction** — Uses historical geolocation data + time-based patterns
+4. **Influence Analysis** — Measures reach, engagement, amplification patterns
 
 #### Step-by-Step
 
-1. **Complete an Investigation First**
-   - Scenarios require entity graph context
-   - Run at least a **Standard** depth investigation
-
-2. **Navigate to Scenarios**
-   - Click **Scenarios** in main menu
-   - Or click **Run Scenario** button on investigation results page
-
-3. **Select Scenario Type**
-   - Choose from dropdown or click pre-configured card
-   - Each scenario shows: description, required data, estimated time
-
-4. **Configure Parameters**
-   - **Pattern of Life**: Select time range (7, 30, 90 days)
-   - **Network Mapping**: Set relationship depth (1-3 hops)
-   - **Location Prediction**: Choose prediction timeframe
-   - **Influence Analysis**: Select metric (reach, engagement, sentiment)
-
-5. **Run Analysis**
-   - Click **Generate Scenario**
-   - LLM analyzes entity graph + investigation data
-   - Processing time: 30 seconds to 3 minutes
-
-6. **Review Results**
-   - Visual timeline for Pattern of Life
-   - Interactive graph for Network Mapping
-   - Heatmap for Location Prediction
-   - Charts + statistics for Influence Analysis
-
-7. **Export Scenario**
-   - Click **Export Scenario**
-   - Included in main investigation report automatically
+1. Click the **Scenarios** tool card
+2. Select scenario type from the dropdown
+3. Optionally enter a **Session Reference** (session ID from a prior investigation to use as context)
+4. Optionally provide **Subject Context** (additional background about the target)
+5. Optionally paste **OSINT Data** (raw data, or leave blank to pull from session/KB)
+6. Click **Generate Scenario**
+7. The LLM analyses the available data and produces the scenario report in the Analysis tab
 
 ---
 
@@ -505,125 +390,55 @@ Pre-built analytical frameworks for common investigation patterns.
 
 Investigate multiple targets simultaneously with cross-entity synthesis.
 
-#### Features
-
-- **Parallel Processing**: Celery workers handle multiple targets concurrently
-- **Auto-Correlation**: System links related entities across targets
-- **Civilian Harm Scoring**: Applies to all collected data
-- **Unified Export**: Single PDF/JSON with all targets + cross-analysis
-
 #### Step-by-Step
 
-1. **Navigate to Batch Investigation**
-   - Click **Batch** in main menu
-
-2. **Enter Multiple Identifiers**
-   - Text area appears with example format
-   - Enter one identifier per line:
-     ```
-     @username1
-     user@example.com
-     example.com
-     8.8.8.8
-     @username2
-     ```
+1. Click the **Batch Investigation** tool card
+2. Enter identifiers in the text area (one per line), or upload a CSV/XLSX file
    - Mix types allowed (usernames, emails, domains, IPs)
-   - Max: 50 identifiers per batch
-
-3. **Select Common Settings**
-   - **Depth**: Applies to all targets (recommend: Quick or Standard for batches)
-   - **Enable Civilian Harm**: Check if any targets are conflict-related
-   - **Enable Cross-Entity Analysis**: Synthesize connections between targets
-
-4. **Run Batch**
-   - Click **Start Batch Investigation**
-   - Progress bar shows: X of Y completed
-   - Each target processes independently
-
-5. **Review Results**
-   - **Individual Results**: Expand each target to see full investigation
-   - **Cross-Entity Synthesis**: LLM-generated analysis of connections
-   - **Entity Graph**: Combined graph showing all targets + relationships
-   - **Civilian Harm Summary**: Aggregated severity distribution
-
-6. **Export**
-   - Click **Export Batch Report**
-   - Generates single PDF with:
-     - Executive summary (cross-entity findings)
-     - Individual target sections
-     - Combined entity graph
-     - Appendices (raw data tables)
+   - Up to 100 identifiers
+3. Select **Identifier Type** (Auto-detect or manual)
+4. Select **Platforms** to search
+5. Click **Batch Investigate**
+6. Results appear in the Analysis tab with per-target summaries and cross-entity synthesis
 
 #### Use Cases
 
 - **Group Investigations**: Known associates, criminal networks
 - **Infrastructure Mapping**: Related domains, IP ranges, server clusters
-- **Comparison**: Analyze multiple accounts for similarities (sockpuppets)
+- **Comparison**: Analyse multiple accounts for similarities (sockpuppet detection)
 - **Campaign Analysis**: Track multiple hashtags/topics for coordinated activity
 
 ---
 
 ### Entity Graphs
 
-Interactive visualization of people, places, organizations, and their relationships.
+Interactive visualisation of people, places, organisations, and their relationships.
 
 #### Features
 
-- **Cytoscape.js**: High-performance graph rendering
-- **Click-to-Drill-Down**: Click any node to see details or launch sub-investigation
+- **Cytoscape.js**: High-performance graph rendering in the Graph tab
+- **Click-to-Inspect**: Click any node to see entity details in a popup
 - **Entity-Aware LLM**: AI understands graph structure for better analysis
-- **Export**: PNG, JSON (for external tools like Gephi)
 
 #### Node Types
 
-- **Person**: 🔵 Blue circle (usernames, names, authors)
-- **Organization**: 🟣 Purple square (companies, groups)
-- **Location**: 🟢 Green diamond (cities, countries, addresses)
-- **Domain**: 🟠 Orange hexagon (websites, domains)
-- **IP Address**: 🔴 Red triangle (IP addresses, servers)
-- **Content**: ⚪ White circle (posts, documents, media)
+- **Person**: Blue circle (usernames, names, authors)
+- **Organization**: Purple square (companies, groups)
+- **Location**: Green diamond (cities, countries, addresses)
+- **Domain**: Orange hexagon (websites, domains)
+- **IP Address**: Red triangle (IP addresses, servers)
+- **Content**: White circle (posts, documents, media)
 
-#### Step-by-Step
+#### Using the Graph
 
-1. **Generate Graph**
-   - Automatically created during **Standard** or **Deep** investigations
-   - Or click **View Graph** button on any investigation results page
-
-2. **Navigate the Graph**
+1. Entity graphs are automatically generated during **Standard** or **Deep** investigations
+2. Click the **Graph** tab in the results panel to view
+3. Navigate:
    - **Pan**: Click and drag background
-   - **Zoom**: Scroll wheel or pinch gesture
-   - **Select**: Click node to highlight connected edges
-   - **Move Nodes**: Drag individual nodes to rearrange
-
-3. **Node Details**
-   - Click node to open details panel:
-     - Entity type and name
-     - Associated data (profile info, post counts, etc.)
-     - Relationships (list of connected entities)
-     - **Action Buttons**: 
-       - **Investigate**: Launch new investigation for this entity
-       - **Add to Monitor**: Create feed monitor
-       - **Hide**: Remove from graph (temporary)
-
-4. **Relationship Edges**
-   - Hover over edge to see relationship type:
-     - `mentions` (A mentioned B)
-     - `located_in` (Person/Org in Location)
-     - `owns` (Person owns Domain/Org)
-     - `posted` (Person posted Content)
-     - `co-hosts` (Domain co-hosts with another)
-
-5. **Layout Options**
-   - **Force-Directed**: Nodes repel, edges attract (default)
-   - **Hierarchical**: Tree-like structure (good for networks)
-   - **Circular**: Ring layout (good for small graphs)
-   - **Grid**: Organized rows/columns
-
-6. **Export Graph**
-   - Click **Export** dropdown:
-     - **PNG**: High-resolution image (for reports)
-     - **JSON**: Raw graph data (for Gephi, Neo4j import)
-     - **GraphML**: Standard graph format
+   - **Zoom**: Scroll wheel
+   - **Select**: Click node to see entity details
+   - **Move**: Drag individual nodes to rearrange
+4. The graph data is included when you export via PDF, Markdown, or JSON
 
 #### Analysis Tips
 
@@ -638,157 +453,75 @@ Interactive visualization of people, places, organizations, and their relationsh
 
 Auto-indexed repository of all investigation results and uploaded documents.
 
+#### Accessing the Knowledge Base
+
+Click the **KB** button in the top bar to open the Knowledge Base slide-in panel.
+
 #### Features
 
-- **Automatic Indexing**: Every investigation + uploaded report added to FAISS vectorstore
-- **Semantic Search**: Find similar entities, patterns across investigations
-- **Temporal Queries**: Filter by date range
-- **Federated Search**: Searches investigations + documents simultaneously
+- **Search**: Type in the search bar to filter documents by name
+- **Document List**: Shows all indexed reports with their names
+- **Toggle Inclusion**: Include or exclude specific documents from Q&A searches
+- **Delete**: Remove individual documents from the knowledge base
+- **Rebuild Index**: Re-index all documents in the FAISS vectorstore
+- **Stats**: View document count and chunk count
 
-#### Step-by-Step
+#### How Content Gets Indexed
 
-1. **Navigate to Knowledge Base**
-   - Click **Knowledge Base** in main menu
-
-2. **Search**
-   - Enter query in search bar:
-     - **Entity**: "John Doe" (finds all mentions)
-     - **Topic**: "DDoS attacks" (finds related investigations)
-     - **Pattern**: "Russian IPs" (finds pattern matches)
-   - Click **Search**
-
-3. **Filter Results**
-   - **Type**: Investigations, Documents, Entities, Locations
-   - **Date Range**: Last 7 days, 30 days, 90 days, Custom
-   - **Source**: Specific platforms (Twitter, Reddit, etc.)
-   - **Civilian Harm**: Filter by severity level
-
-4. **Review Matches**
-   - Each result shows:
-     - Title/identifier
-     - Type (investigation, document, entity)
-     - Date added
-     - Relevance score
-     - Snippet preview
-   - Click to open full investigation/document
-
-5. **Cross-Reference**
-   - Click **Find Related** on any result
-   - System finds semantically similar entities across knowledge base
-   - Useful for: Uncovering hidden connections, similar cases
-
-#### Maintenance
-
-- **Auto-Retention**: Configurable via environment variables
-  - Default: 90 days for Low sensitivity, 180 days for Medium, 365+ for High
-- **Manual Deletion**: 
-  - Navigate to **Settings** → **Knowledge Base**
-  - Click **Delete** on individual items
-  - Or **Bulk Delete** by date range
-- **Export Archive**:
-  - Export entire knowledge base as JSON
-  - For backup or migration to another instance
+- **Report Ingestion**: Uploaded PDFs and Markdown files are automatically chunked and indexed
+- **Investigations**: Investigation results can be saved to the knowledge base
+- All indexed content is searchable via the Q&A tool
 
 ---
 
 ### Export Options
 
-Multiple export formats for different use cases.
+Multiple export formats available via the export bar at the bottom of the results panel.
 
 #### PDF Export
 
-**Features:**
-- Dark cyberpunk theme (consistent with UI)
-- Section-aware layout (auto page breaks)
+- Dark cyberpunk theme consistent with the UI
+- Section-aware layout with auto page breaks
 - TLP classification headers/footers
 - Table of Contents with hyperlinks
-- Executive Summary (LLM-generated)
-- Embedded images (graphs, maps, screenshots)
-
-**Step-by-Step:**
-1. On any investigation results page, click **Export** → **PDF**
-2. Configure options:
-   - **TLP Classification**: WHITE (public), GREEN (community), AMBER (limited), RED (eyes only)
-   - **Include Sections**: Profile, Posts, Entities, Graph, Timeline, Civilian Harm
-   - **Executive Summary**: Auto-generate (LLM) or skip
-3. Click **Generate PDF**
-4. Download link appears (typically 2-10 MB)
+- LLM-generated executive summary
+- Embedded graphs and map data
 
 #### Markdown Export
 
-**Features:**
 - Plain text with Markdown formatting
 - TLP headers
+- YAML frontmatter with metadata
 - Easy to edit or convert to other formats
-- Includes YAML frontmatter (metadata)
-
-**Step-by-Step:**
-1. Click **Export** → **Markdown**
-2. File downloads immediately (`.md` extension)
-3. Open in any text editor or Markdown viewer
 
 #### STIX 2.1 Export
 
-**Features:**
 - Industry-standard threat intelligence format
-- Compatible with TAXII servers, TIPs (Threat Intelligence Platforms)
+- Compatible with TAXII servers and Threat Intelligence Platforms (MISP, OpenCTI, etc.)
 - Includes: observables, indicators, relationships, TTPs
-
-**Step-by-Step:**
-1. Click **Export** → **STIX 2.1**
-2. JSON file downloads (`.stix` or `.json` extension)
-3. Import into your TIP (MISP, OpenCTI, etc.)
-
-**STIX Objects Generated:**
-- `identity`: Target entity
-- `observed-data`: Social media posts, DNS records
-- `indicator`: IOCs (IPs, domains, hashes)
-- `relationship`: Connections between entities
-- `location`: Geolocated coordinates
 
 #### CSV Export
 
-**Features:**
 - Tabular data (posts, entities, locations)
 - Easy import to Excel, Google Sheets, databases
 
-**Step-by-Step:**
-1. Click **Export** → **CSV**
-2. Select data type: Posts, Entities, Locations, All
-3. File downloads (`.csv` extension)
-
-**Columns:**
-- Posts: `timestamp`, `author`, `content`, `platform`, `engagement`, `civilian_harm_score`
-- Entities: `name`, `type`, `platform`, `first_seen`, `relationship_count`
-
 #### JSON Export
 
-**Features:**
 - Full investigation data (unfiltered)
 - Useful for API integration, custom parsing
 
-**Step-by-Step:**
-1. Click **Export** → **JSON**
-2. File downloads (`.json` extension)
-3. Parse with any JSON library
-
 #### Google Drive Export
 
-**Features:**
-- Direct upload to Google Drive (requires OAuth)
-- Folder auto-creation (organized by date/target)
-- All formats supported
+- Direct upload to Google Drive (requires OAuth configuration)
+- Supports all formats (PDF, Markdown, STIX, CSV, JSON)
 
-**Step-by-Step:**
-1. **First Time Setup**:
-   - Click **Export** → **Google Drive**
-   - Authorize Fortis to access your Drive
-   - Select destination folder
+#### How to Export
 
-2. **Subsequent Exports**:
-   - Click **Export** → **Google Drive**
-   - Select format (PDF, Markdown, JSON, CSV)
-   - File appears in Drive within 10 seconds
+1. Run any investigation, geolocation, or analysis
+2. Results appear in the results panel
+3. Click the desired format button in the export bar at the bottom:
+   - **PDF** | **MD** | **STIX** | **CSV** | **JSON** | **Drive**
+4. The file downloads or uploads to Drive
 
 ---
 
@@ -799,126 +532,94 @@ Bellingcat-inspired methodology for detecting conflict-related content.
 #### Methodology
 
 **Semantic Similarity Scoring:**
-- Uses `sentence-transformers/all-MiniLM-L6-v2` model
-- Compares each post/comment against 50+ harm-related reference sentences
-- Examples:
-  - "Airstrike destroyed residential building killing civilians"
-  - "Children injured in shelling attack"
-  - "Refugees fleeing conflict zone"
+- Uses `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` model
+- Compares each post/comment against 15 harm-related reference concepts:
+  - Civilian casualties and deaths from armed conflict
+  - Hospital or medical facility attacked or destroyed
+  - School or educational facility damaged in conflict
+  - Residential buildings destroyed by shelling or airstrikes
+  - Forced displacement of civilian population
+  - Injuries to civilians including women and children
+  - Critical infrastructure destruction affecting civilian life
+  - Humanitarian crisis and civilian suffering in war zone
+  - War crimes or violations of international humanitarian law
+  - Deliberate targeting of civilian areas and populated zones
+  - Mass graves or extrajudicial killings of civilians
+  - Siege and starvation of civilian population
+  - Sexual violence as weapon of war
+  - Child soldiers or recruitment of minors
+  - Destruction of cultural heritage sites
 
 **Multilingual Keyword Matching:**
-- Dictionaries for English, Arabic, Ukrainian, Russian
-- Keywords: `airstrike`, `casualties`, `displaced`, `bombing`, etc.
-- Weighted scoring: direct violence (1.0), infrastructure damage (0.7), displacement (0.5)
+- Dictionaries for English, Ukrainian, Russian, Arabic, and French
+- Keywords cover: airstrikes, casualties, displacement, bombing, shelling, etc.
+- Weighted scoring based on severity
 
-**Concept Detection:**
-- Automatically tags content with concepts:
-  - `violence`, `infrastructure`, `displacement`, `casualties`, `military`, `humanitarian`
+**Scoring Levels:**
+- **Low** (0.0-0.3): General news, no harm indicators
+- **Medium** (0.3-0.6): Conflict mentions, protests, non-lethal violence
+- **High** (0.6-0.8): Direct harm descriptions, casualties, displacement
+- **Critical** (0.8-1.0): Explicit violence, war crimes, mass casualties
 
-#### Scoring Breakdown
+#### How to Use
 
-**Score = (Semantic Similarity × 0.7) + (Keyword Match × 0.3)**
+1. In the Investigation form, check **Enable Civilian Harm Analysis**
+2. The system scores all collected posts, comments, and media
+3. Results appear in the Analysis tab showing:
+   - Distribution of severity levels across content
+   - Flagged items sorted by score (highest first)
+   - Matched concepts and keywords per item
 
-**Severity Levels:**
-- 🟢 **Low** (0.0-0.3): General news, political discussion, no direct harm
-- 🟡 **Medium** (0.3-0.6): Conflict mentions, protests, non-lethal violence
-- 🟠 **High** (0.6-0.8): Direct harm descriptions, casualties, displacement
-- 🔴 **Critical** (0.8-1.0): Explicit violence, war crimes, mass casualties
-
-#### Viewing Results
-
-**Investigation Results Page:**
-1. If civilian harm analysis was enabled, see:
-   - **Distribution Bar**: Visual breakdown of severity across all content
-   - **Flagged Items Tab**: Posts sorted by score (Critical first)
-   - **Concept Badges**: Each post shows matched concepts
-
-2. **Filter by Severity:**
-   - Click severity level (Critical, High, Medium, Low) to filter
-
-3. **Item Details:**
-   - Click post to expand:
-     - Full content
-     - Civilian harm score + matched keywords
-     - Semantic similarity score + concept tags
-     - Timestamp + platform
-     - **Action Buttons**: Flag for review, Add to report, Dismiss
-
-**Feed Monitor Watch Panel:**
-- Real-time civilian harm scores for monitored content
-- Auto-escalates Critical items to top of queue
-
-#### Configuration
-
-**Enable/Disable:**
-- Environment variable: `CIVILIAN_HARM_ENABLED=true` (default)
-- Set to `false` to disable globally
-
-**Customize Thresholds:**
-- Edit `config/civilian_harm_config.json`:
-  ```json
-  {
-    "thresholds": {
-      "low": 0.3,
-      "medium": 0.6,
-      "high": 0.8
-    },
-    "keywords": {
-      "en": ["airstrike", "casualties", ...],
-      "ar": ["غارة جوية", "ضحايا", ...],
-      ...
-    }
-  }
-  ```
+**Environment Variable:**
+- `CIVILIAN_HARM_ENABLED`: Enable/disable globally (default: `true`)
+- `HARM_MODEL_NAME`: Override the sentence-transformers model (default: `paraphrase-multilingual-MiniLM-L12-v2`)
 
 ---
 
 ### Image Analysis
 
-Four-module image forensics and intelligence pipeline for uploaded images.
+Four-module image forensics and intelligence pipeline.
 
 #### Modules
 
 **1. Reverse Image Search**
-- TinEye API lookup for exact and near-duplicate matches across the web
+- TinEye API lookup for exact and near-duplicate matches across the web (requires `TINEYE_API_KEY`)
 - Generates search URLs for Google Lens, Yandex Images, and Bing Visual Search
 - Perceptual hash cache (pHash, dHash, aHash) detects similar images across investigations
-- Useful for: Verifying image provenance, finding original sources, detecting reposts
 
 **2. Error Level Analysis (ELA)**
 - Re-compresses the image at known quality and measures pixel-level differences
 - Tampered regions show higher error levels (brighter in ELA output)
 - Clone detection via block matching identifies copy-paste manipulations
 - Metadata strip detection flags images with suspiciously absent EXIF data
-- Useful for: Detecting image manipulation, verifying photo authenticity
 
 **3. Steganography Detection**
-- LSB (Least Significant Bit) extraction reveals hidden data in pixel values
-- RS analysis measures statistical anomalies that indicate steganographic embedding
+- LSB (Least Significant Bit) chi-square test reveals hidden data in pixel values
+- RS analysis measures statistical anomalies indicating steganographic embedding
 - Sample pairs test provides a second statistical measure for confirmation
-- Useful for: Detecting covert communication, hidden messages in images
 
 **4. CLIP Vision Classification**
 - Zero-shot classification against 22 OSINT-relevant categories (military vehicles, weapons, protests, infrastructure damage, documents, surveillance equipment, etc.)
 - Landmark detection against 50 locations including conflict zones (Aleppo, Mariupol, Gaza) and major cities
 - Content safety screening (graphic violence, explicit content, disturbing imagery)
-- Useful for: Rapid image triage, location estimation, content flagging
 
-#### Step-by-Step
+#### Two Ways to Use
 
-1. **During Investigation**
-   - Upload images as media files in the investigation form
-   - Image analysis runs automatically alongside OSINT collection
-   - Results appear in the investigation report under Image Analysis
+**During Investigation:**
+- Upload images via the **Media Files** field in the investigation form
+- All 4 analyses run automatically alongside OSINT collection
+- Results appear in the investigation report and feed into the LLM analysis context
 
-2. **Standalone Analysis**
-   - Navigate to the investigation form
-   - Upload one or more images (JPG, PNG, WEBP, TIFF)
-   - Results show:
-     - **Reverse Search**: TinEye matches with domains, crawl dates, and backlinks
-     - **Forensics**: ELA visualization, clone detection regions, metadata assessment
-     - **Steganography**: LSB/RS/sample pairs scores with DETECTED/CLEAN/SUSPICIOUS classification
-     - **Classification**: Top-5 OSINT categories with confidence scores, detected landmarks, safety rating
+**Standalone Analysis:**
+- Click the **Image Analysis** tool card
+- Drag and drop or select images (JPEG, PNG, TIFF, WebP)
+- Select which modules to run (all enabled by default via checkboxes)
+- Click **Analyse Images**
+- Results show per image:
+  - **Forensics**: Verdict (AUTHENTIC / POSSIBLY / LIKELY MANIPULATED), confidence, flags
+  - **Steganography**: Verdict (NO STEGANOGRAPHY / POSSIBLE / LIKELY), confidence, estimated payload
+  - **Classification**: Top-5 OSINT categories with confidence, detected landmarks, safety rating
+  - **Reverse Search**: TinEye matches, search URLs, similar cached images with hash distance
 
 #### Configuration
 
@@ -932,13 +633,6 @@ Each module can be independently enabled/disabled via environment variables:
 | `IMAGE_VISION_ENABLED` | `true` | CLIP classification |
 | `TINEYE_API_KEY` | (none) | Optional TinEye API key for reverse search |
 
-#### Use Cases
-
-- **Photo Verification**: Run ELA + reverse search to check if an image has been manipulated or is a repost from another context
-- **Conflict Zone Imagery**: CLIP classification + landmark detection + civilian harm scoring for rapid triage
-- **Hidden Communications**: Steganography detection on images shared through encrypted channels
-- **Evidence Authentication**: Full pipeline (all 4 modules) for court-admissible evidence assessment
-
 ---
 
 ### Wayback Machine Integration
@@ -949,115 +643,72 @@ Historical domain data from the Internet Archive's CDX API.
 
 - **Historical Snapshots**: Retrieve all archived versions of a domain
 - **Subdomain Discovery**: Find subdomains from archived pages
-- **Content Change Detection**: Track modifications over time
-- **Robots.txt History**: See what was blocked/allowed historically
 - **No API Key Required**: Free access via CDX API
 
 #### How It Works
 
 When you investigate a domain with **Standard** or **Deep** depth:
 1. System queries Wayback CDX API for all snapshots
-2. Analyzes snapshot timestamps, URLs, status codes
-3. Identifies significant changes (layout, content, redirects)
-4. Discovers subdomains from archived internal links
-
-#### Viewing Results
-
-**Investigation Results → Wayback Tab:**
-1. **Timeline**: Visual timeline of snapshots (grouped by year/month)
-2. **Snapshot Count**: Total archived versions
-3. **Date Range**: First snapshot → Most recent
-4. **Key Changes**: LLM-identified significant modifications
-5. **Subdomains Discovered**: List of historical subdomains not in current DNS
-
-**Snapshot Details:**
-- Click any snapshot to see:
-  - Capture date/time
-  - HTTP status code
-  - URL
-  - **View Archive**: Link to Wayback Machine viewer
-  - **Diff**: Compare to previous snapshot (text diff)
+2. Analyses snapshot timestamps, URLs, status codes
+3. Discovers subdomains from archived internal links
+4. Results are included in the LLM investigation analysis
 
 #### Use Cases
 
 - **Domain History**: Track ownership changes, previous content
 - **Subdomain Enumeration**: Find forgotten or decommissioned subdomains
-- **OPSEC Audits**: Check for historical leaks (emails, credentials in archived pages)
+- **OPSEC Audits**: Check for historical leaks in archived pages
 - **Evidence Preservation**: Verify domain existed on specific date
 
 ---
 
 ### Web Intelligence
 
-LLM-driven dork search with 5-phase analysis pipeline.
+LLM-driven dork search with a 4-phase analysis pipeline. Runs automatically during investigations when the **Search Web for Missing Intel** checkbox is enabled.
 
 #### Architecture
 
-**Phase 1: Initial Dorking**
-- LLM generates targeted Google dork queries
-- Examples: `site:example.com filetype:pdf`, `"username" -site:twitter.com`
+**Phase 1: Gap Analysis**
+- LLM reviews the investigation report and OSINT data
+- Identifies intelligence gaps (platforms that returned no data, unanswered questions)
+- Generates 3-5 targeted dork queries to fill those gaps
 
-**Phase 2: OSINT Collection**
-- DuckDuckGo scraping (no API key required)
-- Extracts: title, URL, snippet, timestamp
+**Phase 2: Validation**
+- LLM generates 3-5 dork queries to cross-reference key findings
+- Queries executed via DuckDuckGo (no API key required)
 
-**Phase 3: Analysis**
-- LLM analyzes results for insights
-- Extracts: IOCs, patterns, anomalies
+**Phase 3: Synthesis**
+- LLM integrates gap-fill results and validates existing data
+- Rates each result: NEW_INTEL / CONFIRMED / CONTRADICTED / INCONCLUSIVE
+- Assigns confidence levels: HIGH / MODERATE / LOW
+- Flags HIGH and MODERATE results for deep scraping
 
-**Phase 4: Gap Analysis**
-- Identifies missing information
-- Generates follow-up dork queries
-- Example: "No LinkedIn profile found → add `site:linkedin.com` query"
+**Phase 4: Deep Scrape** (confidence-gated)
+- Only HIGH and MODERATE confidence results get full page scraping
+- Uses existing web scraper with content sanitisation
+- LLM enriches findings with full-page details
 
-**Phase 5: Validation + Deep Scrape**
-- Re-verifies findings
-- Fetches full page content for high-value URLs
-- Circuit breaker: max 3 validation cycles
+#### How to Use
 
-#### Step-by-Step
+1. In the Investigation form, ensure **Search Web for Missing Intel** is checked (default: on)
+2. Run the investigation as normal
+3. Web Intelligence runs automatically after the main investigation completes
+4. Results appear as a "Web Intelligence" section in the investigation report
+5. The section includes discovered URLs, new intelligence, and validation results
 
-1. **Enable Web Intelligence**
-   - In Investigation form, check **Enable Web Intelligence**
-   - Or navigate to **Web Intelligence** dedicated page
+#### Security
 
-2. **Run Investigation**
-   - System automatically generates dork queries
-   - Progress indicator shows phases
-
-3. **Review Results**
-   - **Dork Queries**: List of generated queries with result counts
-   - **Discovered URLs**: Sorted by relevance (LLM-scored)
-   - **Insights**: Key findings extracted by LLM
-   - **False Positive Log**: URLs marked as irrelevant
-
-4. **Manual Refinement** (optional)
-   - Click **Add Custom Dork**
-   - Enter your own query
-   - System re-runs analysis with additional query
-
-5. **Deep Scrape**
-   - Click **Deep Scrape** on any URL
-   - Fetches full page content
-   - Extracts: emails, phone numbers, social links, metadata
-
-#### Circuit Breaker
-
-**False Positive Detection:**
-- If 70%+ of URLs in a validation cycle are irrelevant:
-  - Circuit breaker activates
-  - Investigation halts to prevent wasted resources
-  - User prompted to refine or stop
-
-**Max Cycles:**
-- Default: 3 validation cycles
-- Prevents infinite loops
+- All 4 phases go through ForgeChain 3-verifier consensus
+- Queries are sanitised (blocked operators, anti-exfiltration, 256-char limit)
+- Search results undergo HTML stripping, truncation, and injection pattern scanning
+- Rate limited: max 10 queries per investigation
+- Feature toggle: `DORK_VALIDATION_ENABLED` (default: `true`)
 
 ---
 
 ### ForgeChain Governance
 
-3-verifier consensus gate for sensitive operations.
+3-verifier consensus gate applied to all LLM-driven operations.
 
 #### Verifiers
 
@@ -1066,105 +717,26 @@ LLM-driven dork search with 5-phase analysis pipeline.
 3. **Consistency Verifier**: Ensures request aligns with historical patterns
 
 **Consensus Requirement:**
-- All 3 verifiers must approve (unanimous) for operation to proceed
-- Any rejection = operation blocked
-
-#### Elevated Authorization
-
-For high-sensitivity cases:
-- System prompts admin for manual approval
-- Requires: reason, justification, approver username
-- Logged with full audit trail
+- All 3 verifiers must approve (unanimous) for the operation to proceed
+- Any rejection blocks the operation
+- Uses `deepseek-v4-pro` model for governance decisions (configurable via `DEEPSEEK_FORGE_MODEL`)
 
 #### Audit Trail
 
-**Logs Include:**
+Every ForgeChain decision is logged as a ForgeBlock in an append-only hash chain, recording:
 - Timestamp
-- Operation type (investigation, export, deletion)
-- Verifier decisions (approve/reject + reasoning)
-- User who initiated
+- Chain/operation type
+- Verifier decisions (approve/reject with reasoning)
 - Final outcome (allowed/blocked)
-- Elevated auth details (if applicable)
 
-#### Viewing Audit Logs
+#### Governed Operations
 
-1. Navigate to **Settings** → **Governance**
-2. Click **Audit Logs**
-3. Filter by: date, user, operation type, outcome
-4. Export as CSV for compliance reporting
-
-#### Use Cases
-
-- **Legal Compliance**: Prove due diligence in court
-- **Internal Audits**: Track all sensitive operations
-- **Policy Enforcement**: Automatically block policy violations
-- **Incident Response**: Investigate unauthorized access attempts
-
----
-
-### Compliance Features
-
-GDPR, NIST CSF 2.0, and data retention management.
-
-#### GDPR Article 17 (Right to Erasure)
-
-**Subject Deletion Request:**
-1. Navigate to **Settings** → **Compliance** → **GDPR**
-2. Click **New Deletion Request**
-3. Enter subject identifier (email, username, IP)
-4. Click **Search Knowledge Base**
-5. System finds all related data:
-   - Investigation results
-   - Uploaded documents
-   - Entity graph nodes
-   - Feed monitor data
-6. Review list of data to delete
-7. Click **Execute Deletion**
-8. Confirmation log generated (retained for 7 years per GDPR Art. 30)
-
-**Automated Deletion:**
-- Environment variable: `GDPR_AUTO_DELETE=true`
-- Deletes data automatically upon request (no review step)
-
-#### GDPR Article 30 (Record of Processing)
-
-**Access Processing Records:**
-1. Navigate to **Settings** → **Compliance** → **Processing Records**
-2. View table of all processing activities:
-   - Date/time
-   - Data subject (hashed)
-   - Processing purpose (investigation, monitoring, etc.)
-   - Legal basis (legitimate interest, consent, etc.)
-   - Retention period
-3. Export as CSV for DPA (Data Protection Authority) requests
-
-#### NIST CSF 2.0 Mapping
-
-**View Compliance Mapping:**
-1. Navigate to **Settings** → **Compliance** → **NIST CSF 2.0**
-2. See which platform features map to NIST functions:
-   - **Identify**: Entity extraction, domain enumeration
-   - **Protect**: ForgeChain governance, TLP classification
-   - **Detect**: Feed monitoring, civilian harm classifier
-   - **Respond**: Batch investigation, scenario analysis
-   - **Recover**: Knowledge base, export/archive
-
-#### Tiered Data Retention
-
-**Sensitivity Levels:**
-- **Low**: General OSINT (public profiles, DNS records) → 90 days
-- **Medium**: Personal data (emails, locations) → 180 days
-- **High**: Sensitive content (civilian harm flagged) → 365 days
-- **Critical**: Legal evidence (court-ordered investigations) → Indefinite (manual deletion only)
-
-**Configure Retention:**
-1. Navigate to **Settings** → **Compliance** → **Retention**
-2. Edit retention periods per sensitivity level
-3. Click **Apply Changes**
-4. System schedules auto-deletion via Celery beat
-
-**Manual Override:**
-- Mark specific investigations as "Legal Hold" to prevent auto-deletion
+ForgeChain governs all major LLM chains including:
+- Investigation analysis
+- Scenario generation
+- Batch cross-entity synthesis
+- Web Intelligence (all 4 dork phases)
+- Report Q&A
 
 ---
 
@@ -1172,651 +744,137 @@ GDPR, NIST CSF 2.0, and data retention management.
 
 ### Use Case 1: Investigating a Suspicious Social Media Account
 
-**Scenario:** You've received a tip about a Twitter account spreading disinformation about a local election. You need to profile the account, identify connections, and assess reach.
+**Scenario:** You've received a tip about a Twitter account spreading disinformation. You need to profile the account and assess reach.
 
 **Steps:**
-1. **Navigate to Investigation**
-   - Click **Investigation** in main menu
+1. Click **Investigation** in the tool card strip
+2. Enter `@suspicious_account` in the Subject Identifier field
+3. Set Depth to **Standard**
+4. Click **Investigate**
+5. Review the Analysis tab for profile data, posting patterns, and engagement metrics
+6. Click the **Graph** tab to see entity connections (mentioned accounts, URLs)
+7. Switch to **Scenarios** and select **Influence Analysis** with the session ID from the investigation
+8. Export results as PDF via the export bar
 
-2. **Enter Target**
-   - Identifier: `@suspicious_account`
-   - Depth: **Standard**
-   - Enable Civilian Harm: No (not conflict-related)
-
-3. **Run Investigation**
-   - Click **Start Investigation**
-   - Wait 2-3 minutes for collection
-
-4. **Analyze Profile**
-   - Check: Account age, follower count, verification status
-   - Red flags: Created recently, low followers but high engagement (bot activity?)
-
-5. **Review Posts**
-   - Look for: Posting frequency, hashtags used, engagement patterns
-   - Findings: Posts 20+ times/day, uses identical hashtags, retweets same accounts
-
-6. **Entity Graph**
-   - Click **View Graph**
-   - Identify: Frequently mentioned accounts, co-retweeted URLs
-   - Findings: Small network of 5-7 accounts with mutual retweets (coordinated?)
-
-7. **Run Scenario: Influence Analysis**
-   - Click **Scenarios** → **Influence Analysis**
-   - Results: Low organic reach, high bot-like amplification
-
-8. **Export Evidence**
-   - Export → **PDF** with TLP:AMBER
-   - Share with election security team
-
-**Outcome:** Identified coordinated inauthentic behavior. Evidence packaged for platform reporting.
+**Outcome:** Identified coordinated inauthentic behaviour. Evidence packaged for platform reporting.
 
 ---
 
 ### Use Case 2: Domain Reconnaissance for Security Assessment
 
-**Scenario:** Your company is considering acquiring a small tech startup. You need to assess their digital footprint and potential security issues.
+**Scenario:** Assess a startup's digital footprint before acquisition.
 
 **Steps:**
-1. **Navigate to Investigation**
-   - Identifier: `targetstartup.com`
-   - Depth: **Deep**
-   - Enable Web Intelligence: Yes
-
-2. **Run Investigation**
-   - Wait 5-10 minutes for comprehensive scan
-
-3. **Review WHOIS Data**
-   - Check: Registrant (does it match company name?), creation date, expiration
-   - Findings: Domain registered 3 years ago, expires in 2 months (renewal risk?)
-
-4. **Analyze DNS Records**
-   - Check: MX records (email hosting), TXT records (SPF, DKIM), nameservers
-   - Findings: Using Gmail for email (no custom mail server), missing DMARC record (security gap)
-
-5. **Subdomain Enumeration**
-   - DNSdumpster found 23 subdomains
-   - Wayback Machine found 8 additional historical subdomains
-   - Red flags: `dev.targetstartup.com` publicly accessible, `staging.targetstartup.com` in archive
-
-6. **HTTP Headers Analysis**
-   - Check: Server version, security headers
-   - Findings: Missing `X-Frame-Options`, `CSP`, `HSTS` (security hardening needed)
-
-7. **Wayback Machine Review**
-   - Click **Wayback** tab
-   - Findings: Homepage completely redesigned 1 year ago, old site had exposed API docs
-
-8. **Web Intelligence Results**
-   - Dork queries found: 3 PDFs with employee emails, 1 GitHub repo with API keys (revoked? check)
-
-9. **Export Report**
-   - Export → **PDF** with TLP:RED (confidential acquisition)
-   - Include recommendations: Secure staging/dev, add security headers, renew domain ASAP
-
-**Outcome:** Security assessment completed. Identified 5 high-priority fixes before acquisition.
+1. Click **Investigation**, enter `targetstartup.com`, set Depth to **Deep**
+2. Ensure **Search Web for Missing Intel** is checked
+3. Click **Investigate**
+4. Review: WHOIS data, DNS records, subdomains, HTTP headers, Wayback Machine history
+5. Check Web Intelligence section for dork-discovered documents or exposed endpoints
+6. Export as PDF for the acquisition team
 
 ---
 
-### Use Case 3: Tracking a Person of Interest Across Platforms
+### Use Case 3: Monitoring a Developing Situation
 
-**Scenario:** You're investigating a subject for a missing persons case. You have a username they used on Facebook. You need to find other accounts and recent activity.
+**Scenario:** A natural disaster has struck. Monitor social media for casualty reports and relief needs.
 
 **Steps:**
-1. **Initial Investigation**
-   - Identifier: `missing_person_username`
-   - Depth: **Deep**
-   - Enable Civilian Harm: No
-
-2. **Review Results**
-   - Facebook: Last post 3 weeks ago, location tagged in City X
-   - Findings: Bio mentions "Also on Twitter: @different_handle"
-
-3. **Follow-Up Investigation**
-   - Launch new investigation: `@different_handle`
-   - Twitter: Last tweet 5 days ago
-
-4. **Batch Investigation for All Aliases**
-   - Navigate to **Batch Investigation**
-   - Enter:
-     ```
-     missing_person_username
-     @different_handle
-     person_email@example.com
-     ```
-   - Enable **Cross-Entity Analysis**
-
-5. **Review Cross-Entity Results**
-   - LLM finds: All accounts mention same hometown, similar writing style, overlapping interests
-   - Confirmation: Same person
-
-6. **Geolocation Analysis**
-   - Navigate to **Geolocation**
-   - Upload screenshots of geotagged posts from Facebook/Twitter
-   - Extract GPS coordinates
-   - Map shows: Last known locations in City X
-
-7. **Pattern of Life Scenario**
-   - Click **Scenarios** → **Pattern of Life**
-   - Results: Usually posts between 8-10 PM, active on weekends, frequents coffee shop in downtown City X
-
-8. **Feed Monitor Setup**
-   - Create monitor for all aliases
-   - Interval: 15 minutes (time-sensitive case)
-   - Get real-time alerts for new posts
-
-9. **Share with Authorities**
-   - Export → **PDF** with timeline, map, screenshots
-   - TLP:AMBER (share with law enforcement)
-
-**Outcome:** Provided investigators with last known locations and activity patterns. Subject found safe 2 days later.
+1. Click **Feed Monitor**
+2. Create Monitor 1: Type=Keyword, Query=`"earthquake casualties"`, Platforms=Twitter+Telegram, Interval=5 min
+3. Create Monitor 2: Type=Keyword, Query=`"need water" OR "food shortage"`, Platforms=Twitter+Facebook, Interval=10 min
+4. Click **Start Monitor** for each
+5. Click **Watch** in the top bar to review incoming findings
+6. Approve critical items, dismiss noise
+7. For verified reports, run full investigations on key usernames
 
 ---
 
-### Use Case 4: Monitoring a Developing Situation (Feed Monitor)
+### Use Case 4: Verifying Image Authenticity
 
-**Scenario:** A natural disaster has struck a region. You're monitoring social media for casualty reports, relief needs, and misinformation.
+**Scenario:** A social media post claims to show a bombed building, but you suspect the image is manipulated.
 
 **Steps:**
-1. **Navigate to Feed Monitor**
-   - Click **Feed Monitor**
-
-2. **Create Multiple Monitors**
-   - Monitor 1:
-     - Name: "Earthquake - Casualty Reports"
-     - Type: Keyword
-     - Query: `"earthquake casualties" OR "deaths" OR "injured"`
-     - Platforms: Twitter, Telegram, Reddit
-     - Interval: 5 minutes (breaking situation)
-     - Enable Civilian Harm: Yes
-
-   - Monitor 2:
-     - Name: "Earthquake - Relief Needs"
-     - Type: Keyword
-     - Query: `"need water" OR "food shortage" OR "medical supplies"`
-     - Platforms: Twitter, Facebook, Telegram
-     - Interval: 10 minutes
-
-   - Monitor 3:
-     - Name: "Earthquake - Misinformation"
-     - Type: Keyword
-     - Query: `"fake news" OR "hoax" OR "debunk" earthquake`
-     - Platforms: Twitter, Reddit
-     - Interval: 15 minutes
-
-3. **Activate All Monitors**
-   - Click **Activate** on each
-   - Celery workers begin polling
-
-4. **Watch Panel Review**
-   - Navigate to **Watch Panel**
-   - Filter by **Critical** civilian harm first
-   - Items appear in real-time
-
-5. **Triage Incoming Posts**
-   - **Critical Items**: Reports of casualties, collapsed buildings
-     - Action: Flag for humanitarian orgs, verify with geolocation
-   - **High Items**: Relief needs, supply requests
-     - Action: Forward to NGOs, add to situation report
-   - **Medium Items**: General updates, traffic conditions
-     - Action: Review periodically
-
-6. **Verify Claims with Geolocation**
-   - For posts claiming "building collapsed at [location]":
-     - Right-click → **Add to Investigation**
-     - Upload attached images to **Geolocation**
-     - Extract GPS, verify claimed location matches
-
-7. **Daily Situation Report**
-   - End of each day: Export monitor data
-   - Export → **CSV** (all posts from last 24h)
-   - Analyze in spreadsheet: post volume over time, top keywords, verified casualties
-
-8. **Adjust Monitors**
-   - After 48 hours, reduce intervals (situation stabilizing):
-     - Casualties: 15 minutes
-     - Relief: 30 minutes
-     - Misinformation: 60 minutes
-
-**Outcome:** Real-time monitoring enabled rapid response. 200+ verified reports forwarded to relief organizations.
+1. Click **Image Analysis** in the tool card strip
+2. Upload the image
+3. Ensure all 4 module checkboxes are checked
+4. Click **Analyse Images**
+5. Check results:
+   - **ELA**: Does the alleged bomb damage area show different error levels than surroundings?
+   - **Steganography**: Any hidden data?
+   - **CLIP**: What does the AI classify the scene as? Are conflict-zone landmarks detected?
+   - **Reverse Search**: Has this image appeared elsewhere (earlier date = repost from different context)?
 
 ---
 
-### Use Case 5: Analyzing a Conflict Zone for Civilian Harm
+### Use Case 5: Batch Phishing Campaign Analysis
 
-**Scenario:** You're investigating allegations of civilian harm in an active conflict zone. You need to collect evidence, geolocate incidents, and produce a report for human rights investigators.
+**Scenario:** 10 email addresses identified in a phishing campaign. Investigate all at once.
 
 **Steps:**
-1. **Navigate to Investigation**
-   - Identifier: `#ConflictZoneName` (hashtag)
-   - Depth: **Deep**
-   - Enable Civilian Harm: **Yes**
-   - Enable Web Intelligence: Yes
-
-2. **Run Investigation**
-   - Wait 10-15 minutes (deep scan with LLM analysis)
-
-3. **Review Civilian Harm Results**
-   - Click **Civilian Harm** tab
-   - Distribution: 15% Critical, 30% High, 40% Medium, 15% Low
-   - Filter: **Critical**
-
-4. **Analyze Critical Items**
-   - Post 1: "Airstrike hit residential building, 20+ casualties"
-     - Civilian harm score: 0.92
-     - Concepts: `violence`, `casualties`, `infrastructure`
-     - Screenshot attached
-   - Post 2: "Children injured in shelling attack on school"
-     - Score: 0.89
-     - Concepts: `violence`, `casualties`
-
-5. **Geolocate Incidents**
-   - Right-click Post 1 → **Extract Media**
-   - Upload screenshot to **Geolocation**
-   - No GPS data in image (EXIF stripped)
-   - Use visual landmarks + Web Intelligence:
-     - LLM generates dork: `"building name" city conflict`
-     - Find match: Building is City Hall in Town X
-     - Manually add coordinates to map
-
-6. **Cross-Reference Claims**
-   - Navigate to **Q&A**
-   - Ask: "Are there other reports of airstrikes on Town X on [date]?"
-   - System searches knowledge base
-   - Finds: 3 additional posts mentioning Town X, same date
-
-7. **Create Evidence Package**
-   - Navigate to **Batch Investigation**
-   - Enter all related usernames/hashtags
-   - Export → **PDF** with TLP:RED
-   - Include:
-     - Timeline of events
-     - Geolocation map with incident markers
-     - Screenshots with civilian harm scores
-     - Concept tags and keywords
-     - Cross-referenced claims
-
-8. **Feed Monitor for Ongoing Monitoring**
-   - Create monitor: Keyword = "Town X"
-   - Enable Civilian Harm
-   - Interval: 10 minutes
-   - Alert investigators to new reports
-
-9. **GDPR Compliance** (if publishing)
-   - Blur faces in screenshots
-   - Redact usernames (replace with "Source A", "Source B")
-   - Navigate to **Settings** → **Compliance**
-   - Log processing activity for GDPR Art. 30
-
-**Outcome:** Evidence package submitted to human rights organization. Geolocated 5 incidents with corroborating social media posts. Ongoing monitoring active.
+1. Click **Batch Investigation**
+2. Paste all 10 emails (one per line) into the text area
+3. Set Identifier Type to **Auto-detect** and select relevant platforms
+4. Click **Batch Investigate**
+5. Review individual results and cross-entity synthesis in the Analysis tab
+6. Check the Graph tab for shared connections
+7. Export as STIX 2.1 for import into your Threat Intelligence Platform
 
 ---
 
-### Use Case 6: Verifying Claims in a Document
+### Use Case 6: Conflict Zone Evidence Gathering
 
-**Scenario:** You've received a PDF report claiming XYZ Corp was hacked, with 10,000 customer records leaked. You need to verify claims before publishing a news article.
-
-**Steps:**
-1. **Upload Document**
-   - Navigate to **Reports**
-   - Click **Upload New Report**
-   - Select PDF file: `XYZ_Corp_Breach_Report.pdf`
-   - Wait for processing (30 seconds)
-
-2. **Ask Verification Questions**
-   - Navigate to **Q&A**
-   - Select document: `XYZ_Corp_Breach_Report.pdf`
-   - Questions:
-     - Q: "When did the breach allegedly occur?"
-       - A: "According to the report, March 15, 2025"
-     - Q: "What evidence is provided for the 10,000 records claim?"
-       - A: "The report cites a sample of 100 records, extrapolated to 10,000 based on file size"
-     - Q: "Are there any screenshots or proof?"
-       - A: "Yes, screenshot on page 5 shows leaked database table"
-
-3. **Extract Claims to Verify**
-   - Claim 1: Breach on March 15, 2025
-   - Claim 2: 10,000 records leaked
-   - Claim 3: Data includes names, emails, passwords (hashed)
-
-4. **Investigate XYZ Corp Domain**
-   - Navigate to **Investigation**
-   - Identifier: `xyzcorp.com`
-   - Depth: **Standard**
-   - Enable Web Intelligence: Yes
-
-5. **Check for Breach Mentions**
-   - Web Intelligence finds:
-     - Dork: `"XYZ Corp" breach 2025`
-     - Results: 2 forum posts discussing breach, 1 Pastebin link
-   - Navigate to Pastebin link → Sample data matches screenshot in PDF
-
-6. **Verify Timeline**
-   - Check domain's Twitter: `@XYZCorp`
-   - Search posts for March 15-20, 2025
-   - Finding: March 17 post: "We are investigating reports of unauthorized access"
-   - Confirms timeline (breach on 15th, disclosure on 17th)
-
-7. **Verify Record Count**
-   - Q&A system: "Is there independent verification of the 10,000 number?"
-   - Answer: "No, only the report's extrapolation"
-   - Red flag: Unverified claim
-
-8. **Cross-Reference with Knowledge Base**
-   - Navigate to **Knowledge Base**
-   - Search: "XYZ Corp breach"
-   - Finds: 1 previous investigation from 2024 (unrelated incident)
-
-9. **Produce Verification Summary**
-   - Verified: Breach occurred (confirmed by company statement + sample data)
-   - Verified: Timing (March 15, disclosed March 17)
-   - Unverified: Exact record count (10,000 is estimate, not confirmed)
-   - Verified: Data types (names, emails, hashed passwords in sample)
-
-10. **Document Findings**
-    - Export Q&A session → **Markdown**
-    - Include in article as "verification methodology"
-
-**Outcome:** Published article with accurate claims. Noted that exact record count is unconfirmed.
-
----
-
-### Use Case 7: IP Address Investigation
-
-**Scenario:** Your IDS flagged an IP address (203.0.113.45) making suspicious API calls. You need to investigate the IP's origin, associated domains, and threat intelligence.
+**Scenario:** Investigate allegations of civilian harm in a conflict zone.
 
 **Steps:**
-1. **Navigate to Investigation**
-   - Identifier: `203.0.113.45`
-   - Depth: **Standard**
-
-2. **Review Geolocation**
-   - Country: Example Country
-   - City: Example City
-   - ISP: Example Hosting Ltd.
-   - ASN: AS12345
-   - Coordinates: 40.7128° N, 74.0060° W
-
-3. **Reverse DNS**
-   - Hostname: `vps-12345.examplehosting.com`
-   - Indicates: Virtual private server (shared hosting)
-
-4. **Reverse IP (Co-hosted Domains)**
-   - System finds 47 other domains on same IP
-   - Domains:
-     - `legitimate-site1.com` (clean)
-     - `phishing-example.net` (suspicious TLD)
-     - `malware-test.org` (high-risk name)
-   - Red flag: Shared hosting with known malicious domains
-
-5. **Web Intelligence**
-   - Dork: `"203.0.113.45" malware OR blacklist OR abuse`
-   - Finds: 1 forum post mentioning IP in botnet list (6 months ago)
-
-6. **Check Knowledge Base**
-   - Search: `203.0.113.45`
-   - Finding: IP appeared in previous investigation (DDoS attack, 8 months ago)
-
-7. **Threat Intelligence Export**
-   - Export → **STIX 2.1**
-   - Indicator object includes:
-     - IP address
-     - ASN
-     - Co-hosted domains
-     - Historical incidents
-   - Import into TIP for alerting
-
-8. **Block IP + Monitor**
-   - Add IP to firewall blocklist
-   - Create Feed Monitor:
-     - Name: "IP 203.0.113.45 - Monitor Mentions"
-     - Type: Keyword
-     - Query: `203.0.113.45`
-     - Platforms: Twitter, Pastebin (via web intel)
-     - Interval: 60 minutes
-
-**Outcome:** IP confirmed as high-risk. Blocked at firewall. Monitoring for future activity.
-
----
-
-### Use Case 8: Batch Investigation for Multiple Targets
-
-**Scenario:** You've identified 10 email addresses in a phishing campaign. You need to investigate all addresses for OSINT footprints and identify connections.
-
-**Steps:**
-1. **Navigate to Batch Investigation**
-   - Click **Batch** in main menu
-
-2. **Enter Email Addresses**
-   - Paste list (one per line):
-     ```
-     phisher1@example.com
-     phisher2@example.com
-     phisher3@differentdomain.com
-     ...
-     phisher10@example.com
-     ```
-
-3. **Configure Settings**
-   - Depth: **Quick** (10 targets = use faster depth)
-   - Enable Civilian Harm: No
-   - Enable Cross-Entity Analysis: **Yes**
-
-4. **Run Batch**
-   - Click **Start Batch Investigation**
-   - Progress: 1 of 10 completed... 5 of 10... 10 of 10
-   - Total time: 8 minutes (parallel processing)
-
-5. **Review Individual Results**
-   - `phisher1@example.com`:
-     - Found: GitHub profile (username: phisher1_dev)
-     - Twitter: @phisher1
-   - `phisher3@differentdomain.com`:
-     - Found: LinkedIn profile (different name, but email in contact info)
-
-6. **Cross-Entity Analysis**
-   - Click **Cross-Entity Synthesis** tab
-   - LLM findings:
-     - "7 of 10 emails share domain: example.com"
-     - "3 subjects have GitHub accounts with similar project names"
-     - "2 subjects follow each other on Twitter"
-     - "All LinkedIn profiles created within 2-month window (likely fake)"
-
-7. **Entity Graph**
-   - Click **View Combined Graph**
-   - Visual shows:
-     - Central node: `example.com` domain
-     - 7 email nodes connected to domain
-     - GitHub accounts clustered (similar projects)
-     - Twitter mutual follows
-
-8. **Export Batch Report**
-   - Export → **PDF**
-   - Sections:
-     - Executive Summary (cross-entity findings)
-     - Individual profiles (1 page each)
-     - Combined entity graph
-     - Appendix: Raw data table
-
-9. **Add to TIP**
-   - Export → **STIX 2.1**
-   - Import into TIP
-   - Create alert rule: Flag emails from `@example.com` domain
-
-**Outcome:** Identified phishing campaign infrastructure. 7 of 10 emails linked to same domain. Report shared with SOC.
+1. Click **Investigation**
+2. Enter a relevant hashtag or username
+3. Set Depth to **Deep**, enable **Civilian Harm Analysis**, and check **Search Web for Missing Intel**
+4. Click **Investigate**
+5. Review civilian harm scores in the analysis — focus on Critical and High severity items
+6. Upload any attached images via **Image Analysis** for forensics verification
+7. Use **Geolocation** with geotagged media to map incident locations
+8. Set up a **Feed Monitor** for ongoing tracking
+9. Export the full report as PDF
 
 ---
 
 ## Tips and Best Practices
 
-### Investigation Best Practices
+### Investigation
 
-1. **Start with Quick Depth for Exploration**
-   - Use **Quick** to rapidly assess multiple targets
-   - Upgrade to **Standard** or **Deep** only for high-value targets
-   - Saves time and API quota
+- **Start with Quick Depth**: Use Quick for initial triage, upgrade to Standard or Deep for high-value targets
+- **Use Batch for Related Targets**: More efficient than sequential individual investigations
+- **Enable Civilian Harm Selectively**: Only for conflict/crisis situations — adds processing time
+- **Check the Knowledge Base First**: Before investigating, search KB for related entities to avoid duplicate work
+- **Export Early**: Platform data can change or disappear (deleted posts, banned accounts)
 
-2. **Use Batch for Related Targets**
-   - Investigating multiple aliases? Use **Batch** with cross-entity analysis
-   - More efficient than sequential individual investigations
+### Geolocation
 
-3. **Enable Civilian Harm Selectively**
-   - Only enable for conflict/crisis situations
-   - Adds ~20% processing time due to LLM scoring
+- **EXIF Isn't Always Present**: Many platforms strip GPS data on upload. Download original images when possible.
+- **Combine Sources**: Use geolocation + visual landmarks + metadata for triangulation
+- **Use Clustering**: Upload multiple images from the same subject to reveal location patterns
 
-4. **Leverage Knowledge Base for Historical Context**
-   - Before investigating, search Knowledge Base for related entities
-   - Avoid duplicate work, find connections faster
+### Feed Monitor
 
-5. **Export Early, Export Often**
-   - Export results immediately after investigation
-   - Platform data can change or disappear (deleted posts, banned accounts)
+- **Balance Interval vs. Volume**: High-volume topics need longer intervals to avoid rate limits
+- **Use Specific Monitors**: Separate monitors for different aspects (locations, actors, events) are easier to triage
+- **Review Regularly**: Check the Watch panel to catch critical items
 
-### Geolocation Tips
+### Q&A
 
-1. **EXIF Data Isn't Always Reliable**
-   - Many platforms strip GPS data (Twitter, Instagram, Facebook)
-   - Download original images when possible (via DMs, direct links)
+- **Be Specific**: "What IOCs are listed in the Q3 threat report?" works better than "What does the report say?"
+- **Follow Up**: The chat interface retains context from previous messages
 
-2. **Combine Multiple Sources**
-   - Use geolocation + visual landmarks + metadata
-   - Triangulate: If image has no GPS, analyze shadows, buildings, license plates
+### Export
 
-3. **Cluster Analysis for Pattern Detection**
-   - Upload multiple images from same subject
-   - Clustering reveals: home location, work location, frequent spots
-
-### Feed Monitor Optimization
-
-1. **Balance Interval vs. Data Volume**
-   - High-volume topics (trending hashtags): 30-60 min intervals
-   - Low-volume topics (niche keywords): 10-15 min intervals
-   - Adjust based on Watch Panel queue size
-
-2. **Use Multiple Specific Monitors Instead of One Broad Monitor**
-   - Bad: Single monitor with `"conflict"`
-   - Good: Separate monitors for `"Airstrike"`, `"Casualties"`, `"Displacement"`
-   - Easier to triage and prioritize
-
-3. **Regularly Archive and Clear Watch Panel**
-   - Export reviewed items as CSV weekly
-   - Dismiss non-actionable items
-   - Keeps queue manageable
-
-### Q&A System Optimization
-
-1. **Be Specific in Questions**
-   - Vague: "What does the report say?"
-   - Better: "What IOCs are listed in the Q3 threat report?"
-
-2. **Use Follow-Up Questions**
-   - System retains context from previous question
-   - Example chain:
-     - Q1: "Who is the CEO of Acme Corp?"
-     - Q2: "What is their background?" (refers to CEO from Q1)
-
-3. **Cross-Reference Multiple Documents**
-   - Select "All Documents" scope
-   - Ask: "How do the 2024 and 2025 reports differ in threat assessment?"
-
-### Export Best Practices
-
-1. **Choose TLP Classification Carefully**
-   - **TLP:WHITE**: Public info, safe to share widely
-   - **TLP:GREEN**: Community (industry peers, trusted partners)
-   - **TLP:AMBER**: Limited distribution (need-to-know basis)
-   - **TLP:RED**: Eyes-only (recipient only, no further sharing)
-
-2. **Include Executive Summary for Leadership**
-   - Non-technical stakeholders need high-level findings
-   - LLM-generated summaries are concise and actionable
-
-3. **Use STIX for TIP Integration**
-   - Automate export → import workflow
-   - Enables alerting, correlation, threat hunting
+- **TLP Classification**: Reports include TLP headers. WHITE for public, GREEN for community, AMBER for limited, RED for eyes-only.
+- **STIX for TIP Integration**: Use STIX 2.1 export for automated import into threat intelligence platforms
 
 ### Security & OPSEC
 
-1. **Use VPN or Proxy for Sensitive Investigations**
-   - Platform APIs and web scraping expose your IP
-   - Protect your identity and location
-
-2. **Be Aware of Rate Limits**
-   - Twitter: 300 requests/15 min (authenticated)
-   - Reddit: 60 requests/min
-   - Deep investigations may hit limits → use delays or proxies
-
-3. **Don't Over-Investigate**
-   - Excessive profile views can alert target (LinkedIn "Who Viewed Your Profile")
-   - Use stealth methods: web scraping vs. direct API (where possible)
-
-4. **Sanitize Exported Reports**
-   - If sharing externally, redact your infrastructure (IP addresses, API keys in logs)
-   - Blur faces in screenshots to protect identities
-
-### Performance Optimization
-
-1. **Clean Up Knowledge Base Regularly**
-   - Old investigations slow down Q&A semantic search
-   - Delete or archive investigations older than retention period
-
-2. **Use Celery Workers for Large Batches**
-   - Default: 4 workers
-   - For 20+ target batches, increase workers: `CELERY_WORKERS=8`
-
-3. **Monitor Disk Space**
-   - Uploaded PDFs, FAISS vectorstores, media files consume disk
-   - Archive to Google Drive or external storage monthly
-
----
-
-## UI Navigation & Shortcuts
-
-### Keyboard Shortcuts
-
-| Shortcut | Action |
-|----------|--------|
-| `Ctrl + K` | Global search (jump to investigation, report, entity) |
-| `Ctrl + N` | New investigation |
-| `Ctrl + U` | Upload report |
-| `Ctrl + E` | Export current view |
-| `Ctrl + F` | Find in page (browser default) |
-| `Esc` | Close modal/dialog |
-| `Tab` | Navigate form fields |
-| `Enter` | Submit active form |
-
-### UI Tips
-
-1. **Dark Theme Optimization**
-   - Interface uses black (#000) background + neon purple (#9D4EDD) accents
-   - Reduce screen brightness for comfortable extended use
-   - Or switch to light theme: **Settings** → **Theme** → **Light**
-
-2. **Collapsible Sections**
-   - Long investigation results have collapsible sections
-   - Click section header to expand/collapse
-   - Collapse unused sections to focus on key data
-
-3. **Breadcrumb Navigation**
-   - Top of every page shows: Home > Investigation > Results
-   - Click any breadcrumb to navigate back
-
-4. **Quick Actions Menu**
-   - Right-click any entity (username, domain, IP) for quick actions:
-     - Investigate
-     - Add to Monitor
-     - Copy to Clipboard
-     - View in Graph
-
-5. **Notifications**
-   - Bell icon (top-right) shows:
-     - Investigation complete
-     - Feed monitor critical items
-     - Export ready for download
-   - Click notification to jump to relevant page
-
-6. **Responsive Design**
-   - Platform works on mobile/tablet (limited features)
-   - For best experience: Desktop with 1920x1080 or higher resolution
+- **Use VPN/Proxy**: Platform APIs and web scraping expose your IP
+- **Be Aware of Rate Limits**: Deep investigations on high-volume targets may hit platform rate limits
+- **Sanitise Reports**: Redact usernames and blur faces if sharing externally
 
 ---
 
@@ -1824,224 +882,79 @@ GDPR, NIST CSF 2.0, and data retention management.
 
 ### Investigation Issues
 
-**Problem: "No results found" for valid username**
+**"No results found" for a valid username**
+- The platform API may be down or rate-limited
+- Verify the username exists by manually visiting the profile
+- Try with different platform selections
+- Check server logs for API errors
 
-**Cause**: Platform API down, rate limit, or username doesn't exist on searched platforms
-
-**Solution**:
-1. Check platform status pages (Twitter Status, Reddit Status)
-2. Verify username exists by manually visiting profile
-3. Try again with different platform selection
-4. Check logs: **Settings** → **Logs** → `investigation_errors.log`
-
----
-
-**Problem: Investigation stuck at "Collecting data..." for 10+ minutes**
-
-**Cause**: Celery worker crashed, network timeout, or large dataset
-
-**Solution**:
-1. Check Celery worker status: **Settings** → **System** → **Workers**
-2. Restart worker: Click **Restart Worker**
-3. Re-run investigation with **Quick** depth instead of **Deep**
-
----
-
-**Problem: Civilian Harm scores seem inaccurate**
-
-**Cause**: Model needs retraining on new conflict/harm language, or keywords outdated
-
-**Solution**:
-1. Check version: **Settings** → **Civilian Harm** → **Model Version**
-2. Update keywords: Edit `config/civilian_harm_config.json`
-3. Retrain model: `python scripts/retrain_civilian_harm.py` (requires admin)
-
----
+**Investigation takes longer than expected**
+- Deep investigations can take 10-15 minutes for complex targets
+- Check that Celery workers are running (required for background tasks)
+- Try Quick or Standard depth instead
 
 ### Geolocation Issues
 
-**Problem: "No GPS data found" but image is geotagged**
+**"No GPS data found" but image should be geotagged**
+- Many social media platforms strip EXIF GPS data on upload
+- Try the original image file (not a screenshot or re-saved version)
+- Use `exiftool` externally to verify GPS data exists in the file
 
-**Cause**: EXIF data stripped by platform, or non-standard GPS tag format
-
-**Solution**:
-1. Use `exiftool` externally to verify GPS data exists
-2. Try uploading original image (not screenshot)
-3. If downloaded from social media, request original via DM
-
----
-
-**Problem: Clustering shows single cluster when locations are far apart**
-
-**Cause**: DBSCAN epsilon parameter too large
-
-**Solution**:
-1. Navigate to **Geolocation** → **Settings** (gear icon)
-2. Reduce `eps` parameter (default: 0.5 km → try 0.2 km)
-3. Recompute clusters
-
----
+**Clustering shows unexpected results**
+- DBSCAN parameters may need tuning for your use case
+- Upload more data points for better clustering
 
 ### Feed Monitor Issues
 
-**Problem: Monitor stopped polling**
+**Monitor stopped collecting**
+- Check that Celery workers and Celery beat are running
+- Platform API rate limits may have been hit — increase the polling interval
+- Check server logs for connection errors
 
-**Cause**: Celery beat scheduler stopped, or API rate limit exceeded
+### Q&A Issues
 
-**Solution**:
-1. Check scheduler: **Settings** → **System** → **Celery Beat**
-2. Restart beat: Click **Restart Beat**
-3. Check monitor interval: If too frequent, increase interval to avoid rate limits
-
----
-
-**Problem: Too many irrelevant posts in Watch Panel**
-
-**Cause**: Keywords too broad, or hashtag used for multiple topics
-
-**Solution**:
-1. Edit monitor: Add exclusion keywords
-   - Example: Monitor `"conflict"` but exclude `"movie conflict"`, `"work conflict"`
-2. Use AND logic: `"conflict" AND "military"` (stricter matching)
-3. Enable Civilian Harm filter: Only show Medium+ scores
-
----
-
-### Q&A System Issues
-
-**Problem: "No relevant documents found" when document exists**
-
-**Cause**: FAISS vectorstore not updated, or query semantically mismatched
-
-**Solution**:
-1. Re-index document: **Reports** → Select document → **Re-index**
-2. Rephrase question (use keywords from document)
-3. Check document upload status: **Reports** → Status column should be "Indexed"
-
----
-
-**Problem: Answers cite wrong document**
-
-**Cause**: Multiple documents with similar content, vectorstore confusion
-
-**Solution**:
-1. Use **Specific Report** scope instead of **All Documents**
-2. Check document metadata: **Reports** → Click document → **Metadata**
-3. Re-upload with unique title (helps LLM distinguish)
-
----
+**"No relevant documents found"**
+- Ensure documents have been ingested and indexed (check KB panel for document count)
+- Rephrase the question using keywords from the document
+- Open the KB panel and click **Rebuild Index** to re-index all documents
 
 ### Export Issues
 
-**Problem: PDF export fails with "Generation timeout"**
+**PDF export fails or times out**
+- Large investigations with many images can be slow to render
+- Try Markdown export instead (faster, no rendering overhead)
+- Check server logs for specific error messages
 
-**Cause**: Too many images/graphs, or large investigation dataset
+**STIX export missing entities**
+- Some entity types don't map to STIX 2.1 objects
+- Use JSON export for the complete unfiltered dataset
 
-**Solution**:
-1. Deselect some sections: Uncheck **Graphs** or **Timeline** (heavy rendering)
-2. Export as Markdown instead (faster, no rendering)
-3. Increase timeout: **Settings** → **Export** → **PDF Timeout** (default: 60s → 120s)
+### General
 
----
-
-**Problem: STIX export missing entities**
-
-**Cause**: Entity type not supported in STIX 2.1, or relationship too weak
-
-**Solution**:
-1. Check STIX spec: Some entity types (e.g., "concept") don't map to STIX objects
-2. Export as JSON instead (full data, no filtering)
-3. Manually convert JSON to STIX using external tool
-
----
-
-### Performance Issues
-
-**Problem: Platform slow after 100+ investigations**
-
-**Cause**: Knowledge base vectorstore too large, slowing semantic search
-
-**Solution**:
-1. Archive old investigations: **Settings** → **Knowledge Base** → **Archive**
-2. Delete investigations older than retention period: **Compliance** → **Retention** → **Run Cleanup**
-3. Increase server resources (RAM, CPU)
-
----
-
-**Problem: Batch investigation times out after 20 minutes**
-
-**Cause**: Too many targets, or targets with large datasets
-
-**Solution**:
-1. Reduce batch size (10-20 targets max)
-2. Use **Quick** depth instead of **Standard**
-3. Increase Celery worker count: `CELERY_WORKERS=8` (env var)
-
----
-
-### ForgeChain Governance Issues
-
-**Problem: "Operation blocked by verifiers" but request seems legitimate**
-
-**Cause**: Overly strict rules, or false positive in safety verifier
-
-**Solution**:
-1. Check audit log: **Settings** → **Governance** → **Audit Logs**
-2. Review verifier reasoning: See which verifier rejected and why
-3. Request elevated authorization: **Governance** → **Request Override**
-4. Adjust rules: **Settings** → **Governance** → **Rules** (admin only)
-
----
-
-### Compliance Issues
-
-**Problem: GDPR deletion request fails**
-
-**Cause**: Data locked by legal hold, or entity not found
-
-**Solution**:
-1. Check legal holds: **Compliance** → **Legal Holds**
-2. Verify identifier: Search Knowledge Base to confirm data exists
-3. Manual deletion: Contact admin to force delete (bypasses holds)
-
----
-
-### General Troubleshooting Steps
-
-1. **Check System Status**
-   - **Settings** → **System** → **Health Check**
-   - Green = all services running
-   - Red = service down (click for details)
-
-2. **Review Logs**
-   - **Settings** → **Logs**
-   - Filter by: timestamp, log level (ERROR, WARNING, INFO)
-   - Download full log for support tickets
-
-3. **Restart Services**
-   - **Settings** → **System** → **Restart Services**
-   - Restarts: Flask app, Celery workers, Celery beat
-
-4. **Clear Cache**
-   - **Settings** → **System** → **Clear Cache**
-   - Clears: Redis cache, browser cache (cookies retained)
-
-5. **Contact Support**
-   - If issue persists, export logs: **Settings** → **Logs** → **Export**
-   - File support ticket with: error message, steps to reproduce, exported logs
+- Check the browser console (F12 > Console) for JavaScript errors
+- Check server-side logs for Python exceptions
+- Ensure all required environment variables are configured (see README.md)
+- Restart the Flask app and Celery workers if the system becomes unresponsive
 
 ---
 
 ## Appendix
 
-### Environment Variables Reference
+### Key Environment Variables
 
-- `CIVILIAN_HARM_ENABLED`: Enable/disable civilian harm classifier (default: `true`)
-- `GDPR_AUTO_DELETE`: Auto-execute deletion requests without review (default: `false`)
-- `CELERY_WORKERS`: Number of Celery workers for parallel processing (default: `4`)
-- `WAYBACK_ENABLED`: Enable Wayback Machine integration (default: `true`)
-- `WEB_INTEL_ENABLED`: Enable Web Intelligence dork search (default: `true`)
-- `FORGE_CHAIN_ENABLED`: Enable ForgeChain governance (default: `true`)
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `CIVILIAN_HARM_ENABLED` | `true` | Enable/disable civilian harm classifier |
+| `HARM_MODEL_NAME` | `paraphrase-multilingual-MiniLM-L12-v2` | Sentence-transformers model for harm scoring |
+| `DORK_VALIDATION_ENABLED` | `true` | Enable/disable Web Intelligence dork search |
+| `DORK_MAX_QUERIES` | `10` | Max dork queries per investigation |
+| `IMAGE_SEARCH_ENABLED` | `true` | Enable reverse image search |
+| `IMAGE_FORENSICS_ENABLED` | `true` | Enable ELA and forensics |
+| `IMAGE_STEGO_ENABLED` | `true` | Enable steganography detection |
+| `IMAGE_VISION_ENABLED` | `true` | Enable CLIP classification |
+| `TINEYE_API_KEY` | (none) | Optional TinEye API key |
+
+For the full list of environment variables, see `README.md`.
 
 ### API Rate Limits
 
@@ -2055,21 +968,21 @@ GDPR, NIST CSF 2.0, and data retention management.
 
 ### Supported File Formats
 
-**Reports**: PDF, Markdown (.md, .markdown)  
-**Geolocation**: JPG, PNG, HEIC, MP4, MOV, AVI  
-**Export**: PDF, Markdown, JSON, CSV, STIX 2.1, GraphML
+**Report Ingestion**: PDF, Markdown (.md), Plain text (.txt)
+**Geolocation Images**: JPEG, PNG, TIFF, HEIC
+**Image Analysis**: JPEG, PNG, TIFF, WebP, BMP
+**Export**: PDF, Markdown, JSON, CSV, STIX 2.1
 
 ### TLP Classification Guidelines
 
 - **TLP:WHITE**: Can be shared publicly, no restrictions
 - **TLP:GREEN**: Share with peers and partners in the cybersecurity/OSINT community
-- **TLP:AMBER**: Limited distribution, need-to-know basis only, no public disclosure
-- **TLP:RED**: Recipients only, do not share further (eyes-only)
+- **TLP:AMBER**: Limited distribution, need-to-know basis only
+- **TLP:RED**: Recipients only, do not share further
 
 ---
 
 **End of User Guide**
 
-*For technical documentation, see `DEPLOYMENT.md` and `API_REFERENCE.md`*  
-*For developer documentation, see `CONTRIBUTING.md`*  
+*For deployment instructions, see `README.md`*
 *Last updated: August 19, 2026*

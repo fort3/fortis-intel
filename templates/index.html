@@ -99,6 +99,10 @@
         <span class="tool-card-icon">&#x1F9E0;</span>
         <span class="tool-card-label">Scenarios</span>
       </div>
+      <div class="tool-card" data-tool="imageanalysis" title="Forensics, reverse search, steganography, and CLIP classification">
+        <span class="tool-card-icon">&#x1F5BC;</span>
+        <span class="tool-card-label">Image Analysis</span>
+      </div>
       <div class="tool-card" data-tool="qa" title="Ask questions against your knowledge base">
         <span class="tool-card-icon">&#x1F4AC;</span>
         <span class="tool-card-label">Q&amp;A (RAG)</span>
@@ -219,7 +223,7 @@
               <label class="form-label">Media Files (optional)</label>
               <input type="file" class="form-input" id="investMediaFiles" multiple
                      accept="image/jpeg,image/png,image/tiff,image/webp,image/heic,video/mp4,video/quicktime,video/webm,video/x-msvideo" />
-              <span class="form-hint">Upload original photos/videos with intact GPS metadata for geolocation analysis</span>
+              <span class="form-hint">Upload images/videos &mdash; EXIF geo extraction + forensics + CLIP classification run automatically</span>
             </div>
 
             <div class="form-group">
@@ -463,6 +467,34 @@
               <label class="form-label">OSINT Data (optional)</label>
               <textarea class="form-textarea mono" id="scenarioOsintData" placeholder="Paste raw OSINT data or leave blank to pull from session/KB..." rows="5"></textarea>
               <div class="form-hint">If empty, data will be loaded from the referenced session or Knowledge Base</div>
+            </div>
+          </div>
+
+          <!-- ============================================================
+               TOOL FORM: Image Analysis
+               ============================================================ -->
+          <div class="tool-form" id="form-imageanalysis">
+            <div class="form-group">
+              <label class="form-label">Upload Images</label>
+              <div class="upload-zone" id="imageAnalysisDropZone">
+                <input type="file" id="imageAnalysisFiles" multiple
+                       accept="image/jpeg,image/png,image/tiff,image/webp,image/bmp" />
+                <div class="upload-zone-icon">&#x1F5BC;</div>
+                <div class="upload-zone-text">Drop images here or click to browse</div>
+                <div class="upload-zone-hint">JPEG, PNG, TIFF, WebP &mdash; up to 50 MB each</div>
+              </div>
+              <div class="upload-file-list" id="imageAnalysisFileList"></div>
+            </div>
+
+            <div class="form-group">
+              <label class="form-label">Analysis Modules</label>
+              <div class="checkbox-grid">
+                <label><input type="checkbox" id="imgModForensics" checked /> ELA &amp; Forensics</label>
+                <label><input type="checkbox" id="imgModStego" checked /> Steganography</label>
+                <label><input type="checkbox" id="imgModSearch" checked /> Reverse Search</label>
+                <label><input type="checkbox" id="imgModVision" checked /> CLIP Classification</label>
+              </div>
+              <div class="form-hint">Select which analysis modules to run on each image</div>
             </div>
           </div>
 

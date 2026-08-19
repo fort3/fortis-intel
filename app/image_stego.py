@@ -120,7 +120,7 @@ def _rs_analysis(pixels: np.ndarray, group_size: int = 4) -> Dict[str, Any]:
         "s_negative": round(s_n, 6),
         "rs_ratio": round(r_p / s_p if s_p > 0 else 0.0, 4),
         "estimated_embedding_rate": round(est, 6),
-        "suspicious": est > _RS_EMBED_THRESHOLD,
+        "suspicious": bool(est > _RS_EMBED_THRESHOLD),
     }
 
 def _sample_pairs_analysis(pixels: np.ndarray) -> Dict[str, Any]:
@@ -147,7 +147,7 @@ def _sample_pairs_analysis(pixels: np.ndarray) -> Dict[str, Any]:
 
     return {
         "sp_estimate": round(est, 6),
-        "suspicious": est > _SP_EMBED_THRESHOLD,
+        "suspicious": bool(est > _SP_EMBED_THRESHOLD),
     }
 
 def detect_steganography(
