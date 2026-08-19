@@ -1,6 +1,6 @@
 # Fortis Intelligence Hub — User Guide
 
-**Version 1.1** | **Last Updated: August 2026**
+**Version 1.2** | **Last Updated: August 2026**
 
 ---
 
@@ -25,6 +25,7 @@
    - [Wayback Machine Integration](#wayback-machine-integration)
    - [Web Intelligence](#web-intelligence)
    - [ForgeChain Governance](#forgechain-governance)
+   - [Analysis Integrity Framework](#analysis-integrity-framework)
 5. [Example Use Cases](#example-use-cases)
 6. [Tips and Best Practices](#tips-and-best-practices)
 7. [Troubleshooting](#troubleshooting)
@@ -46,6 +47,7 @@
 - **Civilian Harm Detection**: Bellingcat-inspired semantic scoring for conflict zones
 - **Multi-format Export**: PDF, STIX 2.1, JSON, CSV, Markdown, Google Drive
 - **Governance**: ForgeChain 3-verifier consensus for all LLM-driven operations
+- **Analysis Integrity**: Output grounding verification, source reliability grading, bias audit, competing hypotheses, provenance tracking, and self-consistency checks
 
 ---
 
@@ -719,9 +721,11 @@ LLM-driven dork search with a 4-phase analysis pipeline. Runs automatically duri
 3. **Consistency Verifier**: Ensures request aligns with historical patterns
 
 **Consensus Requirement:**
-- All 3 verifiers must approve (unanimous) for the operation to proceed
-- Any rejection blocks the operation
+- 2-of-3 verifiers must approve (configurable via `FORGE_CONSENSUS_THRESHOLD`) for the operation to proceed
+- Any rejection below the threshold blocks the operation
 - Uses `deepseek-v4-pro` model for governance decisions (configurable via `DEEPSEEK_FORGE_MODEL`)
+
+ForgeChain gates the input; the Output Grounding Verifier (see [Analysis Integrity Framework](#analysis-integrity-framework)) validates the output.
 
 #### Audit Trail
 
@@ -739,6 +743,106 @@ ForgeChain governs all major LLM chains including:
 - Batch cross-entity synthesis
 - Web Intelligence (all 4 dork phases)
 - Report Q&A
+
+---
+
+### Analysis Integrity Framework
+
+Every investigation automatically runs through multiple accuracy checks after the LLM generates its report. These are displayed as collapsible panels below the main analysis.
+
+#### Output Grounding Verification
+
+Compares every claim in the report against the source OSINT data using semantic similarity. Each claim is classified as:
+
+- **Grounded** (similarity >= 0.45) — directly supported by source data
+- **Weakly grounded** (0.25-0.45) — partially related to source data
+- **Ungrounded** (< 0.25) — no clear source support, may be hallucinated
+
+The panel shows a colour-coded bar (green/amber/red) with the grounding ratio, and an expandable list of ungrounded claims for analyst review.
+
+**Verdicts:** WELL GROUNDED (>=70%), PARTIALLY GROUNDED (>=40%), POORLY GROUNDED (<40%)
+
+#### Source Reliability (NATO Admiralty System)
+
+Every OSINT finding is tagged with a reliability grade at collection time:
+
+| Grade | Label | Examples |
+|-------|-------|----------|
+| A | Completely reliable | WHOIS records, DNS, SSL certificates |
+| B | Usually reliable | Major news outlets, Shodan scans |
+| C | Fairly reliable | Twitter/X, Reddit, YouTube, Instagram, Facebook |
+| D | Not usually reliable | Telegram, Mastodon, TikTok |
+| E | Unreliable | Web scrapes, dork search results |
+| F | Cannot be judged | Unknown sources |
+
+Grades are adjusted by metadata: verified accounts upgrade by 1, accounts older than 2 years upgrade by 1 (capped at B), very low engagement downgrades by 1.
+
+The LLM sees these grades in the context and is instructed to weight high-reliability sources over low-reliability ones when findings conflict.
+
+#### Bias Audit
+
+Five deterministic checks for common cognitive biases:
+
+1. **Source concentration** — flags when >60% of evidence comes from one platform
+2. **Confirmation pattern** — flags when the report contains zero contradiction or uncertainty language
+3. **Temporal skew** — flags when all evidence falls within a 48-hour window
+4. **Coverage gaps** — flags when >50% of queried platforms returned no data
+5. **Single-source claims** — flags key entities that appear in only one source
+
+Each check shows a pass/fail indicator with explanation. Overall risk: HEALTHY, ELEVATED, or HIGH.
+
+#### Competing Hypotheses (ACH)
+
+After the main report, a separate LLM call generates alternative explanations:
+
+- Identifies the 2-3 primary conclusions from the report
+- For each, generates 2 plausible alternative hypotheses
+- Evaluates evidence against each hypothesis (CONSISTENT / INCONSISTENT / NEUTRAL)
+- Identifies **diagnostic evidence** — evidence that distinguishes between hypotheses
+- Lists hidden assumptions and collection priorities
+
+The ACH section renders as formatted markdown in a collapsible panel.
+
+#### Self-Consistency Check
+
+**Opt-in feature** (disabled by default). When enabled via `SELF_CONSISTENCY_ENABLED=true`:
+
+- Runs the investigation chain 3 times (configurable via `SELF_CONSISTENCY_RUNS`)
+- Compares claims across all runs using semantic similarity
+- Claims appearing in >=66% of runs are "stable"; others are "unstable"
+- Unstable claims may be LLM confabulations that change with each run
+
+**Note:** This costs 2-3x the normal LLM API usage per investigation.
+
+#### Provenance Trail
+
+A chain-of-custody record tracking every step of the investigation pipeline:
+
+- **OSINT Collection** — which platforms were queried, how many items collected
+- **LLM Analysis** — which chain ran, ForgeChain block ID, content hash
+- **Verification steps** — grounding verdict, bias audit result
+
+Each step is timestamped. The provenance panel shows a numbered timeline with colour-coded stage indicators.
+
+#### RAG Contamination Guard
+
+Prevents a hallucination feedback loop in the Knowledge Base:
+
+- LLM-generated reports are tagged as `source_type: "llm_analysis"` when indexed
+- Uploaded documents are tagged as `source_type: "uploaded_document"`
+- During RAG retrieval, LLM-generated chunks are labelled `[PRIOR ANALYSIS - not a primary source]`
+- The RAG prompt instructs the LLM to treat prior analysis as secondary reference only
+- A cosine similarity threshold (0.3) filters out irrelevant chunks
+
+#### Claim Decomposition
+
+The investigation prompt instructs the LLM to tag every factual claim:
+
+- **[CONFIRMED]** — directly present in source data with citation
+- **[INFERRED]** — deduced from multiple data points, all contributing sources cited
+- **[ASSUMED]** — plausible extrapolation, explicitly flagged as unverified
+
+The LLM is prohibited from generating specific dates, usernames, URLs, or statistics unless they appear verbatim in the OSINT data.
 
 ---
 
@@ -955,6 +1059,8 @@ ForgeChain governs all major LLM chains including:
 | `IMAGE_STEGO_ENABLED` | `true` | Enable steganography detection |
 | `IMAGE_VISION_ENABLED` | `true` | Enable CLIP classification |
 | `TINEYE_API_KEY` | (none) | Optional TinEye API key |
+| `SELF_CONSISTENCY_ENABLED` | `false` | Enable multi-run claim stability analysis |
+| `SELF_CONSISTENCY_RUNS` | `3` | Number of investigation chain runs for self-consistency |
 
 For the full list of environment variables, see `README.md`.
 

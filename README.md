@@ -23,6 +23,7 @@ An OSINT-driven intelligence and analysis platform for open-source intelligence 
 - **Feed Monitoring** -- Set up keyword, username, and hashtag monitors with Celery background tasks, automatic enrichment, and civilian harm scoring on new findings
 - **GDPR & NIST CSF 2.0 Compliance** -- Tiered data retention, right to erasure (Art. 17), GDPR Art. 30 processing records, NIST CSF function mapping, system credential leak detection (subject PII is never blocked)
 - **ForgeChain Governance** -- Every LLM request passes through a 3-verifier consensus gate (rule, safety, consistency) before execution
+- **Analysis Integrity Framework** -- Nine-layer accuracy system: output grounding verification (semantic similarity check that report claims are present in source data), NATO Admiralty source reliability grading (A-F per source), RAG contamination guard (prevents hallucination feedback loops), competing hypotheses generation (ACH), claim decomposition (CONFIRMED/INFERRED/ASSUMED tagging), self-consistency checking (multi-run stability analysis), provenance trail (chain-of-custody from raw data to report), bias audit (source concentration, confirmation pattern, temporal skew, coverage gaps, single-source claims), and multilingual NER (xx_ent_wiki_sm with language-aware confidence)
 - **Elevated Authorization** -- Investigation endpoints support elevated authorization for privileged analysts handling sensitive cases
 - **Entity Relationship Graphs** -- Cytoscape.js-powered interactive graphs with click-to-drill-down entity detail popups; graph context fed directly to LLM for entity-aware analysis
 - **Professional Export** -- PDF with section-aware layout, TLP classification banner, table of contents, and executive summary highlighting. Also Markdown (with TLP metadata), STIX 2.1, CSV, JSON, and Google Drive export with map snapshots
@@ -66,7 +67,7 @@ An OSINT-driven intelligence and analysis platform for open-source intelligence 
 
 | Component | Technology |
 |-----------|-----------|
-| AI Governance | ForgeChain -- 3 verifiers, 2/3 consensus gate |
+| AI Governance | ForgeChain -- 3 verifiers, configurable consensus gate (`FORGE_CONSENSUS_THRESHOLD`, default 2/3) |
 | Authentication | Google OAuth 2.0 |
 | Encryption | Fernet (ForgeChain token minting) |
 | Rate Limiting | Flask-Limiter |
@@ -539,6 +540,13 @@ Configure either Slack, email, or both. Feed monitor findings will be sent as al
 
 The classifier uses semantic similarity against 15 civilian harm concepts (Bellingcat's strongest predictive feature) combined with multilingual conflict keyword density (English, Ukrainian, Russian, Arabic, French). Scores are computed for all posts and web mentions during investigations, batch runs, scenarios, Q&A, and feed monitor polls. The model (~400MB) downloads automatically on first use. No API key required.
 
+### Analysis Integrity Settings
+
+| Env Variable | Description | Default |
+|---|---|---|
+| `SELF_CONSISTENCY_ENABLED` | Enable multi-run self-consistency check (costs 2-3× LLM calls) | `false` |
+| `SELF_CONSISTENCY_RUNS` | Number of runs for self-consistency analysis | `3` |
+
 ---
 
 ### Data Protection & Compliance Settings
@@ -693,7 +701,25 @@ Every LLM invocation passes through ForgeChain, a 3-verifier consensus gate:
 2. **Safety Verifier** (LLM-based) -- DeepSeek v4-pro evaluates the request for safety concerns, social engineering, and ethical compliance
 3. **Consistency Verifier** (LLM-based) -- DeepSeek v4-pro checks that the request is consistent with the stated intent
 
-A 2-of-3 consensus is required to pass. Failed requests are either healed (automatically corrected) or rejected with an explanation. Investigation endpoints support `elevated_authorization` for privileged analysts handling sensitive cases (e.g., minor-adjacent investigations). All decisions are logged in the ForgeChain audit trail.
+A configurable consensus threshold (default 2-of-3, set via `FORGE_CONSENSUS_THRESHOLD`) is required to pass. Failed requests are either healed (automatically corrected) or rejected with an explanation. Investigation endpoints support `elevated_authorization` for privileged analysts handling sensitive cases (e.g., minor-adjacent investigations). All decisions are logged in the ForgeChain audit trail.
+
+### Analysis Integrity Framework
+
+The investigation pipeline includes a nine-layer accuracy framework that runs after LLM analysis:
+
+| Layer | Type | What it does |
+|-------|------|-------------|
+| **Source Reliability** | Pre-analysis | NATO Admiralty A-F grades on every OSINT finding at collection time. Metadata-aware: verified accounts, age, engagement |
+| **Claim Grounding Rules** | Prompt engineering | Investigation prompt requires CONFIRMED/INFERRED/ASSUMED tags with citations. Prohibits fabricating specific details |
+| **Output Grounding Verifier** | Post-analysis | Sentence-transformers cosine similarity check: every report claim vs. source OSINT data. Verdicts: WELL_GROUNDED / PARTIALLY_GROUNDED / POORLY_GROUNDED |
+| **Self-Consistency Check** | Post-analysis | Runs investigation chain N times (default 3), flags claims unstable across runs. Opt-in via `SELF_CONSISTENCY_ENABLED` |
+| **Competing Hypotheses (ACH)** | Post-analysis | Generates 2-3 alternative explanations for primary conclusions with evidence matrix |
+| **Bias Audit** | Post-analysis | Five deterministic checks: source concentration (>60% from one platform), confirmation pattern (zero contradiction language), temporal skew, coverage gaps, single-source entities |
+| **RAG Contamination Guard** | Knowledge base | Tags LLM-generated content vs. primary sources. Labels prior analysis chunks as `[PRIOR ANALYSIS]` at retrieval. Cosine similarity threshold filters irrelevant chunks |
+| **Provenance Trail** | Throughout | Chain-of-custody record: every pipeline step timestamped and attributed with data hashes |
+| **Multilingual NER** | Entity extraction | Tries `xx_ent_wiki_sm` (multilingual) before falling back to `en_core_web_sm`. Language-mismatch confidence penalty |
+
+All layers are non-fatal — if any fails, the investigation completes and reports what succeeded. Self-consistency is opt-in (`SELF_CONSISTENCY_ENABLED=true`) because it costs 2-3× LLM calls.
 
 ### Celery Beat Schedule
 
@@ -986,6 +1012,7 @@ Fortis-Intelligence-Hub/
 |   |-- dork_search.py            # DuckDuckGo dork search client + rate limiter
 |   |-- dork_sanitizer.py         # Query/result sanitization + anti-exfiltration
 |   |-- wayback_client.py         # Wayback Machine CDX API client (domain history, subdomains)
+|   |-- bias_audit.py             # Cognitive bias detection (5 checks)
 |   |-- civilian_harm.py          # Bellingcat-inspired civilian harm classifier
 |   |-- compliance.py            # GDPR/NIST compliance: retention, erasure, processing records
 |   |-- web_scraper.py           # News, WHOIS, DNS, DNSdumpster, reverse DNS/IP, RSS
@@ -1002,6 +1029,9 @@ Fortis-Intelligence-Hub/
 |   |-- gdrive_client.py         # Google Drive export client
 |   |-- constants.py             # Platform configs, endpoints
 |   |-- notifications.py         # Slack/email alerts
+|   |-- provenance.py            # Chain-of-custody tracking
+|   |-- self_consistency.py      # Multi-run claim stability analysis
+|   |-- source_reliability.py    # NATO Admiralty source grading
 |   |
 |   |-- forge/                   # ForgeChain governance
 |   |   |-- gate.py              # Consensus gate
@@ -1009,6 +1039,7 @@ Fortis-Intelligence-Hub/
 |   |   |-- gated_invoke.py      # Governed LLM invocation
 |   |   |-- executor.py          # Action execution
 |   |   |-- healer.py            # Failed output healing
+|   |   |-- grounding_verifier.py # Post-LLM output grounding check
 |   |   +-- ...
 |   |
 |   |-- auth/                    # Google OAuth + sessions
