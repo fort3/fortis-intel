@@ -3087,3 +3087,25 @@ small, .text-sm {
   font-size: 0.75rem;
   font-style: italic;
 }
+
+/* Image Analysis Section */
+.image-analysis-section .intel-card {
+  margin-bottom: 0.75rem;
+}
+.img-analysis-row {
+  margin: 0.35rem 0;
+  font-size: 0.85rem;
+}
+.img-analysis-row strong {
+  color: var(--purple-light, #c084fc);
+  margin-right: 0.3rem;
+}
+.img-flags {
+  margin: 0.2rem 0 0.5rem 1.2rem;
+  padding: 0;
+  font-size: 0.8rem;
+  color: var(--text-secondary);
+}
+.img-flags li {
+  margin-bottom: 0.15rem;
+}

@@ -20,6 +20,7 @@
    - [Knowledge Base](#knowledge-base)
    - [Export Options](#export-options)
    - [Civilian Harm Classifier](#civilian-harm-classifier)
+   - [Image Analysis](#image-analysis)
    - [Wayback Machine Integration](#wayback-machine-integration)
    - [Web Intelligence](#web-intelligence)
    - [ForgeChain Governance](#forgechain-governance)
@@ -869,6 +870,74 @@ Bellingcat-inspired methodology for detecting conflict-related content.
     }
   }
   ```
+
+---
+
+### Image Analysis
+
+Four-module image forensics and intelligence pipeline for uploaded images.
+
+#### Modules
+
+**1. Reverse Image Search**
+- TinEye API lookup for exact and near-duplicate matches across the web
+- Generates search URLs for Google Lens, Yandex Images, and Bing Visual Search
+- Perceptual hash cache (pHash, dHash, aHash) detects similar images across investigations
+- Useful for: Verifying image provenance, finding original sources, detecting reposts
+
+**2. Error Level Analysis (ELA)**
+- Re-compresses the image at known quality and measures pixel-level differences
+- Tampered regions show higher error levels (brighter in ELA output)
+- Clone detection via block matching identifies copy-paste manipulations
+- Metadata strip detection flags images with suspiciously absent EXIF data
+- Useful for: Detecting image manipulation, verifying photo authenticity
+
+**3. Steganography Detection**
+- LSB (Least Significant Bit) extraction reveals hidden data in pixel values
+- RS analysis measures statistical anomalies that indicate steganographic embedding
+- Sample pairs test provides a second statistical measure for confirmation
+- Useful for: Detecting covert communication, hidden messages in images
+
+**4. CLIP Vision Classification**
+- Zero-shot classification against 22 OSINT-relevant categories (military vehicles, weapons, protests, infrastructure damage, documents, surveillance equipment, etc.)
+- Landmark detection against 50 locations including conflict zones (Aleppo, Mariupol, Gaza) and major cities
+- Content safety screening (graphic violence, explicit content, disturbing imagery)
+- Useful for: Rapid image triage, location estimation, content flagging
+
+#### Step-by-Step
+
+1. **During Investigation**
+   - Upload images as media files in the investigation form
+   - Image analysis runs automatically alongside OSINT collection
+   - Results appear in the investigation report under Image Analysis
+
+2. **Standalone Analysis**
+   - Navigate to the investigation form
+   - Upload one or more images (JPG, PNG, WEBP, TIFF)
+   - Results show:
+     - **Reverse Search**: TinEye matches with domains, crawl dates, and backlinks
+     - **Forensics**: ELA visualization, clone detection regions, metadata assessment
+     - **Steganography**: LSB/RS/sample pairs scores with DETECTED/CLEAN/SUSPICIOUS classification
+     - **Classification**: Top-5 OSINT categories with confidence scores, detected landmarks, safety rating
+
+#### Configuration
+
+Each module can be independently enabled/disabled via environment variables:
+
+| Variable | Default | Description |
+|---|---|---|
+| `IMAGE_SEARCH_ENABLED` | `true` | Reverse image search |
+| `IMAGE_FORENSICS_ENABLED` | `true` | ELA and clone detection |
+| `IMAGE_STEGO_ENABLED` | `true` | Steganography detection |
+| `IMAGE_VISION_ENABLED` | `true` | CLIP classification |
+| `TINEYE_API_KEY` | (none) | Optional TinEye API key for reverse search |
+
+#### Use Cases
+
+- **Photo Verification**: Run ELA + reverse search to check if an image has been manipulated or is a repost from another context
+- **Conflict Zone Imagery**: CLIP classification + landmark detection + civilian harm scoring for rapid triage
+- **Hidden Communications**: Steganography detection on images shared through encrypted channels
+- **Evidence Authentication**: Full pipeline (all 4 modules) for court-admissible evidence assessment
 
 ---
 
@@ -2003,4 +2072,4 @@ GDPR, NIST CSF 2.0, and data retention management.
 
 *For technical documentation, see `DEPLOYMENT.md` and `API_REFERENCE.md`*  
 *For developer documentation, see `CONTRIBUTING.md`*  
-*Last updated: August 17, 2026*
+*Last updated: August 19, 2026*

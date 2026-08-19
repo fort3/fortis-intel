@@ -25,6 +25,11 @@ CHAIN_DESCRIPTIONS = {
     "dork_deep_synthesis_chain": "Deep synthesis — enriches findings with full-page scraped content",
     "report_consolidation_chain": "Report consolidation — merges initial analysis with web intelligence into unified brief",
     "chat_intent_chain": "Chat intent classifier — routes user messages to appropriate OSINT pipeline",
+    # Image analysis (no LLM chains — these are local processing modules)
+    "image_reverse_search": "Reverse image search via TinEye API and perceptual hash cache",
+    "image_forensics_ela": "Error Level Analysis and clone detection for image tampering assessment",
+    "image_steganography": "LSB, RS analysis, and sample pairs steganography detection",
+    "image_clip_vision": "CLIP zero-shot classification, landmark detection, and content safety",
 }
 
 ENDPOINT_REQUIRED_KEYS = {
@@ -40,6 +45,7 @@ ENDPOINT_REQUIRED_KEYS = {
     "/export/stix": {"session_id"},
     "/export/csv": {"session_id"},
     "/export/json": {"session_id"},
+    "/analyze-image": {"images"},
     "/export/drive": {"session_id"},
 }
 

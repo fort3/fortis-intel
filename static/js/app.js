@@ -1647,6 +1647,9 @@ function renderAnalysis(data) {
         if (data.civilian_harm) {
             html += renderCivilianHarmSection(data.civilian_harm);
         }
+        if (data.image_analysis && data.image_analysis.length > 0) {
+            html += renderImageAnalysisSection(data.image_analysis);
+        }
 
         content.innerHTML = html;
     }
@@ -3254,6 +3257,97 @@ function renderCivilianHarmSection(harm) {
             }
             h += '</div>';
         }
+        h += '</div>';
+    }
+
+    h += '</div></div>';
+    return h;
+}
+
+function renderImageAnalysisSection(images) {
+    if (!images || !images.length) return '';
+
+    var h = '<div class="result-section image-analysis-section">' +
+        '<div class="ch-header" onclick="this.parentElement.classList.toggle(\'ch-collapsed\')">' +
+        '<h4>Image Analysis</h4>' +
+        '<span class="ch-summary">' + images.length + ' image' + (images.length > 1 ? 's' : '') + ' analysed</span>' +
+        '<span class="ch-toggle">&#9660;</span></div>' +
+        '<div class="ch-body">';
+
+    for (var i = 0; i < images.length; i++) {
+        var img = images[i];
+        h += '<div class="intel-card"><h5>' + escapeHtml(img.filename || 'Image ' + (i + 1)) + '</h5>';
+
+        // Forensics
+        if (img.forensics && img.forensics.overall_verdict) {
+            var fv = img.forensics.overall_verdict;
+            var fClass = fv === 'LIKELY_MANIPULATED' ? 'ch-badge-critical' :
+                fv === 'POSSIBLY_MANIPULATED' ? 'ch-badge-high' : 'ch-badge-low';
+            h += '<div class="img-analysis-row"><strong>Forensics:</strong> ' +
+                '<span class="wi-badge ' + fClass + '">' + escapeHtml(fv.replace(/_/g, ' ')) + '</span>' +
+                ' <span class="ch-platform">' + ((img.forensics.confidence || 0) * 100).toFixed(0) + '% confidence</span></div>';
+            if (img.forensics.flags && img.forensics.flags.length) {
+                h += '<ul class="img-flags">';
+                for (var f = 0; f < img.forensics.flags.length; f++) {
+                    h += '<li>' + escapeHtml(img.forensics.flags[f]) + '</li>';
+                }
+                h += '</ul>';
+            }
+        }
+
+        // Steganography
+        if (img.steganography && img.steganography.overall_verdict) {
+            var sv = img.steganography.overall_verdict;
+            var sClass = sv === 'STEGANOGRAPHY_LIKELY' ? 'ch-badge-critical' :
+                sv === 'STEGANOGRAPHY_POSSIBLE' ? 'ch-badge-high' : 'ch-badge-low';
+            h += '<div class="img-analysis-row"><strong>Steganography:</strong> ' +
+                '<span class="wi-badge ' + sClass + '">' + escapeHtml(sv.replace(/_/g, ' ')) + '</span>' +
+                ' <span class="ch-platform">' + ((img.steganography.confidence || 0) * 100).toFixed(0) + '% confidence</span></div>';
+        }
+
+        // CLIP Vision
+        if (img.vision && img.vision.classifications && img.vision.classifications.length) {
+            h += '<div class="img-analysis-row"><strong>Classification:</strong> ';
+            var cls = img.vision.classifications;
+            for (var c = 0; c < Math.min(cls.length, 5); c++) {
+                h += '<span class="ch-concept">' + escapeHtml(cls[c].category) +
+                    ' ' + ((cls[c].confidence || 0) * 100).toFixed(0) + '%</span>';
+            }
+            h += '</div>';
+        }
+        if (img.vision && img.vision.landmarks && img.vision.landmarks.length) {
+            h += '<div class="img-analysis-row"><strong>Landmarks:</strong> ';
+            for (var l = 0; l < img.vision.landmarks.length; l++) {
+                h += '<span class="ch-concept">' + escapeHtml(img.vision.landmarks[l].name) +
+                    ' ' + ((img.vision.landmarks[l].confidence || 0) * 100).toFixed(0) + '%</span>';
+            }
+            h += '</div>';
+        }
+        if (img.vision && img.vision.safety && img.vision.safety.classification !== 'safe') {
+            h += '<div class="img-analysis-row"><strong>Safety:</strong> ' +
+                '<span class="wi-badge ch-badge-critical">' +
+                escapeHtml(img.vision.safety.classification) + '</span></div>';
+        }
+
+        // Reverse search
+        if (img.reverse_search) {
+            var rs = img.reverse_search;
+            if (rs.tineye_results && rs.tineye_results.length) {
+                h += '<div class="img-analysis-row"><strong>TinEye:</strong> ' +
+                    rs.tineye_results.length + ' match(es)</div>';
+                for (var t = 0; t < Math.min(rs.tineye_results.length, 3); t++) {
+                    var tm = rs.tineye_results[t];
+                    h += '<div class="wi-meta">' + escapeHtml(tm.domain || '') +
+                        (tm.crawl_date ? ' (' + escapeHtml(tm.crawl_date) + ')' : '') + '</div>';
+                }
+            }
+            if (rs.similar_cached && rs.similar_cached.length) {
+                h += '<div class="img-analysis-row"><strong>Similar cached:</strong> ' +
+                    rs.similar_cached.length + ' image(s) with avg distance ' +
+                    rs.similar_cached[0].distance + '</div>';
+            }
+        }
+
         h += '</div>';
     }
 

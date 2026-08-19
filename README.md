@@ -15,6 +15,7 @@ An OSINT-driven intelligence and analysis platform for open-source intelligence 
 - **Media Geo-Extraction** -- Automatic EXIF GPS extraction from social media images and video keyframe analysis (OCR + landmark geocoding via OpenCV)
 - **AI-Powered Analysis** -- DeepSeek LLM generates investigation reports, pattern-of-life analyses, network mapping, and influence assessments
 - **Web Intelligence** -- LLM autonomously searches the public web via Google dork queries (DuckDuckGo) to fill intelligence gaps and validate findings, with confidence-gated deep scraping of high-value results. Expanded passive recon cheatsheets for domain, IP, and email identifiers. Improved circuit breaker that correctly distinguishes "no results" from actual failures
+- **Image OSINT** -- Four-module image analysis pipeline: reverse image search (TinEye API + Yandex + perceptual hash deduplication), Error Level Analysis (ELA) with clone detection for forensic tampering assessment, steganography detection (LSB extraction, RS analysis, sample pairs), and CLIP zero-shot classification for scene/object/landmark recognition and safety screening. All modules run on uploaded images during investigations and via the dedicated `/analyze-image` endpoint
 - **Civilian Harm Classifier** -- Bellingcat-inspired semantic similarity scoring using sentence-transformers with multilingual conflict keyword density. Automatically flags CRITICAL/HIGH/MODERATE content across all investigation flows (investigation, batch, scenario, Q&A, feed monitor). Distribution bar, flagged item cards, and concept badges in the UI
 - **Separated LLM Pipeline** -- RAG (FAISS vectorstore) for document Q&A only; Knowledge Graph (NetworkX entity relationships) for OSINT multi-source enrichment -- no token waste from parallel injection
 - **RAG Knowledge Base** -- Upload PDF and Markdown reports, index them with FAISS vectorstore, and ask natural-language questions with automatic KB feedback from previous analyses
@@ -44,6 +45,7 @@ An OSINT-driven intelligence and analysis platform for open-source intelligence 
 | Task Queue | Celery + Redis (feed monitoring, background enrichment) |
 | NLP | spaCy (NER), langdetect (language detection) |
 | Civilian Harm | sentence-transformers (paraphrase-multilingual-MiniLM-L12-v2), Bellingcat methodology |
+| Image OSINT | Pillow (ELA/forensics), imagehash (perceptual hashing), numpy (steganography), CLIP (zero-shot classification via sentence-transformers) |
 | Domain/IP Intel | python-whois, dnspython, HackerTarget API (DNSdumpster, reverse DNS/IP), Wayback Machine CDX API |
 | Web Intelligence | duckduckgo-search (Google dork queries, no API key required) |
 | Geolocation | geopy, MaxMind GeoLite2, DBSCAN clustering |
@@ -778,6 +780,9 @@ The platform is designed to run with minimal configuration. Core features that w
 - Web intelligence dork search via DuckDuckGo (no API key needed)
 - All 8 social platforms via curl_cffi scrape fallbacks (no API keys needed)
 - Civilian harm analysis via sentence-transformers (no API key needed, model downloads automatically)
+- Image forensics (ELA, clone detection, metadata analysis) via Pillow (no API key needed)
+- Steganography detection (LSB, RS analysis, sample pairs) via Pillow + numpy (no API key needed)
+- CLIP zero-shot image classification via sentence-transformers (no API key needed, model downloads automatically)
 - Manual EXIF extraction from uploaded images
 - Manual coordinate entry for triangulation
 - Knowledge Base management
@@ -831,6 +836,30 @@ The geolocation card supports direct image uploads for GPS triangulation. Upload
 4. Generate an AI analysis of the geographic pattern
 
 ---
+
+### Image OSINT Analysis
+
+The platform includes four image analysis modules that run on uploaded images during investigations and via the `/analyze-image` endpoint:
+
+| Module | Function | Dependencies | API Key |
+|---|---|---|---|
+| **Reverse Image Search** | TinEye match lookup, Yandex/Google Lens/Bing URLs, perceptual hash dedup cache | imagehash, Pillow | `TINEYE_API_KEY` (optional) |
+| **Error Level Analysis** | JPEG re-compression forensics, clone detection via block matching, metadata strip detection | Pillow, numpy | None |
+| **Steganography Detection** | LSB extraction, RS analysis, sample pairs statistical test | Pillow, numpy | None |
+| **CLIP Vision** | Zero-shot image classification (22 OSINT categories), landmark detection (50 locations), content safety screening | sentence-transformers (CLIP model) | None |
+
+All modules degrade gracefully -- missing optional dependencies disable individual modules without affecting others. CLIP leverages the same `sentence-transformers` infrastructure used by the civilian harm classifier. The perceptual hash cache (LRU, max 5000 entries) enables cross-investigation duplicate detection.
+
+**Environment variables:**
+
+| Variable | Default | Description |
+|---|---|---|
+| `TINEYE_API_KEY` | (none) | TinEye reverse image search API key |
+| `IMAGE_SEARCH_ENABLED` | `true` | Toggle reverse image search module |
+| `IMAGE_FORENSICS_ENABLED` | `true` | Toggle ELA/forensics module |
+| `IMAGE_STEGO_ENABLED` | `true` | Toggle steganography detection module |
+| `IMAGE_VISION_ENABLED` | `true` | Toggle CLIP vision classification module |
+| `CLIP_MODEL_NAME` | `clip-ViT-B-32` | CLIP model for zero-shot classification |
 
 ### Media Geolocation Enrichment
 
@@ -941,10 +970,14 @@ Fortis-Intelligence-Hub/
 |-- app/
 |   |-- __init__.py
 |   |-- web.py                   # Flask app factory + all routes
-|   |-- chains.py                # LLM prompt templates (13 chains: 8 OSINT + 5 web intel, with civilian harm assessment)
+|   |-- chains.py                # LLM prompt templates (15 chains: 8 OSINT + 5 web intel + consolidation + intent, with civilian harm assessment)
 |   |-- llm.py                   # DeepSeek LLM factory
 |   |-- http_client.py           # Thread-safe HTTP session factory (curl_cffi / requests)
 |   |-- osint_client.py          # OSINT aggregator (unified geo pipeline, domain/IP intel)
+|   |-- image_search.py          # Reverse image search (TinEye, Yandex, perceptual hash)
+|   |-- image_forensics.py       # ELA tampering detection + clone detection
+|   |-- image_stego.py           # Steganography detection (LSB, RS analysis, sample pairs)
+|   |-- image_vision.py          # CLIP zero-shot classification + landmark detection
 |   |-- video_geo.py             # Video keyframe extraction + landmark geolocation
 |   |-- social_client.py         # Social media integrations (API + curl_cffi scrape fallbacks)
 |   |-- telegram_auth.py         # One-time Telegram session setup (python -m app.telegram_auth)

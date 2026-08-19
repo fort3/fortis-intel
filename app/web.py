@@ -95,6 +95,10 @@ from app.geo_client import GeoClient
 from app.feed_monitor import FeedMonitor
 from app.civilian_harm import get_civilian_harm_classifier, CIVILIAN_HARM_ENABLED
 from app.gdrive_client import get_gdrive_client
+from app.image_search import reverse_image_search, IMAGE_SEARCH_ENABLED
+from app.image_forensics import analyze_image_forensics, IMAGE_FORENSICS_ENABLED
+from app.image_stego import detect_steganography, IMAGE_STEGO_ENABLED
+from app.image_vision import analyze_image as clip_analyze_image, IMAGE_VISION_ENABLED
 from app.utils import create_session_id, safe_storage_path, validate_session_id
 from app.utils.pdf_reader import extract_pdf_text
 from app.utils.uploads import validate_upload_file
@@ -1598,7 +1602,10 @@ def create_app():
         # ── Phase 1: Initial Dorking (Collection) ─────────────────────
         # Runs BEFORE platform backfill so the LLM sees the user's actual
         # platform selection (empty = broad web sweep with recommendations).
-        web_search_enabled = data.get("web_search", DORK_VALIDATION_ENABLED)
+        if request.content_type and "multipart/form-data" in request.content_type:
+            web_search_enabled = request.form.get("web_search", "true").lower() in ("true", "1", "yes")
+        else:
+            web_search_enabled = data.get("web_search", DORK_VALIDATION_ENABLED)
         initial_dork_data = None
         initial_dork_context = ""
         if web_search_enabled and DORK_VALIDATION_ENABLED:
@@ -1643,6 +1650,26 @@ def create_app():
                     print(f"[GEO] Added {len(upload_geo)} geo points from uploaded media")
             except Exception as exc:
                 print(f"[WARN] Uploaded media geo extraction failed (non-fatal): {exc}")
+
+        # ── Phase 2b-ii: Image OSINT analysis ─────────────────────────
+        image_analysis_results = []
+        if media_files:
+            for file_bytes, fname in media_files:
+                try:
+                    img_result = {"filename": fname}
+                    if IMAGE_SEARCH_ENABLED:
+                        img_result["reverse_search"] = reverse_image_search(file_bytes, fname)
+                    if IMAGE_FORENSICS_ENABLED:
+                        img_result["forensics"] = analyze_image_forensics(file_bytes, fname)
+                    if IMAGE_STEGO_ENABLED:
+                        img_result["steganography"] = detect_steganography(file_bytes, fname)
+                    if IMAGE_VISION_ENABLED:
+                        img_result["vision"] = clip_analyze_image(file_bytes, fname)
+                    image_analysis_results.append(img_result)
+                except Exception as exc:
+                    print(f"[WARN] Image analysis failed for {fname} (non-fatal): {exc}")
+            if image_analysis_results:
+                print(f"[IMAGE] Analysed {len(image_analysis_results)} images")
 
         # ── Phase 2c: Wayback Machine enrichment (domains only) ───────
         if identifier_type.lower() == "domain":
@@ -1861,6 +1888,30 @@ def create_app():
                 )
             full_osint_context += "\n".join(harm_lines)
 
+        if image_analysis_results:
+            img_lines = ["\n\n--- IMAGE ANALYSIS ---"]
+            for ir in image_analysis_results:
+                img_lines.append(f"\n**{ir['filename']}**:")
+                if ir.get("forensics", {}).get("overall_verdict"):
+                    img_lines.append(f"  Forensics: {ir['forensics']['overall_verdict']} (confidence {ir['forensics'].get('confidence', 0):.0%})")
+                    for flag in ir["forensics"].get("flags", []):
+                        img_lines.append(f"    - {flag}")
+                if ir.get("steganography", {}).get("overall_verdict"):
+                    img_lines.append(f"  Steganography: {ir['steganography']['overall_verdict']} (confidence {ir['steganography'].get('confidence', 0):.0%})")
+                if ir.get("vision", {}).get("classifications"):
+                    top = ir["vision"]["classifications"][:3]
+                    cls_parts = [c["category"] + " (" + f"{c['confidence']:.0%}" + ")" for c in top]
+                    img_lines.append(f"  CLIP classification: {', '.join(cls_parts)}")
+                if ir.get("vision", {}).get("landmarks"):
+                    img_lines.append(f"  Landmarks: {', '.join(lm['name'] for lm in ir['vision']['landmarks'][:3])}")
+                if ir.get("vision", {}).get("safety", {}).get("classification") not in (None, "safe"):
+                    img_lines.append(f"  Safety: {ir['vision']['safety']['classification']} ({ir['vision']['safety'].get('score', 0):.0%})")
+                if ir.get("reverse_search", {}).get("similar_cached"):
+                    img_lines.append(f"  Similar images in cache: {len(ir['reverse_search']['similar_cached'])}")
+                if ir.get("reverse_search", {}).get("tineye_results"):
+                    img_lines.append(f"  TinEye matches: {len(ir['reverse_search']['tineye_results'])}")
+            full_osint_context += "\n".join(img_lines)
+
         chain = get_investigation_chain()
         chain_input = {
             "osint_data": full_osint_context,
@@ -1992,6 +2043,7 @@ def create_app():
             "user_email": g.user_session.email if hasattr(g, "user_session") else "unknown",
             "created_at": datetime.now(tz=timezone.utc),
             "civilian_harm": civilian_harm_data,
+            "image_analysis": image_analysis_results or None,
         }
 
         response = {
@@ -2009,6 +2061,23 @@ def create_app():
             "source_count": len(findings_dict.get("platforms_queried", [])),
             "metadata": findings_dict.get("metadata", {}),
         }
+        if image_analysis_results:
+            safe_results = []
+            for ir in image_analysis_results:
+                safe_ir = {k: v for k, v in ir.items()}
+                if "forensics" in safe_ir and "ela" in safe_ir.get("forensics", {}):
+                    safe_ir["forensics"] = dict(safe_ir["forensics"])
+                    safe_ir["forensics"].pop("ela_image_b64", None)
+                    if "ela" in safe_ir["forensics"]:
+                        safe_ir["forensics"]["ela"] = dict(safe_ir["forensics"]["ela"])
+                        safe_ir["forensics"]["ela"].pop("ela_image_b64", None)
+                if "steganography" in safe_ir and "lsb_analysis" in safe_ir.get("steganography", {}):
+                    safe_ir["steganography"] = dict(safe_ir["steganography"])
+                    if "lsb_analysis" in safe_ir["steganography"]:
+                        safe_ir["steganography"]["lsb_analysis"] = dict(safe_ir["steganography"]["lsb_analysis"])
+                        safe_ir["steganography"]["lsb_analysis"].pop("lsb_visual_b64", None)
+                safe_results.append(safe_ir)
+            response["image_analysis"] = safe_results
         if graph_cache_key:
             response["graph_cache_key"] = graph_cache_key
 
@@ -2026,6 +2095,46 @@ def create_app():
             response["civilian_harm"] = civilian_harm_data
 
         return jsonify(response)
+
+    @app.route("/analyze-image", methods=["POST"])
+    @login_required
+    @limiter.limit("30 per hour")
+    def analyze_image_endpoint():
+        """Standalone image analysis: forensics, reverse search, stego, CLIP."""
+        if not request.files:
+            return jsonify({"error": "No image files uploaded"}), 400
+
+        results = []
+        for f in request.files.getlist("images"):
+            if not f or not f.filename:
+                continue
+            file_bytes = f.read()
+            if len(file_bytes) > MAX_UPLOAD_SIZE_MB * 1024 * 1024:
+                results.append({"filename": f.filename, "error": "File too large"})
+                continue
+            try:
+                img_result = {"filename": f.filename}
+                if IMAGE_SEARCH_ENABLED:
+                    img_result["reverse_search"] = reverse_image_search(file_bytes, f.filename)
+                if IMAGE_FORENSICS_ENABLED:
+                    img_result["forensics"] = analyze_image_forensics(file_bytes, f.filename)
+                if IMAGE_STEGO_ENABLED:
+                    img_result["steganography"] = detect_steganography(file_bytes, f.filename)
+                if IMAGE_VISION_ENABLED:
+                    img_result["vision"] = clip_analyze_image(file_bytes, f.filename)
+                results.append(img_result)
+            except Exception as exc:
+                results.append({"filename": f.filename, "error": str(exc)})
+
+        return jsonify({
+            "results": results,
+            "modules": {
+                "reverse_search": IMAGE_SEARCH_ENABLED,
+                "forensics": IMAGE_FORENSICS_ENABLED,
+                "steganography": IMAGE_STEGO_ENABLED,
+                "vision": IMAGE_VISION_ENABLED,
+            },
+        })
 
     @app.route("/enrich", methods=["POST"])
     @login_required
