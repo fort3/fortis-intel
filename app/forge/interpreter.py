@@ -24,6 +24,7 @@ CHAIN_DESCRIPTIONS = {
     "dork_synthesis_chain": "Web search synthesis — integrates search results into investigation",
     "dork_deep_synthesis_chain": "Deep synthesis — enriches findings with full-page scraped content",
     "report_consolidation_chain": "Report consolidation — merges initial analysis with web intelligence into unified brief",
+    "chat_intent_chain": "Chat intent classifier — routes user messages to appropriate OSINT pipeline",
 }
 
 ENDPOINT_REQUIRED_KEYS = {

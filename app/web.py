@@ -47,6 +47,7 @@ from app.auth import (
 )
 from app.auth.config import AUTH_ENABLED, SESSION_SECRET_KEY, SESSION_TIMEOUT_MINUTES
 from app.chains import (
+    get_chat_intent_chain,
     get_rag_chain,
     get_investigation_chain,
     get_enrichment_chain,
@@ -1357,7 +1358,7 @@ def create_app():
     @login_required
     @limiter.limit("60 per hour")
     def ask():
-        """RAG question-answering over uploaded documents and knowledge base."""
+        """Smart chat — routes questions to RAG and action requests to the appropriate pipeline."""
         data = request.get_json(silent=True) or {}
         session_id = data.get("session_id")
         question = data.get("question")
@@ -1365,7 +1366,93 @@ def create_app():
         if not question:
             return jsonify({"error": "Question is required"}), 400
 
-        # Build context from vectorstore and/or KB
+        # ── Intent classification ────────────────────────────────
+        intent_data = None
+        try:
+            intent_chain = get_chat_intent_chain()
+            raw_intent = intent_chain.invoke({"question": question})
+            import json as _json
+            clean = raw_intent.strip()
+            if clean.startswith("```"):
+                clean = "\n".join(clean.split("\n")[1:])
+                clean = clean.rsplit("```", 1)[0]
+            intent_data = _json.loads(clean)
+        except Exception:
+            intent_data = {"intent": "question"}
+
+        intent = intent_data.get("intent", "question")
+
+        # ── Action intents: return routing payload for frontend ──
+        if intent == "investigate":
+            identifier = intent_data.get("identifier", "").strip()
+            if not identifier:
+                intent = "question"
+            else:
+                id_type = intent_data.get("identifier_type", "username")
+                if id_type not in IDENTIFIER_TYPES:
+                    id_type = "username"
+                return jsonify({
+                    "action": "investigate",
+                    "params": {
+                        "identifier": identifier,
+                        "identifier_type": id_type,
+                        "depth": intent_data.get("depth", "standard"),
+                        "investigation_purpose": intent_data.get("purpose", "OSINT investigation"),
+                    },
+                    "message": f"Starting investigation on **{identifier}** ({id_type})...",
+                    "session_id": session_id or "",
+                })
+
+        if intent == "scenario":
+            scenario_type = intent_data.get("scenario_type", "")
+            subject = intent_data.get("subject", "")
+            if scenario_type in SCENARIO_TYPES and (session_id or subject):
+                return jsonify({
+                    "action": "scenario",
+                    "params": {
+                        "scenario_type": scenario_type,
+                        "subject_context": subject,
+                        "session_id": session_id or "",
+                    },
+                    "message": f"Running **{scenario_type.replace('_', ' ')}** analysis"
+                               + (f" for {subject}" if subject else "") + "...",
+                    "session_id": session_id or "",
+                })
+            elif not session_id:
+                intent = "question"
+
+        if intent == "batch":
+            identifiers = intent_data.get("identifiers", [])
+            id_types = intent_data.get("identifier_types", [])
+            if identifiers and len(identifiers) > 1:
+                batch_items = []
+                for i, ident in enumerate(identifiers):
+                    it = id_types[i] if i < len(id_types) else "username"
+                    batch_items.append({"identifier": ident.strip(), "identifier_type": it})
+                return jsonify({
+                    "action": "batch",
+                    "params": {"identifiers": batch_items},
+                    "message": f"Starting batch investigation on **{len(batch_items)} subjects**...",
+                    "session_id": session_id or "",
+                })
+            intent = "question"
+
+        if intent == "monitor":
+            monitor_type = intent_data.get("monitor_type", "keyword")
+            query = intent_data.get("query", "")
+            if query:
+                return jsonify({
+                    "action": "monitor",
+                    "params": {
+                        "monitor_type": monitor_type,
+                        "query": query,
+                    },
+                    "message": f"Setting up **{monitor_type}** monitor for \"{query}\"...",
+                    "session_id": session_id or "",
+                })
+            intent = "question"
+
+        # ── Question intent: RAG pipeline ────────────────────────
         context = ""
         kb_context = ""
 
@@ -1422,7 +1509,6 @@ def create_app():
             sensitivity_level="INTERNAL",
         )
 
-        # Append Q&A to stored_reports so export can find it
         if session_id and session_id in stored_reports:
             prev = stored_reports[session_id].get("text", "")
             stored_reports[session_id]["text"] = (

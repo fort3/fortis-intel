@@ -1260,10 +1260,7 @@ async function sendChatMessage() {
     var question = input.value.trim();
     input.value = '';
 
-    // Append user message to chat
     appendChatMessage('user', question);
-
-    // Show typing indicator
     var typingId = appendChatMessage('ai', '<span class="typing-indicator">Thinking...</span>', true);
 
     try {
@@ -1281,13 +1278,22 @@ async function sendChatMessage() {
         }
 
         var data = await response.json();
-
-        // Remove typing indicator
         removeChatMessage(typingId);
 
         if (data.error) {
             appendChatMessage('ai', 'Error: ' + data.error);
-        } else if (data.answer) {
+            return;
+        }
+
+        // ── Action dispatch: route to the appropriate pipeline ──
+        if (data.action) {
+            appendChatMessage('ai', renderMarkdown(data.message), false, true);
+            await _dispatchChatAction(data.action, data.params, question);
+            return;
+        }
+
+        // ── Standard Q&A answer ──
+        if (data.answer) {
             var kbNote = '';
             if (data.kb_context) {
                 kbNote = '<div class="kb-context-indicator">Based on Knowledge Base context</div>';
@@ -1307,51 +1313,22 @@ async function sendChatMessage() {
             }
             appendChatMessage('ai', kbNote + harmNote + renderMarkdown(data.answer), false, true);
 
-            // Store in chat history
-            chatMessages.push({
-                role: 'user',
-                text: question,
-                timestamp: new Date().toISOString()
-            });
-            chatMessages.push({
-                role: 'assistant',
-                text: data.answer,
-                timestamp: new Date().toISOString(),
-                kb_context: data.kb_context || false
-            });
-
-            // Build exportable transcript from full chat history
-            var transcript = chatMessages.map(function (m) {
-                return (m.role === 'user' ? 'Q: ' : 'A: ') + m.text;
-            }).join('\n\n');
+            chatMessages.push({ role: 'user', text: question, timestamp: new Date().toISOString() });
+            chatMessages.push({ role: 'assistant', text: data.answer, timestamp: new Date().toISOString(), kb_context: data.kb_context || false });
 
             lastAnalysisData = {
-                analysis: transcript,
+                analysis: data.answer,
                 session_id: sessionId || data.session_id || '',
                 sensitivity_level: 'INTERNAL',
                 identifier: 'Q&A Session',
                 identifier_type: 'qa'
             };
 
-            // Render cumulative Q&A results in the results panel
             showResults();
             var resultsContent = document.getElementById('resultsContent');
             if (resultsContent) {
-                var resultsHtml = '<div class="result-section analysis-content">';
-                resultsHtml += '<h3>Analysis Results</h3>';
-                for (var i = 0; i < chatMessages.length; i++) {
-                    var msg = chatMessages[i];
-                    if (msg.role === 'user') {
-                        resultsHtml += '<div class="qa-question"><strong>Q:</strong> ' + escapeHtml(msg.text) + '</div>';
-                    } else {
-                        resultsHtml += '<div class="qa-answer">' + renderMarkdown(msg.text) + '</div>';
-                        if (i < chatMessages.length - 1) {
-                            resultsHtml += '<hr style="border-color: var(--border); margin: 16px 0;">';
-                        }
-                    }
-                }
-                resultsHtml += '</div>';
-                resultsContent.innerHTML = resultsHtml;
+                resultsContent.innerHTML = '<div class="result-section analysis-content">' +
+                    renderMarkdown(data.answer) + '</div>';
             }
         } else {
             appendChatMessage('ai', 'No response returned.');
@@ -1359,6 +1336,112 @@ async function sendChatMessage() {
     } catch (error) {
         removeChatMessage(typingId);
         appendChatMessage('ai', 'Error: ' + error.message);
+    }
+}
+
+/**
+ * Dispatch a chat action to the appropriate endpoint and render structured results.
+ */
+async function _dispatchChatAction(action, params, originalQuestion) {
+    var progressId = appendChatMessage('ai', '<span class="typing-indicator">Running ' + action + '...</span>', true);
+
+    try {
+        var response, result;
+
+        if (action === 'investigate') {
+            response = await fetchApi('/investigate', {
+                method: 'POST',
+                body: JSON.stringify({
+                    identifier: params.identifier,
+                    identifier_type: params.identifier_type,
+                    depth: params.depth || 'standard',
+                    investigation_purpose: params.investigation_purpose || 'OSINT investigation',
+                    platforms: Object.keys(window.SOCIAL_PLATFORMS || {}).length ?
+                        Object.keys(window.SOCIAL_PLATFORMS) :
+                        ['twitter', 'reddit', 'telegram', 'instagram', 'youtube', 'mastodon', 'facebook', 'tiktok']
+                })
+            });
+
+        } else if (action === 'scenario') {
+            response = await fetchApi('/scenario', {
+                method: 'POST',
+                body: JSON.stringify({
+                    scenario_type: params.scenario_type,
+                    subject_context: params.subject_context || '',
+                    session_id: params.session_id || sessionId || '',
+                    osint_data: params.osint_data || ''
+                })
+            });
+
+        } else if (action === 'batch') {
+            response = await fetchApi('/batch-investigate', {
+                method: 'POST',
+                body: JSON.stringify({
+                    identifiers: params.identifiers,
+                    platforms: ['twitter', 'reddit', 'telegram', 'instagram']
+                })
+            });
+
+        } else if (action === 'monitor') {
+            response = await fetchApi('/monitor/create', {
+                method: 'POST',
+                body: JSON.stringify({
+                    monitor_type: params.monitor_type || 'keyword',
+                    query: params.query,
+                    interval_minutes: 15
+                })
+            });
+
+        } else {
+            removeChatMessage(progressId);
+            appendChatMessage('ai', 'Unknown action: ' + action);
+            return;
+        }
+
+        removeChatMessage(progressId);
+
+        if (!response.ok) {
+            var errData = await response.json();
+            appendChatMessage('ai', 'Error: ' + (errData.error || errData.reason || 'Request failed'));
+            return;
+        }
+
+        result = await response.json();
+
+        if (result.error) {
+            appendChatMessage('ai', 'Error: ' + result.error);
+            return;
+        }
+
+        // Update session ID from result
+        if (result.session_id) {
+            sessionId = result.session_id;
+        }
+
+        // Render structured results through the standard analysis pipeline
+        if (result.analysis || result.consolidated_analysis) {
+            var analysisData = result;
+            if (result.consolidated_analysis && !result.analysis) {
+                analysisData.analysis = result.consolidated_analysis;
+            }
+            appendChatMessage('ai', '<div class="chat-action-complete">Analysis complete — results shown in the report panel.</div>', false, true);
+            renderAnalysis(analysisData);
+        } else if (action === 'monitor' && result.monitor_id) {
+            appendChatMessage('ai', renderMarkdown(
+                '**Monitor created successfully.**\n\n' +
+                '- Monitor ID: `' + result.monitor_id + '`\n' +
+                '- Type: ' + (params.monitor_type || 'keyword') + '\n' +
+                '- Query: ' + params.query + '\n' +
+                '- Interval: every 15 minutes'
+            ), false, true);
+        } else {
+            appendChatMessage('ai', renderMarkdown('Action completed. Response:\n\n```json\n' +
+                JSON.stringify(result, null, 2).substring(0, 500) + '\n```'), false, true);
+        }
+
+    } catch (error) {
+        removeChatMessage(progressId);
+        appendChatMessage('ai', 'Error running ' + action + ': ' + error.message);
     }
 }
 

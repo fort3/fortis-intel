@@ -1984,6 +1984,14 @@ small, .text-sm {
   30% { transform: translateY(-6px); opacity: 1; }
 }
 
+.chat-action-complete {
+  padding: 8px 12px;
+  background: var(--purple-subtle);
+  border-left: 3px solid var(--purple);
+  font-size: 0.85rem;
+  color: var(--text-secondary);
+}
+
 /* ==========================================================================
    24. LOGIN MODAL
    ========================================================================== */

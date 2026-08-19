@@ -14,6 +14,40 @@ from app.llm import get_analyst_llm, get_batch_llm
 # System prompts
 # ---------------------------------------------------------------------------
 
+CHAT_INTENT_SYSTEM_PROMPT = """You are an intent classifier for an OSINT intelligence platform. Analyze the user's message and determine if they are asking a QUESTION about existing data or requesting an ACTION (investigation, analysis, etc.).
+
+Respond with EXACTLY one JSON block, nothing else:
+
+If the user wants to ASK a question about existing intelligence or documents:
+{{"intent": "question"}}
+
+If the user wants to INVESTIGATE a subject (person, username, email, domain, IP, phone):
+{{"intent": "investigate", "identifier": "<the subject>", "identifier_type": "<username|email|phone|domain|name|ip|keyword>", "depth": "<quick|standard|deep>", "purpose": "<brief description of why>"}}
+
+If the user wants to run a SCENARIO analysis (pattern of life, network mapping, location prediction, influence analysis):
+{{"intent": "scenario", "scenario_type": "<pattern_of_life|network_mapping|location_prediction|influence_analysis>", "subject": "<the subject>"}}
+
+If the user wants to do a BATCH investigation on multiple subjects:
+{{"intent": "batch", "identifiers": ["<subject1>", "<subject2>", ...], "identifier_types": ["<type1>", "<type2>", ...]}}
+
+If the user wants to MONITOR a keyword, username, or hashtag:
+{{"intent": "monitor", "monitor_type": "<keyword|username|hashtag>", "query": "<what to monitor>"}}
+
+Rules:
+- "investigate @johndoe" or "look into johndoe on twitter" or "find info on johndoe" → investigate
+- "what did we find about..." or "summarize the report on..." → question
+- "analyze the pattern of life for..." → scenario (pattern_of_life)
+- "map the network of..." → scenario (network_mapping)
+- "investigate these: john, jane, bob" → batch
+- "monitor mentions of..." → monitor
+- Auto-detect identifier_type: emails → email, IPs → ip, domains → domain, @handles → username, phone numbers → phone, multi-word names → name, else → username
+- Default depth to "standard" unless user says "quick" or "deep"/"thorough"/"comprehensive"
+- If ambiguous, default to "question"
+
+USER MESSAGE: {question}
+
+JSON:"""
+
 RAG_SYSTEM_PROMPT = """You are an OSINT analyst answering questions about intelligence documents.
 
 Use the provided document context and knowledge base context to answer the user's question accurately and completely.
@@ -569,6 +603,10 @@ SCENARIO BRIEF:"""
 # Prompt templates
 # ---------------------------------------------------------------------------
 
+chat_intent_prompt = ChatPromptTemplate.from_messages([
+    ("system", CHAT_INTENT_SYSTEM_PROMPT),
+])
+
 rag_prompt = ChatPromptTemplate.from_messages([
     ("system", RAG_SYSTEM_PROMPT),
 ])
@@ -643,6 +681,20 @@ _dork_validation_chain = None
 _dork_synthesis_chain = None
 _dork_deep_synthesis_chain = None
 _report_consolidation_chain = None
+_chat_intent_chain = None
+
+
+def get_chat_intent_chain():
+    """Lightweight intent classifier for chat messages."""
+    global _chat_intent_chain
+    if _chat_intent_chain is None:
+        _chat_intent_chain = (
+            RunnablePassthrough()
+            | chat_intent_prompt
+            | get_batch_llm()
+            | StrOutputParser()
+        )
+    return _chat_intent_chain
 
 
 def get_rag_chain():
@@ -842,4 +894,5 @@ __all__ = [
     "get_dork_synthesis_chain",
     "get_dork_deep_synthesis_chain",
     "get_report_consolidation_chain",
+    "get_chat_intent_chain",
 ]
