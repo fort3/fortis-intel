@@ -62,6 +62,7 @@ from app.chains import (
     get_dork_deep_synthesis_chain,
     get_report_consolidation_chain,
     get_competing_hypotheses_chain,
+    get_report_refinement_chain,
 )
 from app.bias_audit import run_bias_audit
 from app.self_consistency import (
@@ -2158,6 +2159,69 @@ def create_app():
                 f"{len(bias_audit_result.get('warnings', []))} warnings",
             )
 
+        # ── Phase 10: Report Refinement ────────
+        # Use integrity results to produce a clean, high-confidence report.
+        # All framework details stay in the background.
+        try:
+            grounding_summary = "No grounding data available."
+            if grounding_result:
+                ungrounded = grounding_result.get("ungrounded_details", [])
+                ungrounded_list = "; ".join(
+                    c.get("claim", "")[:120] for c in ungrounded[:10]
+                ) if ungrounded else "none"
+                grounding_summary = (
+                    f"Verdict: {grounding_result['verdict']}. "
+                    f"{grounding_result.get('grounded_ratio', 0):.0%} of claims grounded. "
+                    f"Ungrounded claims: {ungrounded_list}"
+                )
+
+            bias_summary = "No bias audit data available."
+            if bias_audit_result:
+                warnings = bias_audit_result.get("warnings", [])
+                bias_summary = (
+                    f"Overall risk: {bias_audit_result['overall_risk']}. "
+                    f"Warnings: {'; '.join(warnings[:5]) if warnings else 'none'}"
+                )
+
+            hypotheses_summary = competing_hypotheses or "No competing hypotheses generated."
+
+            consistency_summary = "No consistency data available."
+            if self_consistency_result:
+                unstable = self_consistency_result.get("unstable_details", [])
+                unstable_list = "; ".join(
+                    c.get("claim", "")[:120] for c in unstable[:10]
+                ) if unstable else "none"
+                consistency_summary = (
+                    f"Verdict: {self_consistency_result['verdict']}. "
+                    f"{self_consistency_result.get('consistency_ratio', 0):.0%} stable. "
+                    f"Unstable claims: {unstable_list}"
+                )
+
+            refinement_chain = get_report_refinement_chain()
+            refinement_input = {
+                "raw_report": analysis,
+                "grounding_summary": grounding_summary,
+                "bias_summary": bias_summary,
+                "hypotheses_summary": hypotheses_summary[:6000],
+                "consistency_summary": consistency_summary,
+            }
+            refinement_raw = gated_invoke(
+                refinement_chain,
+                refinement_input,
+                chain_name="report_refinement_chain",
+                endpoint="/investigate",
+                mode="osint",
+                session_id=session_id,
+                user_hash=user_hash,
+                trusted_keys={"raw_report", "grounding_summary", "bias_summary",
+                              "hypotheses_summary", "consistency_summary"},
+            )
+            analysis = refinement_raw.content if hasattr(refinement_raw, "content") else str(refinement_raw)
+            provenance.record_analysis("report_refinement_chain", analysis)
+            print(f"[REFINEMENT] Final report produced ({len(analysis)} chars)")
+        except Exception as exc:
+            print(f"[WARN] Report refinement failed (non-fatal), using raw report: {exc}")
+
         # Save to knowledge base
         report_id = _save_to_kb(
             source_route="/investigate",
@@ -2234,15 +2298,6 @@ def create_app():
             response["web_intelligence"] = wi_data
         if civilian_harm_data:
             response["civilian_harm"] = civilian_harm_data
-        if grounding_result:
-            response["grounding_verification"] = grounding_result
-        if competing_hypotheses:
-            response["competing_hypotheses"] = competing_hypotheses
-        if bias_audit_result:
-            response["bias_audit"] = bias_audit_result
-        if self_consistency_result:
-            response["self_consistency"] = self_consistency_result
-        response["provenance"] = provenance.to_dict()
 
         return jsonify(response)
 
@@ -2435,8 +2490,6 @@ def create_app():
             "entity_count": len(entities_data),
             "metadata": findings_dict.get("metadata", {}),
         }
-        if enrich_grounding:
-            enrich_resp["grounding_verification"] = enrich_grounding
         return jsonify(enrich_resp)
 
     @app.route("/triangulate", methods=["POST"])
@@ -2984,8 +3037,6 @@ def create_app():
         scenario_harm = _score_text_for_harm(osint_data)
         if scenario_harm:
             scenario_resp["civilian_harm"] = scenario_harm
-        if scenario_grounding:
-            scenario_resp["grounding_verification"] = scenario_grounding
         return jsonify(scenario_resp)
 
     # ================================================================

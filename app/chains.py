@@ -967,6 +967,62 @@ def get_competing_hypotheses_chain():
     return _competing_hypotheses_chain
 
 
+REPORT_REFINEMENT_SYSTEM_PROMPT = """You are a senior intelligence analyst producing the final, analyst-ready version of an OSINT investigation brief.
+
+You are given:
+1. A raw investigation report with source tags and confidence levels
+2. Quality-control results from automated verification (grounding check, bias audit, competing hypotheses analysis, consistency check)
+
+Your task is to produce a CLEAN, HIGH-CONFIDENCE final brief. The analyst reading this wants conclusions, not methodology.
+
+RULES:
+- REMOVE or soften any claim flagged as ungrounded (not supported by source data). If a claim has no source backing, drop it entirely.
+- REMOVE claims flagged as unstable across consistency runs — these are unreliable.
+- Where the competing hypotheses analysis found a stronger alternative to the original conclusion, ADOPT the stronger hypothesis and note the original as less likely.
+- Where bias audit flagged issues (e.g. source concentration, single-source claims), add appropriate caveats inline rather than presenting them as a separate audit.
+- Strip all [CONFIRMED]/[INFERRED]/[ASSUMED] tags — incorporate their meaning naturally. Confirmed facts state directly; inferences use "analysis indicates" or "evidence suggests"; assumptions use "it is possible" or "unverified".
+- Strip NATO Admiralty grade tags like [A], [B], [C] from inline citations — reflect reliability in your word choice instead (e.g. "records confirm" for A-grade, "social media posts suggest" for C-grade).
+- Do NOT mention the verification process, grounding scores, bias audit, or any quality-control methodology. The reader should see a polished report, not a behind-the-scenes view.
+- Maintain the standard brief structure: Executive Summary, Key Findings, Subject Profile, Geospatial Intelligence, Threat & Risk Indicators, Timeline, Intelligence Gaps & Recommendations. Skip sections with no relevant data.
+- Keep inline source attribution (e.g. "(Twitter, HIGH confidence)") but drop framework-specific markup.
+- Be concise. If removing low-confidence claims makes a section too thin, merge it into another section or drop it.
+
+RAW INVESTIGATION REPORT:
+{raw_report}
+
+GROUNDING VERIFICATION:
+{grounding_summary}
+
+BIAS AUDIT:
+{bias_summary}
+
+COMPETING HYPOTHESES:
+{hypotheses_summary}
+
+CONSISTENCY CHECK:
+{consistency_summary}
+
+Produce the final intelligence brief now. No preamble, no methodology notes — just the report."""
+
+_report_refinement_chain = None
+
+report_refinement_prompt = ChatPromptTemplate.from_messages([
+    ("system", REPORT_REFINEMENT_SYSTEM_PROMPT),
+])
+
+
+def get_report_refinement_chain():
+    global _report_refinement_chain
+    if _report_refinement_chain is None:
+        _report_refinement_chain = (
+            RunnablePassthrough()
+            | report_refinement_prompt
+            | get_analyst_llm()
+            | StrOutputParser()
+        )
+    return _report_refinement_chain
+
+
 __all__ = [
     "get_rag_chain",
     "get_investigation_chain",
@@ -983,5 +1039,6 @@ __all__ = [
     "get_dork_deep_synthesis_chain",
     "get_report_consolidation_chain",
     "get_competing_hypotheses_chain",
+    "get_report_refinement_chain",
     "get_chat_intent_chain",
 ]

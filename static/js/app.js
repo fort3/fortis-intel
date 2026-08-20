@@ -1005,9 +1005,6 @@ async function runBatchInvestigation() {
             if (data.civilian_harm) {
                 html += renderCivilianHarmSection(data.civilian_harm);
             }
-            if (data.grounding_verification) {
-                html += renderGroundingSection(data.grounding_verification);
-            }
 
             content.innerHTML = html;
         }
@@ -1653,21 +1650,6 @@ function renderAnalysis(data) {
         }
         if (data.civilian_harm) {
             html += renderCivilianHarmSection(data.civilian_harm);
-        }
-        if (data.grounding_verification) {
-            html += renderGroundingSection(data.grounding_verification);
-        }
-        if (data.bias_audit) {
-            html += renderBiasAuditSection(data.bias_audit);
-        }
-        if (data.self_consistency) {
-            html += renderSelfConsistencySection(data.self_consistency);
-        }
-        if (data.competing_hypotheses) {
-            html += renderCompetingHypothesesSection(data.competing_hypotheses);
-        }
-        if (data.provenance) {
-            html += renderProvenanceSection(data.provenance);
         }
         if (data.image_analysis && data.image_analysis.length > 0) {
             html += renderImageAnalysisSection(data.image_analysis);
