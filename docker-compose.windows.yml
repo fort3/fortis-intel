@@ -1,0 +1,18 @@
+version: "3.8"
+
+# Windows override — use with:
+#   docker compose -f docker-compose.yml -f docker-compose.windows.yml up --build
+#
+# Changes:
+# - Celery worker uses --pool=solo (Windows has no fork() / prefork support)
+# - Flask app uses waitress instead of gunicorn (gunicorn doesn't support Windows)
+
+services:
+  app:
+    command: ["python", "-m", "waitress", "--host=0.0.0.0", "--port=5000", "--call", "app.web:create_app"]
+
+  celery-worker:
+    command: celery -A app.celery_app:celery_app worker -l info -Q fortis_monitor --pool=solo
+
+  celery-beat:
+    command: celery -A app.celery_app:celery_app beat -l info

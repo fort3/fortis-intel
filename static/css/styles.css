@@ -1867,6 +1867,192 @@ small, .text-sm {
 }
 
 /* ==========================================================================
+   22b. TASK LOADING — Full-panel animated loading state
+   ========================================================================== */
+
+.task-loading {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  min-height: 340px;
+  padding: 48px 24px;
+  gap: 28px;
+}
+
+/* Radar sweep animation */
+.task-loading-radar {
+  position: relative;
+  width: 120px;
+  height: 120px;
+}
+
+.task-loading-radar .radar-ring {
+  position: absolute;
+  border: 1px solid var(--purple-dark);
+  border-radius: 50%;
+  opacity: 0.4;
+}
+
+.task-loading-radar .radar-ring:nth-child(1) {
+  inset: 0;
+}
+
+.task-loading-radar .radar-ring:nth-child(2) {
+  inset: 20px;
+}
+
+.task-loading-radar .radar-ring:nth-child(3) {
+  inset: 40px;
+}
+
+/* Centre dot */
+.task-loading-radar .radar-dot {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  background: var(--purple-neon);
+  border-radius: 50%;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  box-shadow: 0 0 12px var(--purple-neon), 0 0 24px rgba(217, 70, 239, 0.3);
+}
+
+/* Sweep line */
+.task-loading-radar .radar-sweep {
+  position: absolute;
+  width: 50%;
+  height: 2px;
+  top: 50%;
+  left: 50%;
+  transform-origin: left center;
+  background: linear-gradient(90deg, var(--purple-neon), transparent);
+  animation: radar-rotate 2.4s linear infinite;
+}
+
+/* Sweep glow cone */
+.task-loading-radar .radar-sweep::after {
+  content: '';
+  position: absolute;
+  width: 100%;
+  height: 60px;
+  top: -30px;
+  left: 0;
+  background: conic-gradient(
+    from -15deg,
+    transparent 0deg,
+    rgba(217, 70, 239, 0.08) 15deg,
+    rgba(217, 70, 239, 0.02) 30deg,
+    transparent 30deg
+  );
+  transform-origin: left center;
+}
+
+@keyframes radar-rotate {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+
+/* Pulsing ring outward */
+.task-loading-radar .radar-ping {
+  position: absolute;
+  inset: 0;
+  border: 2px solid var(--purple-neon);
+  border-radius: 50%;
+  opacity: 0;
+  animation: radar-ping 2.4s ease-out infinite;
+}
+
+@keyframes radar-ping {
+  0%  { transform: scale(0.3); opacity: 0.7; }
+  80% { transform: scale(1.1); opacity: 0; }
+  100%{ transform: scale(1.1); opacity: 0; }
+}
+
+/* Data stream — small dots drifting upward */
+.task-loading-stream {
+  display: flex;
+  gap: 6px;
+  align-items: flex-end;
+  height: 20px;
+}
+
+.task-loading-stream .stream-bar {
+  width: 3px;
+  background: var(--purple-primary);
+  border-radius: 2px;
+  animation: stream-pulse 1.2s ease-in-out infinite;
+}
+
+.task-loading-stream .stream-bar:nth-child(1) { height: 8px; animation-delay: 0s; }
+.task-loading-stream .stream-bar:nth-child(2) { height: 14px; animation-delay: 0.15s; }
+.task-loading-stream .stream-bar:nth-child(3) { height: 6px; animation-delay: 0.3s; }
+.task-loading-stream .stream-bar:nth-child(4) { height: 18px; animation-delay: 0.45s; }
+.task-loading-stream .stream-bar:nth-child(5) { height: 10px; animation-delay: 0.6s; }
+.task-loading-stream .stream-bar:nth-child(6) { height: 16px; animation-delay: 0.75s; }
+.task-loading-stream .stream-bar:nth-child(7) { height: 7px; animation-delay: 0.9s; }
+
+@keyframes stream-pulse {
+  0%, 100% { opacity: 0.3; transform: scaleY(0.6); }
+  50%      { opacity: 1;   transform: scaleY(1.4); }
+}
+
+/* Text labels */
+.task-loading-title {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 2px;
+  color: var(--purple-bright);
+}
+
+.task-loading-detail {
+  font-size: 12px;
+  color: var(--text-muted);
+  text-align: center;
+  max-width: 360px;
+}
+
+.task-loading-detail::after {
+  content: '';
+  animation: loading-dots 1.5s steps(3, end) infinite;
+}
+
+/* Phase steps row */
+.task-loading-phases {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: center;
+  margin-top: 4px;
+}
+
+.task-loading-phases .phase-step {
+  font-family: 'JetBrains Mono', monospace;
+  font-size: 10px;
+  padding: 3px 10px;
+  border-radius: 3px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 1px;
+}
+
+.task-loading-phases .phase-step.active {
+  border-color: var(--purple-neon);
+  color: var(--purple-bright);
+  box-shadow: 0 0 8px rgba(217, 70, 239, 0.15);
+}
+
+.task-loading-phases .phase-step.done {
+  border-color: var(--success);
+  color: var(--success);
+  opacity: 0.7;
+}
+
+/* ==========================================================================
    23. CHAT INTERFACE (Q&A / RAG)
    ========================================================================== */
 .chat-container {

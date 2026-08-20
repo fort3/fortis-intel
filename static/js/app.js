@@ -58,6 +58,59 @@ function hideLoading() {
 }
 
 /**
+ * Show a full-panel loading animation in the results area.
+ * @param {string} title - Task name, e.g. "Investigation"
+ * @param {string} detail - Context line, e.g. "Scanning 5 platforms"
+ * @param {string[]} [phases] - Phase step labels to show beneath
+ */
+function showTaskLoading(title, detail, phases) {
+    showLoading();
+    showResults();
+    var content = document.getElementById('resultsContent');
+    if (!content) return;
+
+    var html = '<div class="task-loading">';
+
+    // Radar animation
+    html += '<div class="task-loading-radar">';
+    html += '<div class="radar-ring"></div>';
+    html += '<div class="radar-ring"></div>';
+    html += '<div class="radar-ring"></div>';
+    html += '<div class="radar-dot"></div>';
+    html += '<div class="radar-sweep"></div>';
+    html += '<div class="radar-ping"></div>';
+    html += '</div>';
+
+    // Data stream bars
+    html += '<div class="task-loading-stream">';
+    for (var i = 0; i < 7; i++) {
+        html += '<div class="stream-bar"></div>';
+    }
+    html += '</div>';
+
+    // Title
+    html += '<div class="task-loading-title">' + escapeHtml(title) + '</div>';
+
+    // Detail
+    if (detail) {
+        html += '<div class="task-loading-detail">' + escapeHtml(detail) + '</div>';
+    }
+
+    // Phase steps
+    if (phases && phases.length > 0) {
+        html += '<div class="task-loading-phases" id="taskLoadingPhases">';
+        phases.forEach(function(p, idx) {
+            html += '<span class="phase-step' + (idx === 0 ? ' active' : '') + '" data-phase="' + idx + '">' + escapeHtml(p) + '</span>';
+        });
+        html += '</div>';
+    }
+
+    html += '</div>';
+    content.innerHTML = html;
+    content.style.display = '';
+}
+
+/**
  * Display a toast notification.
  * @param {string} message
  * @param {'success'|'error'|'info'|'warning'} type
@@ -508,8 +561,11 @@ async function uploadReport() {
         }
     }
 
-    showLoading();
-    showToast('Uploading and processing report...', 'info');
+    showTaskLoading(
+        'Report Ingestion',
+        'Uploading and processing ' + input.files.length + ' file(s)',
+        ['Upload', 'Parse', 'Index']
+    );
 
     try {
         const formData = new FormData();
@@ -598,7 +654,11 @@ async function enrichWithOsint() {
         return;
     }
 
-    showLoading();
+    showTaskLoading(
+        'OSINT Enrichment',
+        'Enriching report with open-source intelligence',
+        ['Entity Extraction', 'OSINT Collection', 'Analysis']
+    );
     try {
         const response = await fetchApi('/enrich', {
             method: 'POST',
@@ -651,16 +711,14 @@ async function runInvestigation() {
         idType = autoDetectIdentifierType(subject.value.trim());
     }
 
-    showLoading();
-    showResults();
-    var content = document.getElementById('resultsContent');
-    if (content) {
-        var scopeMsg = platforms.length > 0
-            ? 'across ' + platforms.length + ' platforms'
-            : 'via web dorking (all platforms)';
-        content.innerHTML = '<div class="result-section"><p>Investigating <strong>' +
-            escapeHtml(subject.value.trim()) + '</strong> ' + scopeMsg + '...</p></div>';
-    }
+    var scopeMsg = platforms.length > 0
+        ? 'Scanning ' + platforms.length + ' platforms'
+        : 'Web dorking — all platforms';
+    showTaskLoading(
+        'Investigation',
+        scopeMsg + ' for ' + subject.value.trim(),
+        ['OSINT Collection', 'Analysis', 'Web Intel', 'Refinement']
+    );
 
     try {
         const webSearchCb = document.getElementById('investWebSearch');
@@ -786,7 +844,11 @@ async function runGeolocation() {
             return;
         }
 
-        showLoading();
+        showTaskLoading(
+            'Geolocation',
+            'Extracting coordinates from ' + imageInput.files.length + ' image(s)',
+            ['EXIF Extraction', 'Triangulation', 'Mapping']
+        );
 
         var formData = new FormData();
         for (var i = 0; i < imageInput.files.length; i++) {
@@ -858,7 +920,11 @@ async function runGeolocation() {
         return;
     }
 
-    showLoading();
+    showTaskLoading(
+        'Geolocation',
+        'Triangulating ' + dataPoints.length + ' data point(s)',
+        ['Geocoding', 'Triangulation', 'Clustering']
+    );
 
     try {
         var response = await fetchApi('/triangulate', {
@@ -906,14 +972,11 @@ async function runBatchInvestigation() {
         platforms.push(cb.value);
     });
 
-    showLoading();
-    showResults();
-
-    var content = document.getElementById('resultsContent');
-    if (content) {
-        content.innerHTML = '<div class="result-section"><p>Processing batch investigation...</p></div>';
-        content.style.display = '';
-    }
+    showTaskLoading(
+        'Batch Investigation',
+        'Processing multiple identifiers',
+        ['Collection', 'Per-entity Analysis', 'Cross-entity Synthesis']
+    );
 
     try {
         var response;
@@ -1081,7 +1144,11 @@ async function createMonitor() {
         return;
     }
 
-    showLoading();
+    showTaskLoading(
+        'Feed Monitor',
+        'Setting up monitor for "' + queryInput.value.trim() + '"',
+        ['Validate', 'Create Task', 'Schedule']
+    );
 
     try {
         var response = await fetchApi('/monitor/create', {
@@ -1107,13 +1174,26 @@ async function createMonitor() {
         showResults();
         var content = document.getElementById('resultsContent');
         if (content) {
+            var pollWarning = '';
+            if (data.poll_scheduled === false) {
+                pollWarning = '<div class="result-section" style="border-left: 3px solid var(--warning); padding-left: 12px; margin-top: 12px;">' +
+                    '<p style="color: var(--warning);"><strong>Celery worker not reachable</strong></p>' +
+                    '<p>The monitor was created but background polling could not be scheduled. ' +
+                    'Ensure Redis is running and Celery worker is started:</p>' +
+                    '<pre style="font-size: 12px; margin-top: 8px; color: var(--text-secondary);">' +
+                    'celery -A app.celery_app:celery_app worker -l info -Q fortis_monitor --pool=solo</pre>' +
+                    '</div>';
+            }
             content.innerHTML = '<div class="result-section">' +
                 '<h3>Monitor Created</h3>' +
                 '<p>Monitor ID: <code>' + escapeHtml(data.monitor_id || '') + '</code></p>' +
                 '<p>Watching for: <strong>' + escapeHtml(queryInput.value.trim()) + '</strong></p>' +
                 '<p>Platforms: ' + escapeHtml(platforms.join(', ')) + '</p>' +
                 '<p>Interval: every ' + escapeHtml(intervalSelect ? intervalSelect.value : '15') + ' minutes</p>' +
-                '</div>';
+                (data.poll_scheduled !== false
+                    ? '<p style="color: var(--success);">First poll scheduled — results will appear in Watch panel.</p>'
+                    : '') +
+                '</div>' + pollWarning;
             content.style.display = '';
         }
 
@@ -1169,22 +1249,17 @@ async function runScenario() {
         return;
     }
 
-    showLoading();
-    showResults();
-
-    var content = document.getElementById('resultsContent');
-    if (content) {
-        var typeLabel = {
-            pattern_of_life: 'Pattern of Life',
-            network_mapping: 'Network Mapping',
-            location_prediction: 'Location Prediction',
-            influence_analysis: 'Influence Analysis'
-        };
-        content.innerHTML = '<div class="result-section"><p>Generating <strong>' +
-            escapeHtml(typeLabel[scenarioType] || scenarioType) +
-            '</strong> scenario analysis...</p></div>';
-        content.style.display = '';
-    }
+    var typeLabel = {
+        pattern_of_life: 'Pattern of Life',
+        network_mapping: 'Network Mapping',
+        location_prediction: 'Location Prediction',
+        influence_analysis: 'Influence Analysis'
+    };
+    showTaskLoading(
+        'Scenario Analysis',
+        'Generating ' + (typeLabel[scenarioType] || scenarioType),
+        ['Data Preparation', 'LLM Analysis', 'Refinement']
+    );
 
     try {
         var payload = {
@@ -2860,13 +2935,16 @@ async function runImageAnalysis() {
         return;
     }
 
-    showLoading();
-    showResults();
-    var content = document.getElementById('resultsContent');
-    if (content) {
-        content.innerHTML = '<div class="result-section"><p>Analysing ' +
-            fileInput.files.length + ' image(s)...</p></div>';
-    }
+    var modules = [];
+    if (document.getElementById('imgModForensics') && document.getElementById('imgModForensics').checked) modules.push('Forensics');
+    if (document.getElementById('imgModStego') && document.getElementById('imgModStego').checked) modules.push('Stego');
+    if (document.getElementById('imgModSearch') && document.getElementById('imgModSearch').checked) modules.push('Reverse Search');
+    if (document.getElementById('imgModVision') && document.getElementById('imgModVision').checked) modules.push('CLIP Vision');
+    showTaskLoading(
+        'Image Analysis',
+        fileInput.files.length + ' image(s) — ' + (modules.length > 0 ? modules.join(', ') : 'all modules'),
+        modules.length > 0 ? modules : ['Forensics', 'Stego', 'Search', 'Vision']
+    );
 
     try {
         var fd = new FormData();
