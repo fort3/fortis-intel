@@ -1340,7 +1340,7 @@ async function sendChatMessage() {
     input.value = '';
 
     appendChatMessage('user', question);
-    var typingId = appendChatMessage('ai', '<span class="typing-indicator">Thinking...</span>', true);
+    var typingId = appendChatMessage('ai', _typingIndicatorHtml('Analysing'), true);
 
     try {
         var response = await fetchApi('/ask', {
@@ -1422,7 +1422,25 @@ async function sendChatMessage() {
  * Dispatch a chat action to the appropriate endpoint and render structured results.
  */
 async function _dispatchChatAction(action, params, originalQuestion) {
-    var progressId = appendChatMessage('ai', '<span class="typing-indicator">Running ' + action + '...</span>', true);
+    var actionLabels = {
+        investigate: 'Investigation',
+        scenario: 'Scenario Analysis',
+        batch: 'Batch Investigation',
+        monitor: 'Feed Monitor'
+    };
+    var label = actionLabels[action] || action;
+    var progressId = appendChatMessage('ai', _typingIndicatorHtml(label), true);
+
+    // Show loading animation in results panel for routed actions
+    if (action === 'investigate') {
+        showTaskLoading('Investigation', 'Routed from Q&A — investigating ' + (params.identifier || ''), ['OSINT Collection', 'Analysis', 'Web Intel', 'Refinement']);
+    } else if (action === 'scenario') {
+        showTaskLoading('Scenario Analysis', 'Routed from Q&A', ['Data Preparation', 'LLM Analysis', 'Refinement']);
+    } else if (action === 'batch') {
+        showTaskLoading('Batch Investigation', 'Routed from Q&A', ['Collection', 'Per-entity Analysis', 'Synthesis']);
+    } else if (action === 'monitor') {
+        showTaskLoading('Feed Monitor', 'Creating monitor from Q&A', ['Validate', 'Create Task', 'Schedule']);
+    }
 
     try {
         var response, result;
@@ -1473,11 +1491,13 @@ async function _dispatchChatAction(action, params, originalQuestion) {
 
         } else {
             removeChatMessage(progressId);
+            hideLoading();
             appendChatMessage('ai', 'Unknown action: ' + action);
             return;
         }
 
         removeChatMessage(progressId);
+        hideLoading();
 
         if (!response.ok) {
             var errData = await response.json();
@@ -1520,6 +1540,7 @@ async function _dispatchChatAction(action, params, originalQuestion) {
 
     } catch (error) {
         removeChatMessage(progressId);
+        hideLoading();
         appendChatMessage('ai', 'Error running ' + action + ': ' + error.message);
     }
 }
@@ -1532,6 +1553,14 @@ async function _dispatchChatAction(action, params, originalQuestion) {
  * @param {boolean} isHtml - if true, content is already HTML (don't escape)
  * @returns {string} message element ID
  */
+
+function _typingIndicatorHtml(label) {
+    return '<span class="typing-indicator">' +
+        '<span class="typing-label">' + escapeHtml(label || 'Processing') + '</span>' +
+        '<span class="typing-dots"><span></span><span></span><span></span></span>' +
+        '</span>';
+}
+
 function appendChatMessage(role, content, isRaw, isHtml) {
     var container = document.getElementById('chatMessages');
     if (!container) return '';
