@@ -2504,23 +2504,53 @@ async function loadWatchFindings() {
  * @returns {string} HTML
  */
 function renderWatchFinding(finding) {
-    var confidenceClass = (finding.confidence === 'high') ? 'confidence-high' :
-        (finding.confidence === 'medium') ? 'confidence-medium' : 'confidence-low';
+    var fid = finding.finding_id || '';
+    var meta = finding.metadata || {};
+    var harmMeta = meta.harm_score || {};
+    var harmClass = harmMeta.classification
+        ? 'ch-badge-' + harmMeta.classification.toLowerCase()
+        : '';
+    var contentType = finding.content_type || 'post';
 
-    return '<div class="watch-finding" data-id="' + escapeHtml(finding.id || '') + '">' +
-        '<div class="watch-finding-header">' +
-            '<span class="watch-finding-source">' + escapeHtml(finding.platform || finding.source || '') + '</span>' +
-            '<span class="watch-finding-time">' + formatTimestamp(finding.timestamp || finding.created_at) + '</span>' +
-        '</div>' +
-        '<div class="watch-finding-body">' +
-            '<span class="badge ' + confidenceClass + '">' + escapeHtml(finding.confidence || 'unknown') + '</span>' +
-            '<p>' + escapeHtml(finding.summary || finding.content || '') + '</p>' +
-        '</div>' +
-        '<div class="watch-finding-actions">' +
-            '<button class="btn btn-sm btn-primary watch-approve-btn" data-finding-id="' + escapeHtml(finding.id || '') + '">Approve</button>' +
-            '<button class="btn btn-sm btn-ghost watch-dismiss-btn" data-finding-id="' + escapeHtml(finding.id || '') + '">Dismiss</button>' +
-        '</div>' +
-    '</div>';
+    var html = '<div class="watch-finding" data-id="' + escapeHtml(fid) + '">';
+
+    // Header row: platform + content type + timestamp
+    html += '<div class="watch-finding-header">';
+    html += '<span class="watch-finding-source">' + escapeHtml(finding.platform || 'unknown') + '</span>';
+    html += '<span class="badge" style="font-size:10px;margin-left:6px;">' + escapeHtml(contentType) + '</span>';
+    if (harmMeta.classification) {
+        html += '<span class="badge ' + harmClass + '" style="font-size:10px;margin-left:6px;">' +
+            escapeHtml(harmMeta.classification) + '</span>';
+    }
+    html += '<span class="watch-finding-time">' + formatTimestamp(finding.created_at) + '</span>';
+    html += '</div>';
+
+    // Body: content summary
+    html += '<div class="watch-finding-body">';
+    html += '<p>' + escapeHtml(finding.content_summary || '') + '</p>';
+    if (meta.url) {
+        html += '<a href="' + escapeHtml(meta.url) + '" target="_blank" rel="noopener noreferrer" ' +
+            'style="font-size:11px;color:var(--purple-bright);word-break:break-all;">' +
+            escapeHtml(meta.url) + '</a>';
+    }
+    if (meta.author_username) {
+        html += '<span style="font-size:11px;color:var(--text-muted);margin-left:8px;">@' +
+            escapeHtml(meta.author_username) + '</span>';
+    }
+    if (finding.analysis_text) {
+        html += '<details style="margin-top:6px;"><summary style="font-size:11px;color:var(--purple-bright);cursor:pointer;">LLM Analysis</summary>' +
+            '<p style="font-size:12px;margin-top:4px;">' + escapeHtml(finding.analysis_text) + '</p></details>';
+    }
+    html += '</div>';
+
+    // Actions
+    html += '<div class="watch-finding-actions">';
+    html += '<button class="btn btn-sm btn-primary watch-approve-btn" data-finding-id="' + escapeHtml(fid) + '">Approve</button>';
+    html += '<button class="btn btn-sm btn-ghost watch-dismiss-btn" data-finding-id="' + escapeHtml(fid) + '">Dismiss</button>';
+    html += '</div>';
+
+    html += '</div>';
+    return html;
 }
 
 /**
@@ -2528,18 +2558,28 @@ function renderWatchFinding(finding) {
  * @param {string} findingId
  */
 async function approveFinding(findingId) {
+    if (!findingId) {
+        showToast('Approve failed: no finding ID', 'error');
+        return;
+    }
     try {
-        var response = await fetchApi('/monitor/' + findingId + '/approve', {
+        var response = await fetchApi('/monitor/' + encodeURIComponent(findingId) + '/approve', {
             method: 'POST',
             body: JSON.stringify({})
         });
 
         if (response.ok) {
-            showToast('Finding approved.', 'success');
-            loadWatchFindings();
-        } else {
             var data = await response.json();
-            showToast('Approve failed: ' + (data.error || 'Unknown error'), 'error');
+            if (data.success === false) {
+                showToast('Approve failed: ' + (data.error || 'Unknown error'), 'error');
+            } else {
+                showToast('Finding approved.', 'success');
+                loadWatchFindings();
+            }
+        } else {
+            var text = await response.text();
+            try { var errData = JSON.parse(text); showToast('Approve failed: ' + (errData.error || response.status), 'error'); }
+            catch (_) { showToast('Approve failed: server returned ' + response.status, 'error'); }
         }
     } catch (e) {
         showToast('Approve failed: ' + e.message, 'error');
@@ -2551,18 +2591,28 @@ async function approveFinding(findingId) {
  * @param {string} findingId
  */
 async function dismissFinding(findingId) {
+    if (!findingId) {
+        showToast('Dismiss failed: no finding ID', 'error');
+        return;
+    }
     try {
-        var response = await fetchApi('/monitor/' + findingId + '/dismiss', {
+        var response = await fetchApi('/monitor/' + encodeURIComponent(findingId) + '/dismiss', {
             method: 'POST',
             body: JSON.stringify({})
         });
 
         if (response.ok) {
-            showToast('Finding dismissed.', 'info');
-            loadWatchFindings();
-        } else {
             var data = await response.json();
-            showToast('Dismiss failed: ' + (data.error || 'Unknown error'), 'error');
+            if (data.success === false) {
+                showToast('Dismiss failed: ' + (data.error || 'Unknown error'), 'error');
+            } else {
+                showToast('Finding dismissed.', 'info');
+                loadWatchFindings();
+            }
+        } else {
+            var text = await response.text();
+            try { var errData = JSON.parse(text); showToast('Dismiss failed: ' + (errData.error || response.status), 'error'); }
+            catch (_) { showToast('Dismiss failed: server returned ' + response.status, 'error'); }
         }
     } catch (e) {
         showToast('Dismiss failed: ' + e.message, 'error');

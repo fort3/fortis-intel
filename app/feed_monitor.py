@@ -236,7 +236,7 @@ class FeedMonitor:
     def dismiss_finding(
         self,
         finding_id: str,
-        reason: str,
+        reason: str | None = None,
     ) -> dict[str, Any]:
         """Dismiss a finding with a reason.
 
