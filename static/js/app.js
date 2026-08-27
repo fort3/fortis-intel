@@ -3014,6 +3014,7 @@ async function runImageAnalysis() {
         return;
     }
 
+    var content = document.getElementById('resultsContent');
     var modules = [];
     if (document.getElementById('imgModForensics') && document.getElementById('imgModForensics').checked) modules.push('Forensics');
     if (document.getElementById('imgModStego') && document.getElementById('imgModStego').checked) modules.push('Stego');
