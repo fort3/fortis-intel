@@ -32,6 +32,7 @@ CHAIN_DESCRIPTIONS = {
     "image_forensics_ela": "Error Level Analysis and clone detection for image tampering assessment",
     "image_steganography": "LSB, RS analysis, and sample pairs steganography detection",
     "image_clip_vision": "CLIP zero-shot classification, landmark detection, and content safety",
+    "image_deepseek_vision": "DeepSeek Vision AI scene description, object identification, text extraction, and OSINT assessment",
 }
 
 ENDPOINT_REQUIRED_KEYS = {

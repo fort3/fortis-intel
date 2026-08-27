@@ -13,9 +13,9 @@ An OSINT-driven intelligence and analysis platform for open-source intelligence 
 - **API-Free Scrape Fallbacks** -- Every platform works without API keys via curl_cffi-powered scrape fallbacks (Reddit .json endpoints, Twitter syndication API, TikTok embedded JSON, Facebook mbasic)
 - **Geospatial Triangulation** -- Triangulate locations from EXIF data, social geotags, IP addresses, check-ins, video landmarks, and text mentions with interactive Leaflet.js maps
 - **Media Geo-Extraction** -- Automatic EXIF GPS extraction from social media images and video keyframe analysis (OCR + landmark geocoding via OpenCV)
-- **AI-Powered Analysis** -- DeepSeek LLM generates investigation reports, pattern-of-life analyses, network mapping, and influence assessments
+- **AI-Powered Analysis** -- DeepSeek LLM generates investigation reports, pattern-of-life analyses, network mapping, and influence assessments. DeepSeek Vision (`deepseek-v4-flash-vision-exp`) provides multimodal image understanding for uploaded media
 - **Web Intelligence** -- LLM autonomously searches the public web via Google dork queries (DuckDuckGo) to fill intelligence gaps and validate findings, with confidence-gated deep scraping of high-value results. Expanded passive recon cheatsheets for domain, IP, and email identifiers. Improved circuit breaker that correctly distinguishes "no results" from actual failures
-- **Image OSINT** -- Four-module image analysis pipeline: reverse image search (Yandex CBIR + Google Lens + Bing via PicImageSearch, optional TinEye API + perceptual hash deduplication), Error Level Analysis (ELA) with clone detection for forensic tampering assessment, steganography detection (LSB extraction, RS analysis, sample pairs), and CLIP zero-shot classification for scene/object/landmark recognition and safety screening. All modules run on uploaded images during investigations and via the dedicated `/analyze-image` endpoint
+- **Image OSINT** -- Five-module image analysis pipeline: reverse image search (Yandex CBIR + Google Lens + Bing via PicImageSearch, optional TinEye API + perceptual hash deduplication), Error Level Analysis (ELA) with clone detection for forensic tampering assessment, steganography detection (LSB extraction, RS analysis, sample pairs), CLIP zero-shot classification for scene/object/landmark recognition and safety screening, and **DeepSeek Vision AI** scene analysis (contextual image understanding, object identification, text/signage extraction, location clue detection, and OSINT relevance assessment via `deepseek-v4-flash-vision-exp`). All modules run on uploaded images during investigations and via the dedicated `/analyze-image` endpoint. DeepSeek Vision descriptions are injected directly into the LLM analysis context, enabling the analyst model to reason over detailed visual evidence rather than just CLIP label scores
 - **Civilian Harm Classifier** -- Bellingcat-inspired semantic similarity scoring using sentence-transformers with multilingual conflict keyword density. Automatically flags CRITICAL/HIGH/MODERATE content across all investigation flows (investigation, batch, scenario, Q&A, feed monitor). Distribution bar, flagged item cards, and concept badges in the UI
 - **Separated LLM Pipeline** -- RAG (FAISS vectorstore) for document Q&A only; Knowledge Graph (NetworkX entity relationships) for OSINT multi-source enrichment -- no token waste from parallel injection
 - **RAG Knowledge Base** -- Upload PDF and Markdown reports, index them with FAISS vectorstore, and ask natural-language questions with automatic KB feedback from previous analyses
@@ -39,14 +39,14 @@ An OSINT-driven intelligence and analysis platform for open-source intelligence 
 |-----------|-----------|
 | Web Framework | Flask 3.x with Jinja2 SPA |
 | HTTP Client | curl_cffi (Chrome TLS fingerprinting) with thread-safe per-thread sessions, requests fallback |
-| LLM | DeepSeek v4-flash (analysis) + v4-pro (governance) via `langchain-openai` |
+| LLM | DeepSeek v4-flash (analysis) + v4-pro (governance) via `langchain-openai` + v4-flash-vision-exp (image understanding) via `openai` |
 | LLM Pipeline | RAG (FAISS) for document Q&A; Knowledge Graph (NetworkX) for OSINT enrichment |
 | Vectorstore | FAISS with `BAAI/bge-base-en-v1.5` embeddings |
 | Database | SQLite (reports, ForgeChain audit trail, entity relationships) |
 | Task Queue | Celery + Redis (feed monitoring, background enrichment) |
 | NLP | spaCy (NER), langdetect (language detection) |
 | Civilian Harm | sentence-transformers (paraphrase-multilingual-MiniLM-L12-v2), Bellingcat methodology |
-| Image OSINT | Pillow (ELA/forensics), imagehash (perceptual hashing), numpy (steganography), CLIP (zero-shot classification via sentence-transformers) |
+| Image OSINT | Pillow (ELA/forensics), imagehash (perceptual hashing), numpy (steganography), CLIP (zero-shot classification via sentence-transformers), DeepSeek Vision API (contextual scene analysis) |
 | Domain/IP Intel | python-whois, dnspython, HackerTarget API (DNSdumpster, reverse DNS/IP), Wayback Machine CDX API |
 | Web Intelligence | duckduckgo-search (Google dork queries, no API key required) |
 | Geolocation | geopy, MaxMind GeoLite2, DBSCAN clustering |
@@ -182,6 +182,8 @@ The LLM that powers all analysis, enrichment, and governance chains.
 | `DEEPSEEK_BASE_URL` | API endpoint (default: `https://api.deepseek.com/v1`) |
 | `DEEPSEEK_ANALYSIS_MODEL` | Model for analysis chains (default: `deepseek-v4-flash`) |
 | `DEEPSEEK_FORGE_MODEL` | Model for ForgeChain governance (default: `deepseek-v4-pro`) |
+| `DEEPSEEK_VISION_MODEL` | Model for image understanding (default: `deepseek-v4-flash-vision-exp`) |
+| `DEEPSEEK_VISION_ENABLED` | Toggle DeepSeek Vision image analysis (default: `true`) |
 
 **How to get the key:**
 
@@ -191,7 +193,7 @@ The LLM that powers all analysis, enrichment, and governance chains.
 4. Click **Create new API key** and copy it immediately
 5. To continue beyond the free tier, add balance to your account
 
-**Free tier:** 5M tokens for 30 days. After that, pay-as-you-go at approximately $0.14/$0.28 per million input/output tokens (v4-flash). Estimated monthly cost at moderate usage: $2--5.
+**Free tier:** 5M tokens for 30 days. After that, pay-as-you-go at approximately $0.14/$0.28 per million input/output tokens (v4-flash). The vision model (`deepseek-v4-flash-vision-exp`) uses 384 tokens per image at most, so image analysis adds minimal cost. Estimated monthly cost at moderate usage: $2--5.
 
 **Alternative:** Both DeepSeek models are also available on Ollama Cloud. Set `DEEPSEEK_BASE_URL` to `https://ollama.com/v1` and use your Ollama API key -- no other changes needed.
 
@@ -623,7 +625,7 @@ Investigation depth:
 - **Standard** -- API + web scraping (social media, WHOIS, DNS, DNSdumpster, news)
 - **Deep** -- All sources including metadata analysis, entity extraction, and full DNSdumpster enumeration
 
-Results include a structured report with civilian harm assessment, entity relationship graph with LLM-aware context, interactive map, domain/IP intel cards, Web Intelligence section, and civilian harm distribution analysis.
+Results include a structured report with civilian harm assessment, entity relationship graph with LLM-aware context, interactive map, domain/IP intel cards, Web Intelligence section, civilian harm distribution analysis, and DeepSeek Vision AI scene analysis for any uploaded images.
 
 **Web Intelligence** (enabled by default, toggle per investigation):
 
@@ -809,6 +811,7 @@ The platform is designed to run with minimal configuration. Core features that w
 - Image forensics (ELA, clone detection, metadata analysis) via Pillow (no API key needed)
 - Steganography detection (LSB, RS analysis, sample pairs) via Pillow + numpy (no API key needed)
 - CLIP zero-shot image classification via sentence-transformers (no API key needed, model downloads automatically)
+- DeepSeek Vision AI scene analysis (uses existing `DEEPSEEK_API_KEY` -- no additional key needed)
 - Manual EXIF extraction from uploaded images
 - Manual coordinate entry for triangulation
 - Knowledge Base management
@@ -865,7 +868,7 @@ The geolocation card supports direct image uploads for GPS triangulation. Upload
 
 ### Image OSINT Analysis
 
-The platform includes four image analysis modules that run on uploaded images during investigations and via the `/analyze-image` endpoint:
+The platform includes five image analysis modules that run on uploaded images during investigations and via the `/analyze-image` endpoint:
 
 | Module | Function | Dependencies | API Key |
 |---|---|---|---|
@@ -873,8 +876,11 @@ The platform includes four image analysis modules that run on uploaded images du
 | **Error Level Analysis** | JPEG re-compression forensics, clone detection via block matching, metadata strip detection | Pillow, numpy | None |
 | **Steganography Detection** | LSB extraction, RS analysis, sample pairs statistical test | Pillow, numpy | None |
 | **CLIP Vision** | Zero-shot image classification (22 OSINT categories), landmark detection (50 locations), content safety screening | sentence-transformers (CLIP model) | None |
+| **DeepSeek Vision AI** | Contextual scene description, object/entity identification, text/signage transcription, location clue analysis, temporal clue detection, OSINT relevance assessment | openai (OpenAI-compatible client) | `DEEPSEEK_API_KEY` (shared with LLM) |
 
 All modules degrade gracefully -- missing optional dependencies disable individual modules without affecting others. CLIP leverages the same `sentence-transformers` infrastructure used by the civilian harm classifier. The perceptual hash cache (LRU, max 5000 entries) enables cross-investigation duplicate detection.
+
+**DeepSeek Vision** uses the `deepseek-v4-flash-vision-exp` model via the same API key and base URL as the text LLM. It provides free-form, contextual image understanding — the model actually sees the image and returns structured OSINT observations including scene description, visible text transcription, location/temporal clues, and intelligence relevance assessment. Vision descriptions are injected into the LLM analysis context alongside CLIP classifications, enabling the analyst model to reason over detailed visual evidence. Supports JPEG, PNG, GIF, and WebP images up to 32 MB, with detail level control (`low`/`high`/`auto`).
 
 **Environment variables:**
 
@@ -886,6 +892,8 @@ All modules degrade gracefully -- missing optional dependencies disable individu
 | `IMAGE_STEGO_ENABLED` | `true` | Toggle steganography detection module |
 | `IMAGE_VISION_ENABLED` | `true` | Toggle CLIP vision classification module |
 | `CLIP_MODEL_NAME` | `clip-ViT-B-32` | CLIP model for zero-shot classification |
+| `DEEPSEEK_VISION_ENABLED` | `true` | Toggle DeepSeek Vision AI scene analysis module |
+| `DEEPSEEK_VISION_MODEL` | `deepseek-v4-flash-vision-exp` | DeepSeek Vision model for contextual image understanding |
 
 ### Media Geolocation Enrichment
 
@@ -1004,6 +1012,7 @@ Fortis-Intelligence-Hub/
 |   |-- image_forensics.py       # ELA tampering detection + clone detection
 |   |-- image_stego.py           # Steganography detection (LSB, RS analysis, sample pairs)
 |   |-- image_vision.py          # CLIP zero-shot classification + landmark detection
+|   |-- image_deepseek_vision.py # DeepSeek Vision AI scene analysis + OSINT assessment
 |   |-- video_geo.py             # Video keyframe extraction + landmark geolocation
 |   |-- social_client.py         # Social media integrations (API + curl_cffi scrape fallbacks)
 |   |-- telegram_auth.py         # One-time Telegram session setup (python -m app.telegram_auth)

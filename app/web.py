@@ -108,6 +108,7 @@ from app.image_search import reverse_image_search, IMAGE_SEARCH_ENABLED
 from app.image_forensics import analyze_image_forensics, IMAGE_FORENSICS_ENABLED
 from app.image_stego import detect_steganography, IMAGE_STEGO_ENABLED
 from app.image_vision import analyze_image as clip_analyze_image, IMAGE_VISION_ENABLED
+from app.image_deepseek_vision import describe_image as deepseek_describe_image, DEEPSEEK_VISION_ENABLED
 from app.utils import create_session_id, safe_storage_path, validate_session_id
 from app.utils.pdf_reader import extract_pdf_text
 from app.utils.uploads import validate_upload_file
@@ -1728,6 +1729,8 @@ def create_app():
                         img_result["steganography"] = detect_steganography(file_bytes, fname)
                     if IMAGE_VISION_ENABLED:
                         img_result["vision"] = clip_analyze_image(file_bytes, fname)
+                    if DEEPSEEK_VISION_ENABLED:
+                        img_result["deepseek_vision"] = deepseek_describe_image(file_bytes, fname)
                     image_analysis_results.append(img_result)
                 except Exception as exc:
                     print(f"[WARN] Image analysis failed for {fname} (non-fatal): {exc}")
@@ -1969,6 +1972,8 @@ def create_app():
                     img_lines.append(f"  Landmarks: {', '.join(lm['name'] for lm in ir['vision']['landmarks'][:3])}")
                 if ir.get("vision", {}).get("safety", {}).get("classification") not in (None, "safe"):
                     img_lines.append(f"  Safety: {ir['vision']['safety']['classification']} ({ir['vision']['safety'].get('score', 0):.0%})")
+                if ir.get("deepseek_vision", {}).get("description"):
+                    img_lines.append(f"  AI Scene Analysis: {ir['deepseek_vision']['description']}")
                 if ir.get("reverse_search", {}).get("similar_cached"):
                     img_lines.append(f"  Similar images in cache: {len(ir['reverse_search']['similar_cached'])}")
                 if ir.get("reverse_search", {}).get("tineye_results"):
@@ -2305,7 +2310,7 @@ def create_app():
     @login_required
     @limiter.limit("30 per hour")
     def analyze_image_endpoint():
-        """Standalone image analysis: forensics, reverse search, stego, CLIP."""
+        """Standalone image analysis: forensics, reverse search, stego, CLIP, DeepSeek Vision."""
         if not request.files:
             return jsonify({"error": "No image files uploaded"}), 400
 
@@ -2313,6 +2318,7 @@ def create_app():
         run_stego = IMAGE_STEGO_ENABLED and request.form.get("mod_stego", "1") == "1"
         run_search = IMAGE_SEARCH_ENABLED and request.form.get("mod_search", "1") == "1"
         run_vision = IMAGE_VISION_ENABLED and request.form.get("mod_vision", "1") == "1"
+        run_deepseek = DEEPSEEK_VISION_ENABLED and request.form.get("mod_deepseek", "1") == "1"
 
         results = []
         for f in request.files.getlist("images"):
@@ -2332,6 +2338,8 @@ def create_app():
                     img_result["steganography"] = detect_steganography(file_bytes, f.filename)
                 if run_vision:
                     img_result["vision"] = clip_analyze_image(file_bytes, f.filename)
+                if run_deepseek:
+                    img_result["deepseek_vision"] = deepseek_describe_image(file_bytes, f.filename)
                 results.append(img_result)
             except Exception as exc:
                 results.append({"filename": f.filename, "error": str(exc)})
@@ -2343,6 +2351,7 @@ def create_app():
                 "forensics": run_forensics,
                 "steganography": run_stego,
                 "vision": run_vision,
+                "deepseek_vision": run_deepseek,
             },
         })
 

@@ -3019,10 +3019,11 @@ async function runImageAnalysis() {
     if (document.getElementById('imgModStego') && document.getElementById('imgModStego').checked) modules.push('Stego');
     if (document.getElementById('imgModSearch') && document.getElementById('imgModSearch').checked) modules.push('Reverse Search');
     if (document.getElementById('imgModVision') && document.getElementById('imgModVision').checked) modules.push('CLIP Vision');
+    if (document.getElementById('imgModDeepseek') && document.getElementById('imgModDeepseek').checked) modules.push('AI Scene Analysis');
     showTaskLoading(
         'Image Analysis',
         fileInput.files.length + ' image(s) — ' + (modules.length > 0 ? modules.join(', ') : 'all modules'),
-        modules.length > 0 ? modules : ['Forensics', 'Stego', 'Search', 'Vision']
+        modules.length > 0 ? modules : ['Forensics', 'Stego', 'Search', 'Vision', 'AI Scene']
     );
 
     try {
@@ -3039,6 +3040,8 @@ async function runImageAnalysis() {
         fd.append('mod_stego', modStego && modStego.checked ? '1' : '0');
         fd.append('mod_search', modSearch && modSearch.checked ? '1' : '0');
         fd.append('mod_vision', modVision && modVision.checked ? '1' : '0');
+        var modDeepseek = document.getElementById('imgModDeepseek');
+        fd.append('mod_deepseek', modDeepseek && modDeepseek.checked ? '1' : '0');
 
         var response = await fetchApi('/analyze-image', {
             method: 'POST',
@@ -3814,6 +3817,15 @@ function renderImageAnalysisSection(images) {
             h += '<div class="img-analysis-row"><strong>Safety:</strong> ' +
                 '<span class="wi-badge ch-badge-critical">' +
                 escapeHtml(img.vision.safety.classification) + '</span></div>';
+        }
+
+        // DeepSeek Vision AI Scene Analysis
+        if (img.deepseek_vision && img.deepseek_vision.description) {
+            h += '<div class="img-analysis-row deepseek-vision-block">' +
+                '<strong>AI Scene Analysis</strong> ' +
+                '<span class="ch-platform">(' + escapeHtml(img.deepseek_vision.model || 'deepseek-vision') + ')</span>' +
+                '<div class="deepseek-vision-desc" style="margin-top:0.4em;white-space:pre-wrap;font-size:0.92em;line-height:1.5;opacity:0.92">' +
+                escapeHtml(img.deepseek_vision.description) + '</div></div>';
         }
 
         // Reverse search
