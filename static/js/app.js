@@ -3405,6 +3405,52 @@ function renderDomainIntelSection(di) {
         h += '</table></div>';
     }
 
+    var fuzz = di.url_fuzz || {};
+    var fuzzFindings = fuzz.findings || [];
+    if (fuzzFindings.length) {
+        var bySev = fuzz.by_severity || {};
+        var sevColors = {
+            'CRITICAL': '#ef4444', 'HIGH': '#f97316',
+            'MEDIUM': '#eab308', 'LOW': '#6b7280', 'INFO': '#6366f1'
+        };
+        h += '<div class="intel-card"><h5>Exposed Endpoints (URL Fuzzing) &mdash; ' +
+            fuzz.endpoints_found + ' discovered</h5>';
+
+        h += '<div class="ch-distribution" style="margin-bottom:0.6em">';
+        var sevOrder = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'INFO'];
+        for (var si = 0; si < sevOrder.length; si++) {
+            var sev = sevOrder[si];
+            if (bySev[sev]) {
+                var sevPct = (bySev[sev] / fuzz.endpoints_found * 100).toFixed(0);
+                h += '<div class="ch-bar-segment" style="width:' + sevPct +
+                    '%;background:' + (sevColors[sev] || '#374151') + '" title="' +
+                    sev + ': ' + bySev[sev] + '">' +
+                    (sevPct >= 8 ? sev.charAt(0) + ' ' + bySev[sev] : '') + '</div>';
+            }
+        }
+        h += '</div>';
+
+        h += '<table class="intel-table"><tr><th>Severity</th><th>Path</th><th>Status</th><th>Type</th><th>Details</th></tr>';
+        fuzzFindings.slice(0, 40).forEach(function (f) {
+            var badgeClass = f.severity === 'CRITICAL' ? 'ch-badge-critical' :
+                f.severity === 'HIGH' ? 'ch-badge-high' :
+                f.severity === 'MEDIUM' ? 'ch-badge-medium' : 'ch-badge-low';
+            var details = '';
+            if (f.redirect_to) details = '&rarr; ' + escapeHtml(f.redirect_to);
+            else if (f.server) details = escapeHtml(f.server);
+            h += '<tr>' +
+                '<td><span class="wi-badge ' + badgeClass + '">' + escapeHtml(f.severity) + '</span></td>' +
+                '<td class="mono">' + escapeHtml(f.path) + '</td>' +
+                '<td>' + f.status + '</td>' +
+                '<td>' + escapeHtml(f.content_type || '') + '</td>' +
+                '<td>' + details + '</td></tr>';
+        });
+        if (fuzzFindings.length > 40) {
+            h += '<tr><td colspan="5"><em>... and ' + (fuzzFindings.length - 40) + ' more</em></td></tr>';
+        }
+        h += '</table></div>';
+    }
+
     h += '</div>';
     return h;
 }

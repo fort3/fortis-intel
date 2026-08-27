@@ -187,6 +187,7 @@ class OSINTClient:
         identifier: str,
         platforms: list[str] | None = None,
         depth: str = "standard",
+        elevated_authorization: bool = False,
     ) -> OSINTFindings:
         """Run a full-spectrum OSINT investigation on *identifier*."""
         resolved_platforms = platforms or list(self._platform_config.keys())
@@ -245,13 +246,24 @@ class OSINTClient:
                 dns_data = self._scraper.dns_lookup(domain)
                 dnsdumpster = self._scraper.dnsdumpster_lookup(domain)
                 http_headers = self._scraper.http_headers_lookup(domain)
-                findings.metadata["domain_intel"] = {
+                domain_intel = {
                     "domain": domain,
                     "whois": whois_data,
                     "dns": dns_data,
                     "dnsdumpster": dnsdumpster,
                     "http_headers": http_headers,
                 }
+
+                if elevated_authorization:
+                    try:
+                        from app.url_fuzzer import fuzz_domain, URL_FUZZ_ENABLED
+                        if URL_FUZZ_ENABLED:
+                            log.info("Running URL fuzzing on %s (elevated authorization)", domain)
+                            domain_intel["url_fuzz"] = fuzz_domain(domain)
+                    except Exception as exc:
+                        log.warning("URL fuzzing failed for %s (non-fatal): %s", domain, exc)
+
+                findings.metadata["domain_intel"] = domain_intel
                 enrichment_sources = ["whois", "dns", "dnsdumpster"]
                 findings.entities.append(EnrichedEntity(
                     entity_type="domain",

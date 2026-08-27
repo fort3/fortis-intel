@@ -459,6 +459,21 @@ def _findings_to_context(findings_dict: dict) -> str:
             parts.append(f"  Server: {headers['Server']}")
         if headers.get("X-Powered-By"):
             parts.append(f"  Powered-By: {headers['X-Powered-By']}")
+        url_fuzz = domain_intel.get("url_fuzz", {})
+        if url_fuzz.get("findings"):
+            fuzz_findings = url_fuzz["findings"]
+            by_sev = url_fuzz.get("by_severity", {})
+            sev_summary = ", ".join(f"{k}: {v}" for k, v in sorted(by_sev.items()))
+            parts.append(f"\n  === Exposed Endpoints (URL Fuzzing) === [{sev_summary}]")
+            parts.append(f"  {url_fuzz['endpoints_found']} endpoints discovered out of {url_fuzz.get('total_probed', '?')} probed")
+            for ef in fuzz_findings[:30]:
+                status_tag = f"HTTP {ef['status']}"
+                sev_tag = ef.get("severity", "INFO")
+                redir = f" -> {ef['redirect_to']}" if ef.get("redirect_to") else ""
+                ctype = f" [{ef['content_type']}]" if ef.get("content_type") else ""
+                parts.append(f"    [{sev_tag}] {ef['path']} — {status_tag}{ctype}{redir}")
+            if len(fuzz_findings) > 30:
+                parts.append(f"    ... and {len(fuzz_findings) - 30} more")
 
     ip_intel = metadata.get("ip_intel", {})
     if ip_intel:
@@ -1686,7 +1701,10 @@ def create_app():
         geo_client = _get_geo_client()
 
         try:
-            findings = osint_client.investigate(clean_id, platforms=platforms, depth=depth)
+            findings = osint_client.investigate(
+                clean_id, platforms=platforms, depth=depth,
+                elevated_authorization=_is_admin(),
+            )
             findings_dict = asdict(findings)
         except Exception as exc:
             print(f"[ERROR] OSINT investigation failed: {exc}")

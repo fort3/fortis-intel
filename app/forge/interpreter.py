@@ -33,6 +33,7 @@ CHAIN_DESCRIPTIONS = {
     "image_steganography": "LSB, RS analysis, and sample pairs steganography detection",
     "image_clip_vision": "CLIP zero-shot classification, landmark detection, and content safety",
     "image_deepseek_vision": "DeepSeek Vision AI scene description, object identification, text extraction, and OSINT assessment",
+    "url_endpoint_fuzzing": "URL endpoint fuzzing for domain recon — probes common paths to discover exposed endpoints (elevated authorization required)",
 }
 
 ENDPOINT_REQUIRED_KEYS = {

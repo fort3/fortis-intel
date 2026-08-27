@@ -7,7 +7,7 @@ An OSINT-driven intelligence and analysis platform for open-source intelligence 
 ## Key Features
 
 - **Multi-Platform OSINT** -- Investigate usernames, emails, domains, and IPs across Twitter/X, Reddit, YouTube, Instagram, Mastodon, Facebook, TikTok, and Telegram
-- **Domain & IP Intelligence** -- First-class domain/IP investigations with WHOIS, DNS records, DNSdumpster subdomain enumeration, reverse DNS, reverse IP (co-hosted domains), HTTP header probing via HackerTarget API, and Wayback Machine historical enrichment
+- **Domain & IP Intelligence** -- First-class domain/IP investigations with WHOIS, DNS records, DNSdumpster subdomain enumeration, reverse DNS, reverse IP (co-hosted domains), HTTP header probing via HackerTarget API, Wayback Machine historical enrichment, and **URL endpoint fuzzing** (curated 245-path wordlist for admin panels, API surfaces, config files, dev artifacts, and backup files — elevated authorization required)
 - **Wayback Machine / Archive.org** -- Domain enrichment via CDX API: historical snapshot timeline, archived subdomain discovery, content change detection (digest comparison), and robots.txt policy history. No API key required
 - **Anti-Detection HTTP** -- All outbound HTTP uses curl_cffi with Chrome TLS fingerprinting to bypass bot detection; thread-safe per-thread session isolation for Windows COM compatibility
 - **API-Free Scrape Fallbacks** -- Every platform works without API keys via curl_cffi-powered scrape fallbacks (Reddit .json endpoints, Twitter syndication API, TikTok embedded JSON, Facebook mbasic)
@@ -24,7 +24,7 @@ An OSINT-driven intelligence and analysis platform for open-source intelligence 
 - **GDPR & NIST CSF 2.0 Compliance** -- Tiered data retention, right to erasure (Art. 17), GDPR Art. 30 processing records, NIST CSF function mapping, system credential leak detection (subject PII is never blocked)
 - **ForgeChain Governance** -- Every LLM request passes through a 3-verifier consensus gate (rule, safety, consistency) before execution
 - **Analysis Integrity Framework** -- Nine-layer accuracy system: output grounding verification (semantic similarity check that report claims are present in source data), NATO Admiralty source reliability grading (A-F per source), RAG contamination guard (prevents hallucination feedback loops), competing hypotheses generation (ACH), claim decomposition (CONFIRMED/INFERRED/ASSUMED tagging), self-consistency checking (multi-run stability analysis), provenance trail (chain-of-custody from raw data to report), bias audit (source concentration, confirmation pattern, temporal skew, coverage gaps, single-source claims), and multilingual NER (xx_ent_wiki_sm with language-aware confidence)
-- **Elevated Authorization** -- Investigation endpoints support elevated authorization for privileged analysts handling sensitive cases
+- **Elevated Authorization** -- Investigation endpoints support elevated authorization for privileged analysts handling sensitive cases and active reconnaissance features (URL endpoint fuzzing)
 - **Entity Relationship Graphs** -- Cytoscape.js-powered interactive graphs with click-to-drill-down entity detail popups; graph context fed directly to LLM for entity-aware analysis
 - **Professional Export** -- PDF with section-aware layout, TLP classification banner, table of contents, and executive summary highlighting. Also Markdown (with TLP metadata), STIX 2.1, CSV, JSON, and Google Drive export with map snapshots
 - **Docker Ready** -- Dockerfile and docker-compose.yml for containerized deployment with Redis, Celery worker, and Celery beat
@@ -616,7 +616,7 @@ Upload PDF or Markdown files for AI-powered analysis. The platform extracts text
 Enter a username, email address, domain, IP address, or keyword. The identifier type is auto-detected and routes to the appropriate intel pipeline:
 
 - **Username/email** -- Social media profiles, posts, web mentions, news, entity extraction
-- **Domain** -- WHOIS registration data, DNS records (A/AAAA/MX/NS/TXT/SOA/CNAME), DNSdumpster subdomain enumeration, HTTP header probe, IP geolocation for all resolved addresses, Wayback Machine historical enrichment (snapshot timeline, archived subdomains, content changes, robots.txt history)
+- **Domain** -- WHOIS registration data, DNS records (A/AAAA/MX/NS/TXT/SOA/CNAME), DNSdumpster subdomain enumeration, HTTP header probe, IP geolocation for all resolved addresses, Wayback Machine historical enrichment (snapshot timeline, archived subdomains, content changes, robots.txt history). With elevated authorization: URL endpoint fuzzing (245 common paths probed for admin panels, API docs, config files, backups, VCS artifacts)
 - **IP address** -- Geolocation, reverse DNS (PTR), reverse IP (co-hosted domains), DNSdumpster on resolved hostname
 
 Investigation depth:
@@ -855,6 +855,37 @@ Mastodon content search uses a multi-layer approach because the `/api/v2/search`
 
 Results are deduplicated across all layers.
 
+### URL Endpoint Fuzzing (Elevated Authorization)
+
+Domain investigations include an optional URL endpoint fuzzing module (`app/url_fuzzer.py`) that probes the target domain for common exposed endpoints. This is an **active reconnaissance** technique -- it sends HTTP requests to the target -- and is gated behind `elevated_authorization` (admin users only).
+
+**Wordlist:** 245 curated paths covering:
+- Admin panels and login pages (WordPress, cPanel, phpMyAdmin, etc.)
+- API surfaces and documentation (Swagger, OpenAPI, GraphQL, REST endpoints)
+- Configuration and sensitive files (.env, config.json, wp-config.php, credentials)
+- Version control artifacts (.git/HEAD, .svn, .gitlab-ci.yml, Dockerfile)
+- Backup and archive files (backup.sql, site.zip, dump.sql)
+- Debug and development endpoints (actuator, server-status, phpinfo)
+- CMS-specific paths (WordPress, Joomla, Drupal, Ghost)
+- Cloud storage references (AWS credentials, S3, Azure)
+- Monitoring dashboards (Grafana, Kibana, Jenkins, Sentry)
+- Auth and SSO endpoints (OAuth, SAML, OpenID configuration)
+
+**Severity classification:** Each discovered endpoint is classified as CRITICAL, HIGH, MEDIUM, LOW, or INFO based on the path and HTTP status code. Exposed `.env` files, git configs, and database dumps returning HTTP 200 are classified as CRITICAL. Admin panels and API documentation are HIGH. API endpoints returning JSON are MEDIUM.
+
+**Rate limiting:** Configurable concurrency (default 5 threads) and rate limit (default 10 req/s) via `URL_FUZZ_CONCURRENCY` and `URL_FUZZ_RATE_LIMIT`. Uses the same curl_cffi stealth HTTP client as the rest of the platform.
+
+**Results:** Findings appear in the Domain Intelligence section of the investigation report with a severity distribution bar, and are injected into the LLM analysis context for the analyst model to reason over.
+
+| Env Variable | Default | Description |
+|---|---|---|
+| `URL_FUZZ_ENABLED` | `true` | Master toggle for URL endpoint fuzzing |
+| `URL_FUZZ_CONCURRENCY` | `5` | Maximum concurrent probe threads |
+| `URL_FUZZ_TIMEOUT` | `8` | Per-request timeout in seconds |
+| `URL_FUZZ_RATE_LIMIT` | `10` | Maximum requests per second |
+
+---
+
 ### Image EXIF Triangulation
 
 The geolocation card supports direct image uploads for GPS triangulation. Upload JPEG/TIFF images with embedded EXIF geolocation data, and the platform will:
@@ -892,6 +923,7 @@ All modules degrade gracefully -- missing optional dependencies disable individu
 | `IMAGE_STEGO_ENABLED` | `true` | Toggle steganography detection module |
 | `IMAGE_VISION_ENABLED` | `true` | Toggle CLIP vision classification module |
 | `CLIP_MODEL_NAME` | `clip-ViT-B-32` | CLIP model for zero-shot classification |
+| `IMAGE_SEARCH_TIMEOUT` | `30` | Per-engine timeout in seconds for reverse image search |
 | `DEEPSEEK_VISION_ENABLED` | `true` | Toggle DeepSeek Vision AI scene analysis module |
 | `DEEPSEEK_VISION_MODEL` | `deepseek-v4-flash-vision-exp` | DeepSeek Vision model for contextual image understanding |
 
@@ -1013,6 +1045,7 @@ Fortis-Intelligence-Hub/
 |   |-- image_stego.py           # Steganography detection (LSB, RS analysis, sample pairs)
 |   |-- image_vision.py          # CLIP zero-shot classification + landmark detection
 |   |-- image_deepseek_vision.py # DeepSeek Vision AI scene analysis + OSINT assessment
+|   |-- url_fuzzer.py            # URL endpoint fuzzing for domain recon (elevated auth)
 |   |-- video_geo.py             # Video keyframe extraction + landmark geolocation
 |   |-- social_client.py         # Social media integrations (API + curl_cffi scrape fallbacks)
 |   |-- telegram_auth.py         # One-time Telegram session setup (python -m app.telegram_auth)

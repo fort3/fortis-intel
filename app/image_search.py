@@ -21,6 +21,7 @@ import tempfile
 import threading
 import time
 from collections import OrderedDict
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
 from typing import Any
 
 import imagehash
@@ -63,6 +64,7 @@ IMAGE_SEARCH_ENABLED: bool = os.environ.get(
 _TINEYE_API_KEY: str | None = os.environ.get("TINEYE_API_KEY")
 
 _ENGINE_DELAY_SECONDS = 2.5
+_ENGINE_TIMEOUT_SECONDS = int(os.environ.get("IMAGE_SEARCH_TIMEOUT", "30"))
 
 # ---------------------------------------------------------------------------
 # Bounded LRU hash cache
@@ -319,23 +321,39 @@ def reverse_image_search(
 
     tmp_path = _write_temp_image(image_bytes, filename)
     engines_searched: list[str] = []
+    yandex_results = None
+    google_lens_results = None
+    bing_results = None
+    tineye_results = None
+
+    def _run_engine(name, fn, *args):
+        try:
+            with ThreadPoolExecutor(max_workers=1) as ex:
+                future = ex.submit(fn, *args)
+                return future.result(timeout=_ENGINE_TIMEOUT_SECONDS)
+        except FuturesTimeout:
+            log.warning("%s reverse search timed out after %ds", name, _ENGINE_TIMEOUT_SECONDS)
+            return None
+        except Exception as exc:
+            log.warning("%s reverse search executor failed: %s", name, exc)
+            return None
 
     try:
-        yandex_results = _yandex_search(tmp_path)
+        yandex_results = _run_engine("Yandex", _yandex_search, tmp_path)
         if yandex_results is not None:
             engines_searched.append("yandex")
 
         if engines_searched:
             time.sleep(_ENGINE_DELAY_SECONDS)
 
-        google_lens_results = _google_lens_search(tmp_path)
+        google_lens_results = _run_engine("Google Lens", _google_lens_search, tmp_path)
         if google_lens_results is not None:
             engines_searched.append("google_lens")
 
         if len(engines_searched) >= 2:
             time.sleep(_ENGINE_DELAY_SECONDS)
 
-        bing_results = _bing_search(tmp_path)
+        bing_results = _run_engine("Bing", _bing_search, tmp_path)
         if bing_results is not None:
             engines_searched.append("bing")
     finally:
