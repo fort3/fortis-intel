@@ -1881,6 +1881,7 @@ function renderMap(mapData) {
         manual: '#d97706',
         user_input: '#d97706',
         osint: '#7c3aed',
+        vision_geolocation: '#e879f9',
         default: '#2563eb'
     };
 
@@ -2049,7 +2050,8 @@ function renderMap(mapData) {
             nlp_mention: 'NLP Location', ip_geolocation: 'IP Geolocation', ip: 'IP',
             geotag: 'Social Geotag', social: 'Social', geocoding: 'Geocoded',
             address: 'Address', mention: 'Mention', manual: 'Manual',
-            user_input: 'User Input', osint: 'OSINT'
+            user_input: 'User Input', osint: 'OSINT',
+            vision_geolocation: 'AI Vision Geo'
         };
         var LegendControl = L.Control.extend({
             options: { position: 'bottomright' },
@@ -3021,10 +3023,11 @@ async function runImageAnalysis() {
     if (document.getElementById('imgModSearch') && document.getElementById('imgModSearch').checked) modules.push('Reverse Search');
     if (document.getElementById('imgModVision') && document.getElementById('imgModVision').checked) modules.push('CLIP Vision');
     if (document.getElementById('imgModDeepseek') && document.getElementById('imgModDeepseek').checked) modules.push('AI Scene Analysis');
+    if (document.getElementById('imgModVisionGeo') && document.getElementById('imgModVisionGeo').checked) modules.push('AI Vision Geo');
     showTaskLoading(
         'Image Analysis',
         fileInput.files.length + ' image(s) — ' + (modules.length > 0 ? modules.join(', ') : 'all modules'),
-        modules.length > 0 ? modules : ['Forensics', 'Stego', 'Search', 'Vision', 'AI Scene']
+        modules.length > 0 ? modules : ['Forensics', 'Stego', 'Search', 'Vision', 'AI Scene', 'Vision Geo']
     );
 
     try {
@@ -3043,6 +3046,8 @@ async function runImageAnalysis() {
         fd.append('mod_vision', modVision && modVision.checked ? '1' : '0');
         var modDeepseek = document.getElementById('imgModDeepseek');
         fd.append('mod_deepseek', modDeepseek && modDeepseek.checked ? '1' : '0');
+        var modVisionGeo = document.getElementById('imgModVisionGeo');
+        fd.append('mod_vision_geo', modVisionGeo && modVisionGeo.checked ? '1' : '0');
 
         var response = await fetchApi('/analyze-image', {
             method: 'POST',
@@ -3873,6 +3878,46 @@ function renderImageAnalysisSection(images) {
                 '<span class="ch-platform">(' + escapeHtml(img.deepseek_vision.model || 'deepseek-vision') + ')</span>' +
                 '<div class="deepseek-vision-desc" style="margin-top:0.4em;white-space:pre-wrap;font-size:0.92em;line-height:1.5;opacity:0.92">' +
                 escapeHtml(img.deepseek_vision.description) + '</div></div>';
+        }
+
+        // Vision Geolocation
+        if (img.vision_geo && img.vision_geo.geo_points && img.vision_geo.geo_points.length > 0) {
+            var vgClues = img.vision_geo.clues || {};
+            h += '<div class="img-analysis-row vision-geo-block">' +
+                '<strong>AI Vision Geolocation</strong> ' +
+                '<span class="wi-badge ch-badge-medium">' + img.vision_geo.geo_points.length + ' location(s)</span>';
+
+            if (vgClues.key_clues && vgClues.key_clues.length > 0) {
+                h += '<div style="margin-top:0.4em;font-size:0.88em;opacity:0.85"><em>Key clues:</em> ' +
+                    escapeHtml(vgClues.key_clues.join(' · ')) + '</div>';
+            }
+            if (vgClues.driving_side && vgClues.driving_side !== 'unknown') {
+                h += '<div style="font-size:0.85em;opacity:0.8">Driving side: ' + escapeHtml(vgClues.driving_side) + '</div>';
+            }
+            if (vgClues.language_detected) {
+                h += '<div style="font-size:0.85em;opacity:0.8">Language on signs: ' + escapeHtml(vgClues.language_detected) + '</div>';
+            }
+
+            h += '<div style="margin-top:0.3em">';
+            for (var vgi = 0; vgi < img.vision_geo.geo_points.length; vgi++) {
+                var vgp = img.vision_geo.geo_points[vgi];
+                var vgConf = vgp.confidence ? (vgp.confidence * 100).toFixed(0) + '%' : '?';
+                h += '<div style="font-size:0.88em;padding:0.15em 0">' +
+                    '<span class="wi-badge" style="font-size:0.8em">' + vgConf + '</span> ' +
+                    escapeHtml(vgp.label || 'Unknown') +
+                    ' <span style="opacity:0.6">(' + (vgp.lat || '?') + ', ' + (vgp.lon || '?') + ')</span>';
+                if (vgp.vision_reasoning) {
+                    h += '<div style="font-size:0.85em;opacity:0.7;margin-left:1em">' + escapeHtml(vgp.vision_reasoning) + '</div>';
+                }
+                h += '</div>';
+            }
+            h += '</div></div>';
+        } else if (img.vision_geo && img.vision_geo.clues && img.vision_geo.clues.key_clues) {
+            h += '<div class="img-analysis-row vision-geo-block">' +
+                '<strong>AI Vision Geolocation</strong> ' +
+                '<span class="wi-badge ch-badge-info">No locations resolved</span>' +
+                '<div style="margin-top:0.4em;font-size:0.88em;opacity:0.85"><em>Clues found:</em> ' +
+                escapeHtml(img.vision_geo.clues.key_clues.join(' · ')) + '</div></div>';
         }
 
         // Reverse search

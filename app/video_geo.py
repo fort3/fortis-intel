@@ -303,6 +303,10 @@ class VideoGeoExtractor:
         opencv_text_points = self._detect_text_regions(unique_frames, source_url, platform)
         geo_points.extend(opencv_text_points)
 
+        # 4. DeepSeek Vision geolocation — visual clue analysis of keyframes
+        vision_points = self._vision_geocode_frames(unique_frames, source_url, platform)
+        geo_points.extend(vision_points)
+
         return geo_points
 
     @staticmethod
@@ -391,6 +395,35 @@ class VideoGeoExtractor:
                 log.debug("OCR frame analysis failed: %s", exc)
 
         return geo_points
+
+    def _vision_geocode_frames(
+        self,
+        frames: list[VideoFrame],
+        source_url: str,
+        platform: str,
+    ) -> list[dict[str, Any]]:
+        """Use DeepSeek Vision to extract location clues from keyframes."""
+        try:
+            from app.vision_geolocation import extract_geo_from_frames
+            from app.image_deepseek_vision import DEEPSEEK_VISION_ENABLED
+            if not DEEPSEEK_VISION_ENABLED:
+                return []
+        except ImportError:
+            return []
+
+        frame_tuples = [
+            (f.image_bytes, f.frame_index, f.timestamp_sec)
+            for f in frames[:6]
+            if f.image_bytes
+        ]
+        if not frame_tuples:
+            return []
+
+        try:
+            return extract_geo_from_frames(frame_tuples, source_url, platform)
+        except Exception as exc:
+            log.warning("Vision geolocation failed for video frames: %s", exc)
+            return []
 
     def _detect_text_regions(
         self,

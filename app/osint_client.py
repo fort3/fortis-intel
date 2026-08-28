@@ -826,6 +826,28 @@ class OSINTClient:
                     except OSError:
                         pass
 
+        # Vision-based geolocation fallback — runs on images that had no EXIF
+        if image_bytes:
+            try:
+                from app.vision_geolocation import extract_geo_clues
+                from app.image_deepseek_vision import DEEPSEEK_VISION_ENABLED
+                if DEEPSEEK_VISION_ENABLED:
+                    exif_count = len([gp for gp in geo_points if gp.get("source") == "exif_upload"])
+                    for i, img_data in enumerate(image_bytes):
+                        result = extract_geo_clues(
+                            img_data,
+                            filename=filenames[i] if i < len(filenames) else None,
+                        )
+                        for vgp in result.get("geo_points", []):
+                            vgp["media_url"] = filenames[i] if i < len(filenames) else "upload"
+                            vgp["platform"] = "user_upload"
+                            geo_points.append(vgp)
+                    vision_count = len(geo_points) - exif_count
+                    if vision_count:
+                        log.info("Vision geolocation added %d points from uploaded images", vision_count)
+            except Exception as exc:
+                log.warning("Vision geolocation failed for uploads (non-fatal): %s", exc)
+
         return geo_points
 
     def _geocode_entity_locations(

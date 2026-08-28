@@ -1749,6 +1749,20 @@ def create_app():
                         img_result["vision"] = clip_analyze_image(file_bytes, fname)
                     if DEEPSEEK_VISION_ENABLED:
                         img_result["deepseek_vision"] = deepseek_describe_image(file_bytes, fname)
+                        try:
+                            from app.vision_geolocation import extract_geo_clues
+                            vgeo = extract_geo_clues(file_bytes, fname)
+                            img_result["vision_geo"] = vgeo
+                            if vgeo.get("geo_points"):
+                                existing_geo = findings_dict.get("geo_points", [])
+                                for vgp in vgeo["geo_points"]:
+                                    vgp["media_url"] = fname
+                                    vgp["platform"] = "user_upload"
+                                existing_geo.extend(vgeo["geo_points"])
+                                findings_dict["geo_points"] = existing_geo
+                                print(f"[VISION GEO] {fname}: {len(vgeo['geo_points'])} location(s) from visual clues")
+                        except Exception as vge:
+                            print(f"[WARN] Vision geo failed for {fname} (non-fatal): {vge}")
                     image_analysis_results.append(img_result)
                 except Exception as exc:
                     print(f"[WARN] Image analysis failed for {fname} (non-fatal): {exc}")
@@ -1992,6 +2006,12 @@ def create_app():
                     img_lines.append(f"  Safety: {ir['vision']['safety']['classification']} ({ir['vision']['safety'].get('score', 0):.0%})")
                 if ir.get("deepseek_vision", {}).get("description"):
                     img_lines.append(f"  AI Scene Analysis: {ir['deepseek_vision']['description']}")
+                if ir.get("vision_geo", {}).get("geo_points"):
+                    vgps = ir["vision_geo"]["geo_points"]
+                    img_lines.append(f"  Vision Geolocation: {len(vgps)} candidate location(s)")
+                    for vgp in vgps[:3]:
+                        img_lines.append(f"    - {vgp.get('label', '?')} ({vgp.get('lat', '?')}, {vgp.get('lon', '?')}) "
+                                         f"conf={vgp.get('confidence', 0):.0%} — {vgp.get('vision_reasoning', '')}")
                 if ir.get("reverse_search", {}).get("similar_cached"):
                     img_lines.append(f"  Similar images in cache: {len(ir['reverse_search']['similar_cached'])}")
                 if ir.get("reverse_search", {}).get("tineye_results"):
@@ -2337,6 +2357,7 @@ def create_app():
         run_search = IMAGE_SEARCH_ENABLED and request.form.get("mod_search", "1") == "1"
         run_vision = IMAGE_VISION_ENABLED and request.form.get("mod_vision", "1") == "1"
         run_deepseek = DEEPSEEK_VISION_ENABLED and request.form.get("mod_deepseek", "1") == "1"
+        run_vision_geo = DEEPSEEK_VISION_ENABLED and request.form.get("mod_vision_geo", "1") == "1"
 
         results = []
         for f in request.files.getlist("images"):
@@ -2358,6 +2379,12 @@ def create_app():
                     img_result["vision"] = clip_analyze_image(file_bytes, f.filename)
                 if run_deepseek:
                     img_result["deepseek_vision"] = deepseek_describe_image(file_bytes, f.filename)
+                if run_vision_geo:
+                    try:
+                        from app.vision_geolocation import extract_geo_clues
+                        img_result["vision_geo"] = extract_geo_clues(file_bytes, f.filename)
+                    except Exception as vge:
+                        print(f"[WARN] Vision geo failed for {f.filename}: {vge}")
                 results.append(img_result)
             except Exception as exc:
                 results.append({"filename": f.filename, "error": str(exc)})
@@ -2370,6 +2397,7 @@ def create_app():
                 "steganography": run_stego,
                 "vision": run_vision,
                 "deepseek_vision": run_deepseek,
+                "vision_geo": run_vision_geo,
             },
         })
 
@@ -2542,11 +2570,6 @@ def create_app():
                 return jsonify({"error": "No valid image data received"}), 400
 
             geo_results = extractor.extract_geo_from_images(image_bytes_list)
-            if not geo_results:
-                return jsonify({
-                    "error": "No GPS coordinates found in the uploaded images. "
-                    "Ensure the images contain EXIF geolocation data."
-                }), 400
 
             data_points = []
             for gp in geo_results:
@@ -2558,6 +2581,35 @@ def create_app():
                     "source": "exif",
                     "confidence": 0.95,
                 })
+
+            # Vision geolocation fallback when EXIF is absent
+            if not data_points:
+                try:
+                    from app.vision_geolocation import extract_geo_clues
+                    from app.image_deepseek_vision import DEEPSEEK_VISION_ENABLED
+                    if DEEPSEEK_VISION_ENABLED:
+                        for img_data in image_bytes_list:
+                            vr = extract_geo_clues(img_data)
+                            for vgp in vr.get("geo_points", []):
+                                data_points.append({
+                                    "type": "coordinates",
+                                    "lat": vgp["lat"],
+                                    "lon": vgp["lon"],
+                                    "label": vgp.get("label", "AI Vision Geo"),
+                                    "source": "vision_geolocation",
+                                    "confidence": vgp.get("confidence", 0.5),
+                                    "vision_reasoning": vgp.get("vision_reasoning", ""),
+                                })
+                        if data_points:
+                            print(f"[VISION GEO] Found {len(data_points)} location(s) via AI vision analysis")
+                except Exception as exc:
+                    print(f"[WARN] Vision geolocation failed (non-fatal): {exc}")
+
+            if not data_points:
+                return jsonify({
+                    "error": "No location data found. Images contain no EXIF GPS data "
+                    "and AI vision analysis could not identify a location."
+                }), 400
 
             data = {"data_points": data_points}
             subject_context = ""
