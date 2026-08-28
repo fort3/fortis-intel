@@ -3361,3 +3361,118 @@ small, .text-sm {
 .img-flags li {
   margin-bottom: 0.15rem;
 }
+
+/* ── Deanon / Attribution Sections ─────────────────────────────── */
+.breach-section,
+.username-enum-section,
+.email-accounts-section,
+.attribution-chain-section,
+.pivots-section {
+  margin-top: 1.5rem;
+  padding-top: 1rem;
+  border-top: 2px solid rgba(139, 92, 246, 0.3);
+}
+
+.breach-section .ch-header,
+.username-enum-section .ch-header,
+.email-accounts-section .ch-header,
+.attribution-chain-section .ch-header,
+.pivots-section .ch-header {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  cursor: pointer;
+  user-select: none;
+  padding: 0.5rem 0;
+}
+
+.breach-section .ch-header h4,
+.username-enum-section .ch-header h4,
+.email-accounts-section .ch-header h4,
+.attribution-chain-section .ch-header h4,
+.pivots-section .ch-header h4 {
+  color: #8b5cf6;
+  font-size: 1.1rem;
+  margin: 0;
+}
+.breach-section .ch-header h4 { color: #ef4444; }
+.attribution-chain-section .ch-header h4 { color: #22c55e; }
+
+.breach-section .ch-summary,
+.username-enum-section .ch-summary,
+.email-accounts-section .ch-summary,
+.attribution-chain-section .ch-summary,
+.pivots-section .ch-summary {
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+}
+
+.breach-section .ch-toggle,
+.username-enum-section .ch-toggle,
+.email-accounts-section .ch-toggle,
+.attribution-chain-section .ch-toggle,
+.pivots-section .ch-toggle {
+  margin-left: auto;
+  color: var(--text-muted);
+  transition: transform 0.2s;
+}
+
+.breach-section.ch-collapsed .ch-body,
+.username-enum-section.ch-collapsed .ch-body,
+.email-accounts-section.ch-collapsed .ch-body,
+.attribution-chain-section.ch-collapsed .ch-body,
+.pivots-section.ch-collapsed .ch-body {
+  display: none;
+}
+
+.breach-section.ch-collapsed .ch-toggle,
+.username-enum-section.ch-collapsed .ch-toggle,
+.email-accounts-section.ch-collapsed .ch-toggle,
+.attribution-chain-section.ch-collapsed .ch-toggle,
+.pivots-section.ch-collapsed .ch-toggle {
+  transform: rotate(-90deg);
+}
+
+/* Attribution chain visualization */
+.attribution-chain-viz {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  flex-wrap: wrap;
+  padding: 1rem 0;
+  overflow-x: auto;
+}
+.attr-chain-node {
+  display: flex;
+  align-items: center;
+  gap: 0;
+}
+.attr-node-label {
+  background: rgba(139, 92, 246, 0.15);
+  color: #c4b5fd;
+  border: 1px solid rgba(139, 92, 246, 0.4);
+  border-radius: 6px;
+  padding: 0.4rem 0.8rem;
+  font-size: 0.85rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.attr-chain-edge {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 0 0.3rem;
+  border-top: 2px solid #6b7280;
+  min-width: 80px;
+  position: relative;
+  margin: 0 0.2rem;
+}
+.attr-edge-label {
+  font-size: 0.7rem;
+  color: var(--text-secondary);
+  margin-top: 0.2rem;
+}
+.attr-edge-score {
+  font-size: 0.75rem;
+  font-weight: 700;
+}

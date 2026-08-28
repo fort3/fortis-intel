@@ -38,6 +38,12 @@ CHAIN_DESCRIPTIONS = {
     "geo_features": "Country visual feature database — bollards, sign systems, road markings, license plates for 30+ countries",
     "overpass_client": "OpenStreetMap Overpass API — spatial context queries for nearby streets, POIs, landmarks, admin boundaries",
     "url_endpoint_fuzzing": "URL endpoint fuzzing for domain recon — probes common paths to discover exposed endpoints (elevated authorization required)",
+    # Attribution and deanonymization modules
+    "breach_client": "HaveIBeenPwned + LeakCheck credential exposure lookup — breach history, paste mentions, password reuse detection",
+    "username_enum": "Broad username enumeration — Sherlock-style HTTP probing across 80+ platforms (developer, gaming, security, social, commerce)",
+    "email_accounts": "Email-to-accounts resolution — discovers which services an email is registered on (Holehe-style service detection)",
+    "recursive_pivot": "Recursive pivot engine — auto-investigates discovered emails, domains, and usernames from profile data (depth-limited, 2-hop max)",
+    "attribution_chain": "Attribution chain scoring — confidence-scored identity links from seed to discovered identities (CONFIRMED/STRONG/MODERATE/CIRCUMSTANTIAL)",
 }
 
 ENDPOINT_REQUIRED_KEYS = {

@@ -838,3 +838,177 @@ def get_cached_graph(key: str) -> nx.DiGraph | None:
         del _graph_cache[key]
         return None
     return graph
+
+
+# ── Attribution Chain ────────────────────────────────────────────────
+
+EVIDENCE_STRENGTH = {
+    "same_password": {"score": 0.95, "label": "CONFIRMED", "description": "Password reuse across accounts"},
+    "same_unique_avatar": {"score": 0.90, "label": "CONFIRMED", "description": "Unique avatar image match"},
+    "same_email_verified": {"score": 0.90, "label": "CONFIRMED", "description": "Same email on multiple services"},
+    "same_real_name": {"score": 0.80, "label": "STRONG", "description": "Real name match across platforms"},
+    "same_username": {"score": 0.75, "label": "STRONG", "description": "Same username across platforms"},
+    "linked_domain_c2": {"score": 0.85, "label": "STRONG", "description": "Domain listed in profile matches known infrastructure"},
+    "breach_credential_link": {"score": 0.85, "label": "STRONG", "description": "Leaked credential links accounts"},
+    "email_from_profile": {"score": 0.70, "label": "STRONG", "description": "Email found in profile bio/data"},
+    "co_located_ip": {"score": 0.60, "label": "MODERATE", "description": "Shared hosting IP"},
+    "shared_connection": {"score": 0.50, "label": "MODERATE", "description": "Shared social connection"},
+    "timing_correlation": {"score": 0.45, "label": "CIRCUMSTANTIAL", "description": "Activity timing correlation"},
+    "stylistic_match": {"score": 0.40, "label": "CIRCUMSTANTIAL", "description": "Writing style similarity"},
+    "platform_presence": {"score": 0.30, "label": "CIRCUMSTANTIAL", "description": "Present on same platform"},
+}
+
+
+def build_attribution_chain(
+    graph: nx.DiGraph,
+    seed_identifier: str,
+    findings_metadata: dict | None = None,
+) -> dict:
+    """Build a scored attribution chain from the entity graph.
+
+    Traces connections from the seed identifier through the graph,
+    scoring each link based on evidence type. Returns a linear chain
+    with confidence scores — the kind of diagram Flare produced for
+    the TeamPCP unmasking.
+
+    Args:
+        graph: The entity graph.
+        seed_identifier: The starting identifier.
+        findings_metadata: Investigation metadata containing breach/pivot data.
+
+    Returns:
+        Dict with chain (list of links), overall_confidence, and strength.
+    """
+    if not graph or graph.number_of_nodes() == 0:
+        return {"chain": [], "overall_confidence": 0, "strength": "NONE"}
+
+    metadata = findings_metadata or {}
+    chain: list[dict] = []
+    visited: set[str] = set()
+
+    # Find the seed node
+    seed_nid = None
+    for nid, data in graph.nodes(data=True):
+        label = data.get("label", "")
+        if label.lower() == seed_identifier.lower():
+            seed_nid = nid
+            break
+    if not seed_nid:
+        seed_nid = _make_node_id("unknown", seed_identifier)
+
+    chain.append({
+        "step": 0,
+        "type": "SEED",
+        "identifier": seed_identifier,
+        "node_id": seed_nid,
+        "evidence_type": "seed",
+        "strength": "CONFIRMED",
+        "confidence": 1.0,
+        "description": f"Investigation seed: {seed_identifier}",
+    })
+    visited.add(seed_nid)
+
+    # Traverse outgoing edges sorted by evidence strength
+    def _traverse(nid: str, depth: int):
+        if depth > 6:
+            return
+        for _, target, edge_data in sorted(
+            graph.edges(nid, data=True),
+            key=lambda e: -EVIDENCE_STRENGTH.get(
+                e[2].get("evidence_type", "platform_presence"), {}
+            ).get("score", 0.3),
+        ):
+            if target in visited:
+                continue
+            visited.add(target)
+            target_data = graph.nodes.get(target, {})
+            rel = edge_data.get("relationship", "associated_with")
+            ev_type = edge_data.get("evidence_type", _infer_evidence_type(rel, target_data))
+            ev_info = EVIDENCE_STRENGTH.get(ev_type, EVIDENCE_STRENGTH["platform_presence"])
+
+            chain.append({
+                "step": len(chain),
+                "type": target_data.get("type", "unknown").upper(),
+                "identifier": target_data.get("label", target),
+                "node_id": target,
+                "evidence_type": ev_type,
+                "strength": ev_info["label"],
+                "confidence": ev_info["score"],
+                "relationship": rel,
+                "description": ev_info["description"],
+            })
+            _traverse(target, depth + 1)
+
+    _traverse(seed_nid, 0)
+
+    # Enrich with breach/pivot data if available
+    breach_pivots = metadata.get("pivot_breaches", {})
+    for email, breach_data in breach_pivots.items():
+        if breach_data.get("password_exposed"):
+            chain.append({
+                "step": len(chain),
+                "type": "CREDENTIAL",
+                "identifier": email,
+                "node_id": _make_node_id("email", email),
+                "evidence_type": "breach_credential_link",
+                "strength": "STRONG",
+                "confidence": 0.85,
+                "relationship": "credential_link",
+                "description": f"Leaked credentials in {breach_data.get('total_breaches', '?')} breach(es)",
+            })
+
+    # Calculate overall confidence
+    if len(chain) <= 1:
+        overall = 0.0
+    else:
+        link_scores = [link["confidence"] for link in chain[1:]]
+        overall = 1.0
+        for s in link_scores:
+            overall *= s
+        overall = round(overall, 3)
+
+    # Determine overall strength
+    if overall >= 0.7:
+        strength = "HIGH CONFIDENCE"
+    elif overall >= 0.4:
+        strength = "MODERATE CONFIDENCE"
+    elif overall >= 0.15:
+        strength = "LOW CONFIDENCE"
+    else:
+        strength = "INSUFFICIENT"
+
+    return {
+        "chain": chain,
+        "chain_length": len(chain),
+        "overall_confidence": overall,
+        "strength": strength,
+        "identities_discovered": len([c for c in chain if c["type"] in ("PERSON", "IDENTITY", "CREDENTIAL")]),
+    }
+
+
+def _infer_evidence_type(relationship: str, target_data: dict) -> str:
+    """Infer evidence type from relationship and target node data."""
+    rel_map = {
+        "alias_of": "same_username",
+        "same_email": "same_email_verified",
+        "credential_link": "breach_credential_link",
+        "avatar_match": "same_unique_avatar",
+    }
+    if relationship in rel_map:
+        return rel_map[relationship]
+
+    target_type = target_data.get("type", "")
+    source_list = target_data.get("source", "")
+
+    if "breach" in source_list or "pivot_breach" in source_list:
+        return "breach_credential_link"
+    if "username_enum" in source_list:
+        return "same_username"
+    if "email_accounts" in source_list or "pivot_email_accounts" in source_list:
+        return "email_from_profile"
+    if "pivot_whois" in source_list:
+        return "linked_domain_c2"
+    if target_type == "domain":
+        return "linked_domain_c2"
+
+    return "platform_presence"

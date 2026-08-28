@@ -93,6 +93,7 @@ from app.intel_graph import (
     query_shared_connections,
     query_location_clusters,
     query_activity_overlap,
+    build_attribution_chain,
 )
 from app.forge import gated_invoke
 from app.forge.config import FORGE_ENABLED
@@ -1884,6 +1885,41 @@ def create_app():
         except Exception as exc:
             print(f"[WARN] Relationship persistence failed (non-fatal): {exc}")
 
+        # ── Attribution chain scoring ─────────────────────────────
+        findings_metadata = findings_dict.get("metadata", {})
+        attribution_chain = {}
+        try:
+            if entity_graph and entity_graph.number_of_nodes() > 1:
+                attribution_chain = build_attribution_chain(
+                    entity_graph, clean_id, findings_metadata,
+                )
+                if attribution_chain.get("chain_length", 0) > 1:
+                    print(f"[ATTRIBUTION] Chain length={attribution_chain['chain_length']}, "
+                          f"confidence={attribution_chain['overall_confidence']}, "
+                          f"strength={attribution_chain['strength']}")
+        except Exception as exc:
+            print(f"[WARN] Attribution chain failed (non-fatal): {exc}")
+
+        # ── Breach / enum context for LLM ─────────────────────────
+        deanon_context = ""
+        try:
+            if findings_metadata.get("breach_check"):
+                from app.breach_client import breach_summary_text
+                deanon_context += breach_summary_text(findings_metadata["breach_check"]) + "\n"
+            if findings_metadata.get("username_enum"):
+                from app.username_enum import enum_summary_text
+                deanon_context += enum_summary_text(findings_metadata["username_enum"]) + "\n"
+            if findings_metadata.get("email_accounts"):
+                from app.email_accounts import accounts_summary_text
+                deanon_context += accounts_summary_text(findings_metadata["email_accounts"]) + "\n"
+            for piv_email, piv_breach in findings_metadata.get("pivot_breaches", {}).items():
+                from app.breach_client import breach_summary_text
+                deanon_context += breach_summary_text(piv_breach) + "\n"
+            if deanon_context.strip():
+                entity_graph_ctx += "\n\nDEANONYMIZATION INTELLIGENCE:\n" + deanon_context.strip()
+        except Exception as exc:
+            print(f"[WARN] Deanon context build failed (non-fatal): {exc}")
+
         # Build map data — ONLY from accepted geo points.
         # Run triangulation first to identify spatial outliers via DBSCAN,
         # then build markers from the cluster points only.
@@ -2341,6 +2377,11 @@ def create_app():
             "entity_count": len(entities_data),
             "source_count": len(findings_dict.get("platforms_queried", [])),
             "metadata": findings_dict.get("metadata", {}),
+            "attribution_chain": attribution_chain if attribution_chain.get("chain_length", 0) > 1 else None,
+            "breach_check": findings_metadata.get("breach_check"),
+            "username_enum": findings_metadata.get("username_enum"),
+            "email_accounts": findings_metadata.get("email_accounts"),
+            "recursive_pivots": findings_metadata.get("recursive_pivots"),
         }
         if image_analysis_results:
             safe_results = []

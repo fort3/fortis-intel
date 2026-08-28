@@ -1883,6 +1883,21 @@ function renderAnalysis(data) {
         if (data.image_analysis && data.image_analysis.length > 0) {
             html += renderImageAnalysisSection(data.image_analysis);
         }
+        if (data.breach_check) {
+            html += renderBreachCheckSection(data.breach_check);
+        }
+        if (data.username_enum) {
+            html += renderUsernameEnumSection(data.username_enum);
+        }
+        if (data.email_accounts) {
+            html += renderEmailAccountsSection(data.email_accounts);
+        }
+        if (data.attribution_chain) {
+            html += renderAttributionChainSection(data.attribution_chain);
+        }
+        if (data.recursive_pivots) {
+            html += renderRecursivePivotsSection(data.recursive_pivots);
+        }
 
         content.innerHTML = html;
     }
@@ -4511,5 +4526,255 @@ function renderIpIntelSection(meta) {
     }
 
     h += '</div>';
+    return h;
+}
+
+// ── Breach / Credential Exposure Section ──────────────────────────
+function renderBreachCheckSection(bc) {
+    if (!bc) return '';
+    var breaches = bc.breaches || [];
+    var pastes = bc.pastes || [];
+    var dataClasses = bc.data_classes_exposed || [];
+    var pwExposed = bc.password_exposed;
+    var reuseRisk = bc.credential_reuse_risk;
+
+    var h = '<div class="result-section breach-section">' +
+        '<div class="ch-header" onclick="this.parentElement.classList.toggle(\'ch-collapsed\')">' +
+        '<h4>Credential Exposure</h4>' +
+        '<span class="ch-summary">' + breaches.length + ' breaches &middot; ' +
+        pastes.length + ' pastes' +
+        (pwExposed ? ' &middot; <span style="color:#ef4444">PASSWORD EXPOSED</span>' : '') +
+        '</span>' +
+        '<span class="ch-toggle">&#9660;</span></div>' +
+        '<div class="ch-body">';
+
+    if (pwExposed || reuseRisk) {
+        h += '<div class="intel-card" style="border-left:3px solid #ef4444">';
+        if (pwExposed) h += '<p style="color:#ef4444;font-weight:600">Password found in breach data</p>';
+        if (reuseRisk) h += '<p style="color:#f97316;font-weight:600">Credential reuse risk detected</p>';
+        h += '</div>';
+    }
+
+    if (breaches.length) {
+        h += '<div class="intel-card"><h5>Breached Services (' + breaches.length + ')</h5>' +
+            '<table class="intel-table"><tr><th>Service</th><th>Date</th><th>Data Exposed</th></tr>';
+        breaches.slice(0, 25).forEach(function (b) {
+            h += '<tr><td>' + escapeHtml(b.Name || b.name || '?') + '</td>' +
+                '<td>' + escapeHtml(b.BreachDate || b.date || '') + '</td>' +
+                '<td style="font-size:0.85em">' +
+                (b.DataClasses || b.data_classes || []).map(escapeHtml).join(', ') +
+                '</td></tr>';
+        });
+        if (breaches.length > 25) h += '<tr><td colspan="3"><em>... and ' + (breaches.length - 25) + ' more</em></td></tr>';
+        h += '</table></div>';
+    }
+
+    if (dataClasses.length) {
+        h += '<div class="intel-card"><h5>All Data Classes Exposed</h5>' +
+            '<div style="display:flex;flex-wrap:wrap;gap:0.3em">';
+        dataClasses.forEach(function (dc) {
+            var color = dc.toLowerCase().indexOf('password') >= 0 ? '#ef4444' :
+                dc.toLowerCase().indexOf('email') >= 0 ? '#3b82f6' : '#6b7280';
+            h += '<span class="wi-badge" style="background:' + color + '22;color:' + color +
+                ';border:1px solid ' + color + '44">' + escapeHtml(dc) + '</span>';
+        });
+        h += '</div></div>';
+    }
+
+    if (pastes.length) {
+        h += '<div class="intel-card"><h5>Paste Mentions (' + pastes.length + ')</h5>' +
+            '<table class="intel-table"><tr><th>Source</th><th>Title</th><th>Date</th></tr>';
+        pastes.slice(0, 10).forEach(function (p) {
+            h += '<tr><td>' + escapeHtml(p.Source || '?') + '</td>' +
+                '<td>' + escapeHtml(p.Title || '(untitled)') + '</td>' +
+                '<td>' + escapeHtml(p.Date || '') + '</td></tr>';
+        });
+        h += '</table></div>';
+    }
+
+    h += '</div></div>';
+    return h;
+}
+
+// ── Username Enumeration Section ──────────────────────────────────
+function renderUsernameEnumSection(ue) {
+    if (!ue) return '';
+    var found = ue.found || [];
+    var total = ue.total_checked || 0;
+
+    if (!found.length) return '';
+
+    var cats = {};
+    found.forEach(function (f) {
+        var cat = f.category || 'other';
+        if (!cats[cat]) cats[cat] = [];
+        cats[cat].push(f);
+    });
+
+    var catColors = {
+        developer: '#22c55e', security: '#ef4444', social: '#8b5cf6',
+        gaming: '#f59e0b', media: '#d946ef', commerce: '#f97316',
+        community: '#3b82f6', professional: '#06b6d4', other: '#6b7280'
+    };
+
+    var h = '<div class="result-section username-enum-section">' +
+        '<div class="ch-header" onclick="this.parentElement.classList.toggle(\'ch-collapsed\')">' +
+        '<h4>Username Enumeration</h4>' +
+        '<span class="ch-summary">' + found.length + ' / ' + total + ' platforms matched</span>' +
+        '<span class="ch-toggle">&#9660;</span></div>' +
+        '<div class="ch-body">';
+
+    var catKeys = Object.keys(cats).sort(function (a, b) {
+        return cats[b].length - cats[a].length;
+    });
+    catKeys.forEach(function (cat) {
+        var items = cats[cat];
+        var color = catColors[cat] || '#6b7280';
+        h += '<div class="intel-card"><h5 style="color:' + color + '">' +
+            cat.charAt(0).toUpperCase() + cat.slice(1) +
+            ' (' + items.length + ')</h5>' +
+            '<div style="display:flex;flex-wrap:wrap;gap:0.4em">';
+        items.forEach(function (item) {
+            var url = item.url || '#';
+            h += '<a href="' + escapeHtml(url) + '" target="_blank" rel="noopener" ' +
+                'class="wi-badge" style="background:' + color + '18;color:' + color +
+                ';border:1px solid ' + color + '33;text-decoration:none">' +
+                escapeHtml(item.site || item.platform || '?') + '</a>';
+        });
+        h += '</div></div>';
+    });
+
+    h += '</div></div>';
+    return h;
+}
+
+// ── Email-to-Accounts Section ─────────────────────────────────────
+function renderEmailAccountsSection(ea) {
+    if (!ea) return '';
+    var found = ea.found || [];
+    if (!found.length) return '';
+
+    var h = '<div class="result-section email-accounts-section">' +
+        '<div class="ch-header" onclick="this.parentElement.classList.toggle(\'ch-collapsed\')">' +
+        '<h4>Email Account Registrations</h4>' +
+        '<span class="ch-summary">' + found.length + ' services detected for ' +
+        escapeHtml(ea.email || '') + '</span>' +
+        '<span class="ch-toggle">&#9660;</span></div>' +
+        '<div class="ch-body">' +
+        '<div class="intel-card"><div style="display:flex;flex-wrap:wrap;gap:0.4em">';
+
+    found.forEach(function (svc) {
+        var name = svc.service || svc.name || svc;
+        h += '<span class="wi-badge" style="background:#8b5cf622;color:#8b5cf6;' +
+            'border:1px solid #8b5cf633">' + escapeHtml(name) + '</span>';
+    });
+
+    h += '</div></div></div></div>';
+    return h;
+}
+
+// ── Attribution Chain Section ─────────────────────────────────────
+function renderAttributionChainSection(ac) {
+    if (!ac || !ac.chain || ac.chain.length < 2) return '';
+
+    var strengthColors = {
+        HIGH: '#22c55e', MODERATE: '#f59e0b', LOW: '#f97316', INSUFFICIENT: '#ef4444'
+    };
+    var color = strengthColors[ac.strength] || '#6b7280';
+
+    var h = '<div class="result-section attribution-chain-section">' +
+        '<div class="ch-header" onclick="this.parentElement.classList.toggle(\'ch-collapsed\')">' +
+        '<h4>Attribution Chain</h4>' +
+        '<span class="ch-summary">' + ac.chain_length + ' links &middot; ' +
+        '<span style="color:' + color + ';font-weight:600">' +
+        escapeHtml(ac.strength) + '</span> &middot; ' +
+        ((ac.overall_confidence || 0) * 100).toFixed(0) + '% confidence</span>' +
+        '<span class="ch-toggle">&#9660;</span></div>' +
+        '<div class="ch-body">';
+
+    h += '<div class="attribution-chain-viz">';
+    ac.chain.forEach(function (link, i) {
+        var linkScore = link.score || link.confidence || 0;
+        var linkColor = linkScore >= 0.7 ? '#22c55e' : linkScore >= 0.4 ? '#f59e0b' : '#ef4444';
+
+        h += '<div class="attr-chain-node">' +
+            '<div class="attr-node-label">' + escapeHtml(link.from || link.source || '?') + '</div>';
+
+        if (i < ac.chain.length - 1) {
+            h += '<div class="attr-chain-edge" style="border-color:' + linkColor + '">' +
+                '<span class="attr-edge-label">' +
+                escapeHtml(link.relationship || link.edge_type || 'linked') +
+                '</span>' +
+                '<span class="attr-edge-score" style="color:' + linkColor + '">' +
+                (linkScore * 100).toFixed(0) + '%</span>' +
+                '</div>';
+        }
+        h += '</div>';
+    });
+
+    var lastLink = ac.chain[ac.chain.length - 1];
+    if (lastLink && (lastLink.to || lastLink.target)) {
+        h += '<div class="attr-chain-node">' +
+            '<div class="attr-node-label">' +
+            escapeHtml(lastLink.to || lastLink.target || '') +
+            '</div></div>';
+    }
+    h += '</div>';
+
+    h += '<div class="intel-card" style="margin-top:0.6em">' +
+        '<table class="intel-table"><tr><th>From</th><th>Link</th><th>To</th><th>Evidence</th><th>Score</th></tr>';
+    ac.chain.forEach(function (link) {
+        var s = link.score || link.confidence || 0;
+        var sc = s >= 0.7 ? '#22c55e' : s >= 0.4 ? '#f59e0b' : '#ef4444';
+        h += '<tr><td>' + escapeHtml(link.from || link.source || '') + '</td>' +
+            '<td>' + escapeHtml(link.relationship || link.edge_type || '') + '</td>' +
+            '<td>' + escapeHtml(link.to || link.target || '') + '</td>' +
+            '<td>' + escapeHtml(link.evidence_type || '') + '</td>' +
+            '<td style="color:' + sc + ';font-weight:600">' + (s * 100).toFixed(0) + '%</td></tr>';
+    });
+    h += '</table></div>';
+
+    h += '</div></div>';
+    return h;
+}
+
+// ── Recursive Pivots Section ──────────────────────────────────────
+function renderRecursivePivotsSection(rp) {
+    if (!rp) return '';
+    var emails = rp.emails_discovered || [];
+    var domains = rp.domains_discovered || [];
+    var hops = rp.hops_completed || 0;
+
+    if (!emails.length && !domains.length) return '';
+
+    var h = '<div class="result-section pivots-section">' +
+        '<div class="ch-header" onclick="this.parentElement.classList.toggle(\'ch-collapsed\')">' +
+        '<h4>Recursive Pivot Results</h4>' +
+        '<span class="ch-summary">' + hops + ' hops &middot; ' +
+        emails.length + ' emails &middot; ' + domains.length + ' domains</span>' +
+        '<span class="ch-toggle">&#9660;</span></div>' +
+        '<div class="ch-body">';
+
+    if (emails.length) {
+        h += '<div class="intel-card"><h5>Discovered Emails</h5>' +
+            '<div style="display:flex;flex-wrap:wrap;gap:0.4em">';
+        emails.forEach(function (e) {
+            h += '<span class="wi-badge" style="background:#3b82f622;color:#3b82f6;' +
+                'border:1px solid #3b82f633">' + escapeHtml(e) + '</span>';
+        });
+        h += '</div></div>';
+    }
+
+    if (domains.length) {
+        h += '<div class="intel-card"><h5>Discovered Domains</h5>' +
+            '<div style="display:flex;flex-wrap:wrap;gap:0.4em">';
+        domains.forEach(function (d) {
+            h += '<span class="wi-badge" style="background:#f9731622;color:#f97316;' +
+                'border:1px solid #f9731633">' + escapeHtml(d) + '</span>';
+        });
+        h += '</div></div>';
+    }
+
+    h += '</div></div>';
     return h;
 }

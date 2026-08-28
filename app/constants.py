@@ -100,7 +100,7 @@ SCENARIO_TYPES = {
     "influence_analysis": "Reach, engagement patterns, influence networks",
 }
 
-MONITOR_TYPES = ["keyword", "username", "hashtag", "location_radius"]
+MONITOR_TYPES = ["keyword", "username", "hashtag", "location_radius", "telegram_channel"]
 
 MONITOR_INTERVALS = [5, 15, 30, 60, 240]
 
@@ -118,6 +118,9 @@ ENTITY_NODE_TYPES = {
     "domain": {"color": "#6b3fa0", "label": "Domain"},
     "event": {"color": "#f59e0b", "label": "Event"},
     "media": {"color": "#d946ef", "label": "Media"},
+    "email": {"color": "#3b82f6", "label": "Email"},
+    "credential": {"color": "#ef4444", "label": "Credential"},
+    "infrastructure": {"color": "#f97316", "label": "Infrastructure"},
 }
 
 ENTITY_EDGE_TYPES = [
@@ -128,6 +131,10 @@ ENTITY_EDGE_TYPES = [
     "alias_of",
     "member_of",
     "mentioned_by",
+    "credential_link",
+    "registered_on",
+    "avatar_match",
+    "same_email",
 ]
 
 MAX_UPLOAD_SIZE_MB = 50

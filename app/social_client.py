@@ -2425,6 +2425,10 @@ class SocialClient:
         if monitor_type == "username":
             return self.search_username(query, platforms=platforms)
 
+        if monitor_type == "telegram_channel":
+            since = date_from or None
+            return self._telegram_get_user_posts(query, limit=50, since=since)
+
         results = self.search_content(
             query,
             platforms=platforms,

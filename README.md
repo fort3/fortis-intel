@@ -20,7 +20,8 @@ An OSINT-driven intelligence and analysis platform for open-source intelligence 
 - **Separated LLM Pipeline** -- RAG (FAISS vectorstore) for document Q&A only; Knowledge Graph (NetworkX entity relationships) for OSINT multi-source enrichment -- no token waste from parallel injection
 - **RAG Knowledge Base** -- Upload PDF and Markdown reports, index them with FAISS vectorstore, and ask natural-language questions with automatic KB feedback from previous analyses
 - **Analytical Scenarios** -- Generate pattern-of-life, network mapping, location prediction, and influence analysis from collected OSINT data with entity graph context
-- **Feed Monitoring** -- Set up keyword, username, and hashtag monitors with Celery background tasks, automatic enrichment, and civilian harm scoring on new findings
+- **Deanonymization Pipeline** -- Flare-inspired attribution chain: HaveIBeenPwned + LeakCheck credential exposure lookup, Sherlock-style username enumeration across 80+ platforms, Holehe-style email-to-accounts resolution, recursive pivot engine (auto-investigates discovered identifiers to 2-hop depth), and confidence-scored attribution chains (CONFIRMED/STRONG/MODERATE/CIRCUMSTANTIAL)
+- **Feed Monitoring** -- Set up keyword, username, hashtag, and Telegram channel monitors with Celery background tasks, automatic enrichment, and civilian harm scoring on new findings
 - **GDPR & NIST CSF 2.0 Compliance** -- Tiered data retention, right to erasure (Art. 17), GDPR Art. 30 processing records, NIST CSF function mapping, system credential leak detection (subject PII is never blocked)
 - **ForgeChain Governance** -- Every LLM request passes through a 3-verifier consensus gate (rule, safety, consistency) before execution
 - **Analysis Integrity Framework** -- Nine-layer accuracy system: output grounding verification (semantic similarity check that report claims are present in source data), NATO Admiralty source reliability grading (A-F per source), RAG contamination guard (prevents hallucination feedback loops), competing hypotheses generation (ACH), claim decomposition (CONFIRMED/INFERRED/ASSUMED tagging), self-consistency checking (multi-run stability analysis), provenance trail (chain-of-custody from raw data to report), bias audit (source concentration, confirmation pattern, temporal skew, coverage gaps, single-source claims), and multilingual NER (xx_ent_wiki_sm with language-aware confidence)
@@ -47,6 +48,7 @@ An OSINT-driven intelligence and analysis platform for open-source intelligence 
 | NLP | spaCy (NER), langdetect (language detection) |
 | Civilian Harm | sentence-transformers (paraphrase-multilingual-MiniLM-L12-v2), Bellingcat methodology |
 | Image OSINT | Pillow (ELA/forensics), imagehash (perceptual hashing), numpy (steganography), CLIP (zero-shot classification via sentence-transformers), DeepSeek Vision API (contextual scene analysis) |
+| Deanonymization | HaveIBeenPwned v3 + LeakCheck (breach lookup), HTTP username enumeration (80+ sites), Holehe-style email-to-accounts, recursive pivot engine, attribution chain scoring |
 | Domain/IP Intel | python-whois, dnspython, HackerTarget API (DNSdumpster, reverse DNS/IP), Wayback Machine CDX API |
 | Web Intelligence | duckduckgo-search (Google dork queries, no API key required) |
 | Geolocation | geopy, MaxMind GeoLite2, DBSCAN clustering |
@@ -542,6 +544,25 @@ Configure either Slack, email, or both. Feed monitor findings will be sent as al
 
 The classifier uses semantic similarity against 15 civilian harm concepts (Bellingcat's strongest predictive feature) combined with multilingual conflict keyword density (English, Ukrainian, Russian, Arabic, French). Scores are computed for all posts and web mentions during investigations, batch runs, scenarios, Q&A, and feed monitor polls. The model (~400MB) downloads automatically on first use. No API key required.
 
+### Deanonymization Pipeline Settings
+
+| Env Variable | Description | Default |
+|---|---|---|
+| `BREACH_ENABLED` | Master toggle for breach/credential exposure lookup | `true` |
+| `HIBP_API_KEY` | HaveIBeenPwned v3 API key (paid, $3.50/month) | (none) |
+| `LEAKCHECK_API_KEY` | LeakCheck API key (secondary breach source) | (none) |
+| `USERNAME_ENUM_ENABLED` | Master toggle for username enumeration across 80+ platforms | `true` |
+| `USERNAME_ENUM_TIMEOUT` | Per-site HTTP probe timeout in seconds | `8` |
+| `USERNAME_ENUM_WORKERS` | Concurrent worker threads for username probing | `20` |
+| `EMAIL_ACCOUNTS_ENABLED` | Master toggle for email-to-accounts resolution | `true` |
+| `EMAIL_ACCOUNTS_TIMEOUT` | Per-service probe timeout in seconds | `10` |
+
+The breach client queries HaveIBeenPwned v3 (breached accounts, paste mentions, password exposure) and LeakCheck as a secondary source. Without API keys, breach lookup is skipped gracefully. Username enumeration and email-to-accounts resolution require no API keys -- they use direct HTTP probing.
+
+The recursive pivot engine runs automatically when new identifiers (emails, domains, usernames) are discovered in profile bios and URLs. It is depth-limited to 2 hops with a maximum of 5 pivots per hop to prevent runaway investigations.
+
+Attribution chain scoring traverses the entity graph from the seed identifier outward, scoring each link based on evidence type (credential reuse, same email, platform registration, avatar match, etc.). Overall confidence is the product of individual link scores. Chain strength is classified as HIGH (>0.60), MODERATE (>0.35), LOW (>0.15), or INSUFFICIENT.
+
 ### Analysis Integrity Settings
 
 | Env Variable | Description | Default |
@@ -625,7 +646,7 @@ Investigation depth:
 - **Standard** -- API + web scraping (social media, WHOIS, DNS, DNSdumpster, news)
 - **Deep** -- All sources including metadata analysis, entity extraction, and full DNSdumpster enumeration
 
-Results include a structured report with civilian harm assessment, entity relationship graph with LLM-aware context, interactive map, domain/IP intel cards, Web Intelligence section, civilian harm distribution analysis, and DeepSeek Vision AI scene analysis for any uploaded images.
+Results include a structured report with civilian harm assessment, entity relationship graph with LLM-aware context, interactive map, domain/IP intel cards, Web Intelligence section, civilian harm distribution analysis, DeepSeek Vision AI scene analysis for any uploaded images, and deanonymization intelligence (credential exposure, username enumeration across 80+ platforms, email account registrations, recursive pivot discoveries, and attribution chain visualization with confidence scoring).
 
 **Web Intelligence** (enabled by default, toggle per investigation):
 
@@ -654,7 +675,7 @@ Ask natural-language questions about uploaded reports and previous analysis resu
 
 ### Feed Monitor
 
-Set up automated monitors for keywords, usernames, or hashtags across configured platforms. Celery beat polls at configurable intervals (5, 15, 30, 60, or 240 minutes). New findings appear in the Watch panel for analyst review (approve or dismiss).
+Set up automated monitors for keywords, usernames, hashtags, or Telegram channels across configured platforms. Celery beat polls at configurable intervals (5, 15, 30, 60, or 240 minutes). New findings appear in the Watch panel for analyst review (approve or dismiss).
 
 ### Scenarios
 
@@ -811,6 +832,9 @@ The platform is designed to run with minimal configuration. Core features that w
 - Image forensics (ELA, clone detection, metadata analysis) via Pillow (no API key needed)
 - Steganography detection (LSB, RS analysis, sample pairs) via Pillow + numpy (no API key needed)
 - CLIP zero-shot image classification via sentence-transformers (no API key needed, model downloads automatically)
+- Username enumeration across 80+ platforms via HTTP probing (no API key needed)
+- Email-to-accounts resolution via direct service probing (no API key needed)
+- Attribution chain scoring from entity graph data (no API key needed)
 - DeepSeek Vision AI scene analysis (uses existing `DEEPSEEK_API_KEY` -- no additional key needed)
 - AI Vision geolocation -- identifies locations from visual clues when EXIF is absent (uses existing `DEEPSEEK_API_KEY`)
 - GeoCLIP local GPS prediction -- predicts coordinates from images without any API (requires `pip install geoclip`, model downloads automatically)
@@ -1077,6 +1101,9 @@ Fortis-Intelligence-Hub/
 |   |-- dork_sanitizer.py         # Query/result sanitization + anti-exfiltration
 |   |-- wayback_client.py         # Wayback Machine CDX API client (domain history, subdomains)
 |   |-- bias_audit.py             # Cognitive bias detection (5 checks)
+|   |-- breach_client.py           # HaveIBeenPwned + LeakCheck credential exposure
+|   |-- username_enum.py          # Sherlock-style username enumeration (80+ sites)
+|   |-- email_accounts.py         # Holehe-style email-to-accounts resolution
 |   |-- civilian_harm.py          # Bellingcat-inspired civilian harm classifier
 |   |-- compliance.py            # GDPR/NIST compliance: retention, erasure, processing records
 |   |-- web_scraper.py           # News, WHOIS, DNS, DNSdumpster, reverse DNS/IP, RSS

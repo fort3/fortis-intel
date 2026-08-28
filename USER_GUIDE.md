@@ -1,6 +1,6 @@
 # Fortis Intelligence Hub — User Guide
 
-**Version 1.2** | **Last Updated: August 2026**
+**Version 1.3** | **Last Updated: August 2026**
 
 ---
 
@@ -24,6 +24,7 @@
    - [Image Analysis](#image-analysis)
    - [Wayback Machine Integration](#wayback-machine-integration)
    - [Web Intelligence](#web-intelligence)
+   - [Deanonymization Pipeline](#deanonymization-pipeline)
    - [ForgeChain Governance](#forgechain-governance)
    - [Analysis Integrity Framework](#analysis-integrity-framework)
 5. [Example Use Cases](#example-use-cases)
@@ -43,7 +44,8 @@
 - **Geolocation**: EXIF extraction, IP geolocation, clustering, triangulation
 - **Image Forensics**: ELA tampering detection, steganography, reverse search, CLIP classification
 - **AI-Powered Analysis**: RAG-based Q&A, entity extraction, LLM-driven insights
-- **Feed Monitoring**: Background feed polling with Celery and auto-enrichment
+- **Feed Monitoring**: Background feed polling with Celery and auto-enrichment (including Telegram channel monitoring)
+- **Deanonymization Pipeline**: Breach lookup, username enumeration (80+ sites), email-to-accounts resolution, recursive pivoting, and attribution chain scoring
 - **Civilian Harm Detection**: Bellingcat-inspired semantic scoring for conflict zones
 - **Multi-format Export**: PDF, STIX 2.1, JSON, CSV, Markdown, Google Drive
 - **Governance**: ForgeChain 3-verifier consensus for all LLM-driven operations
@@ -77,6 +79,9 @@
 
 5. **Review Results**
    - **Analysis tab**: LLM-generated investigation report with profile data, posts, entities, and insights
+   - **Credential Exposure**: Breach history, password exposure alerts, data class badges (appears for email targets)
+   - **Username Enumeration**: Matched accounts across 80+ platforms, grouped by category
+   - **Attribution Chain**: Visual identity chain with per-link confidence scoring
    - **Map tab**: Appears if geolocation data was found (EXIF, IP geo)
    - **Graph tab**: Entity relationship graph rendered with Cytoscape.js
    - **Civilian Harm**: If enabled, flagged content with severity scores appears in the analysis
@@ -339,8 +344,8 @@ Background monitoring of keywords, usernames, hashtags, or locations across plat
 
 1. Click the **Feed Monitor** tool card
 2. Fill in the monitor form:
-   - **Monitor Type**: Keyword, Username, Hashtag, or Location Radius
-   - **Query**: The term to monitor (e.g. `#Kharkiv`, `@username`, `"civilian casualties"`)
+   - **Monitor Type**: Keyword, Username, Hashtag, Location Radius, or Telegram Channel
+   - **Query**: The term to monitor (e.g. `#Kharkiv`, `@username`, `"civilian casualties"`, or a Telegram channel handle like `@channel_name`)
    - **Platforms**: Select one or more (Twitter, Reddit, Telegram, Mastodon, Instagram, YouTube, Facebook, TikTok)
    - **Check Interval**: How often to poll (5 min to 4 hours)
    - **Alert Threshold**: All findings, High confidence only, or Geo matches only
@@ -428,6 +433,10 @@ Interactive visualisation of people, places, organisations, and their relationsh
 - **Organization**: Purple square (companies, groups)
 - **Location**: Green diamond (cities, countries, addresses)
 - **Domain**: Orange hexagon (websites, domains)
+- **Account**: Purple circle (platform registrations from username enumeration)
+- **Email**: Blue circle (email addresses discovered via pivoting)
+- **Credential**: Red circle (breach/credential exposure data)
+- **Infrastructure**: Orange circle (servers, hosting, infrastructure links)
 - **IP Address**: Red triangle (IP addresses, servers)
 - **Content**: White circle (posts, documents, media)
 
@@ -710,6 +719,91 @@ LLM-driven dork search with a 4-phase analysis pipeline. Runs automatically duri
 
 ---
 
+### Deanonymization Pipeline
+
+Flare-inspired attribution chain for unmasking anonymous identities. Runs automatically during investigations when applicable modules are enabled.
+
+#### Modules
+
+**1. Credential Exposure (Breach Lookup)**
+- Queries HaveIBeenPwned v3 for breached accounts, paste mentions, and password exposure
+- Secondary source via LeakCheck API
+- Detects credential reuse risk (same password hash across breaches)
+- Results: breach count, data classes exposed, password exposure flag, paste mentions
+
+**2. Username Enumeration**
+- Sherlock-style HTTP probing across 80+ platforms
+- Categories: Developer (GitHub, GitLab, HackerOne, npm, Docker Hub), Security (Bugcrowd, TryHackMe, HackTheBox), Social (Pinterest, Tumblr, Medium, Bluesky), Gaming (Steam, Chess.com), Media (Twitch, SoundCloud), Commerce (eBay, Etsy, Patreon), Professional (Behance, Dribbble)
+- 20 concurrent workers, 8-second timeout per site
+- No API keys required -- pure HTTP probing
+
+**3. Email-to-Accounts Resolution**
+- Holehe-style service registration detection
+- Discovers which services an email address is registered on (Twitter, GitHub, Spotify, Pinterest, Discord, Adobe, WordPress, Gravatar, etc.)
+- Uses Holehe library when installed, falls back to built-in probe set
+- No API keys required
+
+**4. Recursive Pivot Engine**
+- Automatically extracts new identifiers from discovered profile data:
+  - Emails from profile bios (regex extraction)
+  - Domains from profile URLs (excluding common social platforms)
+  - Domain and IP entities from findings
+- Sub-investigates each discovered identifier:
+  - Emails: breach check + email-to-accounts
+  - Domains: WHOIS + DNS, registrant name extraction
+  - IPs: geolocation
+- Depth-limited: max 2 hops, max 5 pivots per hop
+
+**5. Attribution Chain Scoring**
+- Traverses the entity graph from seed identifier outward
+- Scores each link based on evidence type:
+  - Credential reuse (0.90-0.95)
+  - Same email across platforms (0.85)
+  - Platform registration match (0.70)
+  - Avatar/photo match (0.75)
+  - Associated mentions (0.30-0.45)
+- Overall confidence = product of individual link scores
+- Strength classification: HIGH (>0.60), MODERATE (>0.35), LOW (>0.15), INSUFFICIENT
+
+#### How to Use
+
+1. Run an **Investigation** on a username or email
+2. The pipeline runs automatically after OSINT collection:
+   - Breach lookup for email identifiers
+   - Username enumeration for username identifiers
+   - Email-to-accounts for email identifiers
+   - Recursive pivots on all discovered identifiers
+   - Attribution chain scoring across the entity graph
+3. Results appear as collapsible sections in the Analysis tab:
+   - **Credential Exposure**: Breach table, password alerts, data class badges
+   - **Username Enumeration**: Clickable platform badges grouped by category
+   - **Email Account Registrations**: Service badges
+   - **Attribution Chain**: Visual chain diagram with per-link confidence + detail table
+   - **Recursive Pivot Results**: Discovered emails and domains
+
+#### Configuration
+
+| Variable | Default | Description |
+|---|---|---|
+| `BREACH_ENABLED` | `true` | Toggle breach/credential lookup |
+| `HIBP_API_KEY` | (none) | HaveIBeenPwned v3 API key ($3.50/month) |
+| `LEAKCHECK_API_KEY` | (none) | LeakCheck secondary breach source |
+| `USERNAME_ENUM_ENABLED` | `true` | Toggle username enumeration |
+| `USERNAME_ENUM_TIMEOUT` | `8` | Per-site probe timeout (seconds) |
+| `USERNAME_ENUM_WORKERS` | `20` | Concurrent probe threads |
+| `EMAIL_ACCOUNTS_ENABLED` | `true` | Toggle email-to-accounts resolution |
+| `EMAIL_ACCOUNTS_TIMEOUT` | `10` | Per-service probe timeout (seconds) |
+
+#### Graceful Degradation
+
+- Without `HIBP_API_KEY`: breach lookup is skipped entirely (no errors)
+- Without `LEAKCHECK_API_KEY`: only HIBP is queried
+- Username enumeration requires no API keys (HTTP probing only)
+- Email-to-accounts requires no API keys (direct service probing)
+- Attribution chain scoring runs on entity graph data already collected
+
+---
+
 ### ForgeChain Governance
 
 3-verifier consensus gate applied to all LLM-driven operations.
@@ -944,6 +1038,28 @@ The LLM is prohibited from generating specific dates, usernames, URLs, or statis
 
 ---
 
+### Use Case 7: Deanonymizing a Threat Actor
+
+**Scenario:** A threat actor operates under the alias "DarkPhantom". Unmask their real identity using the deanonymization pipeline.
+
+**Steps:**
+1. Click **Investigation**, enter `DarkPhantom` as the identifier, set type to **Username**
+2. Set Depth to **Deep** to maximise data collection
+3. Click **Investigate**
+4. Review the results:
+   - **Username Enumeration**: Shows which of 80+ platforms have an account with this username (GitHub, Steam, HackTheBox, etc.)
+   - **Credential Exposure**: If any associated email was found in breach data, shows which services were compromised and what data was exposed
+   - **Email Account Registrations**: Discovers which services a linked email is registered on
+   - **Recursive Pivots**: Auto-investigates emails found in profile bios and domains from profile URLs
+   - **Attribution Chain**: Shows the identity chain with confidence scores (e.g. DarkPhantom -> GitHub -> email@domain.com -> breach data -> real name)
+5. Click the **Graph** tab to visualise the full identity chain
+6. Set up a **Feed Monitor** with type **Telegram Channel** if the actor is active on Telegram
+7. Export as PDF for the investigation dossier
+
+**Outcome:** Linked the alias to a real identity via credential reuse across breached services, confirmed by matching profile data across platforms.
+
+---
+
 ## Tips and Best Practices
 
 ### Investigation
@@ -964,6 +1080,7 @@ The LLM is prohibited from generating specific dates, usernames, URLs, or statis
 
 - **Balance Interval vs. Volume**: High-volume topics need longer intervals to avoid rate limits
 - **Use Specific Monitors**: Separate monitors for different aspects (locations, actors, events) are easier to triage
+- **Telegram Channels**: Use the Telegram Channel monitor type to track threat actor channels -- requires Telegram API credentials and a one-time session setup
 - **Review Regularly**: Check the Watch panel to catch critical items
 
 ### Q&A
@@ -1061,6 +1178,12 @@ The LLM is prohibited from generating specific dates, usernames, URLs, or statis
 | `TINEYE_API_KEY` | (none) | Optional TinEye API key |
 | `SELF_CONSISTENCY_ENABLED` | `false` | Enable multi-run claim stability analysis |
 | `SELF_CONSISTENCY_RUNS` | `3` | Number of investigation chain runs for self-consistency |
+| `BREACH_ENABLED` | `true` | Enable credential exposure lookup |
+| `HIBP_API_KEY` | (none) | HaveIBeenPwned v3 API key |
+| `LEAKCHECK_API_KEY` | (none) | LeakCheck API key |
+| `USERNAME_ENUM_ENABLED` | `true` | Enable username enumeration (80+ sites) |
+| `USERNAME_ENUM_WORKERS` | `20` | Concurrent probe threads |
+| `EMAIL_ACCOUNTS_ENABLED` | `true` | Enable email-to-accounts resolution |
 
 For the full list of environment variables, see `README.md`.
 
@@ -1093,4 +1216,4 @@ For the full list of environment variables, see `README.md`.
 **End of User Guide**
 
 *For deployment instructions, see `README.md`*
-*Last updated: August 19, 2026*
+*Last updated: August 28, 2026*

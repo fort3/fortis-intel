@@ -377,6 +377,66 @@ class OSINTClient:
                 log.error("IP intel failed for %r: %s", identifier, exc)
                 findings.errors.append(f"ip_intel: {str(exc)[:200]}")
 
+        # ── Breach / credential exposure check ─────────────────────
+        if id_type == "email":
+            try:
+                from app.breach_client import check_breaches, BREACH_ENABLED
+                if BREACH_ENABLED:
+                    breach_data = check_breaches(identifier)
+                    findings.metadata["breach_check"] = breach_data
+                    if breach_data.get("total_breaches", 0):
+                        log.info("Breach check for %r: %d breach(es), password_exposed=%s",
+                                 identifier, breach_data["total_breaches"],
+                                 breach_data.get("password_exposed"))
+            except Exception as exc:
+                log.warning("Breach check failed (non-fatal): %s", exc)
+
+        # ── Broad username enumeration (Sherlock-style) ───────────
+        if id_type == "username":
+            try:
+                from app.username_enum import enumerate_username, USERNAME_ENUM_ENABLED
+                if USERNAME_ENUM_ENABLED:
+                    enum_result = enumerate_username(identifier)
+                    findings.metadata["username_enum"] = enum_result
+                    if enum_result.get("total_found", 0):
+                        log.info("Username enum for %r: found on %d/%d sites",
+                                 identifier, enum_result["total_found"],
+                                 enum_result.get("total_checked", 0))
+                        for hit in enum_result.get("found", []):
+                            findings.entities.append(EnrichedEntity(
+                                entity_type="account",
+                                entity_value=f"{hit['name']}: {identifier}",
+                                confidence=0.85,
+                                enrichment_sources=["username_enum"],
+                                raw={"url": hit.get("url"), "category": hit.get("category")},
+                            ))
+            except Exception as exc:
+                log.warning("Username enumeration failed (non-fatal): %s", exc)
+
+        # ── Email-to-accounts resolution ──────────────────────────
+        if id_type == "email":
+            try:
+                from app.email_accounts import check_email_accounts, EMAIL_ACCOUNTS_ENABLED
+                if EMAIL_ACCOUNTS_ENABLED:
+                    acct_result = check_email_accounts(identifier)
+                    findings.metadata["email_accounts"] = acct_result
+                    if acct_result.get("total_found", 0):
+                        log.info("Email accounts for %r: found %d service(s)",
+                                 identifier, acct_result["total_found"])
+                        for svc in acct_result.get("services", []):
+                            findings.entities.append(EnrichedEntity(
+                                entity_type="account",
+                                entity_value=f"{svc['service']}: {identifier}",
+                                confidence=0.8,
+                                enrichment_sources=["email_accounts"],
+                                raw={"service": svc.get("service"), "category": svc.get("category")},
+                            ))
+            except Exception as exc:
+                log.warning("Email accounts check failed (non-fatal): %s", exc)
+
+        # ── Recursive pivot: sub-investigate discovered identifiers ──
+        self._recursive_pivot(findings, depth, elevated_authorization)
+
         findings.geo_points.extend(self._extract_geo(findings.posts))
         findings.geo_points.extend(self._extract_media_geo(findings.posts))
         findings.geo_points.extend(self._extract_video_geo(findings.posts))
@@ -446,6 +506,146 @@ class OSINTClient:
             log.error("Entity graph construction failed: %s", exc)
 
         return findings
+
+    def _recursive_pivot(
+        self,
+        findings: "OSINTFindings",
+        depth: str,
+        elevated_authorization: bool,
+        _hop: int = 0,
+        _max_hops: int = 2,
+        _max_pivots: int = 5,
+    ) -> None:
+        """Extract new identifiers from findings and sub-investigate them.
+
+        Depth-limited to prevent runaway expansion. Each discovered email,
+        username, or domain from profile bios, linked accounts, and entity
+        extraction becomes a new investigation seed.
+        """
+        if _hop >= _max_hops or depth == "quick":
+            return
+
+        pivot_identifiers: list[tuple[str, str]] = []
+        seen = {findings.identifier.lower()}
+
+        for profile in findings.profiles:
+            bio = getattr(profile, "bio", "") or ""
+            for email_match in __import__("re").findall(
+                r"[a-zA-Z0-9._%+\-]+@[a-zA-Z0-9.\-]+\.[a-zA-Z]{2,}", bio
+            ):
+                if email_match.lower() not in seen:
+                    seen.add(email_match.lower())
+                    pivot_identifiers.append((email_match, "email"))
+
+            url = getattr(profile, "url", "") or ""
+            if url:
+                from urllib.parse import urlparse
+                parsed = urlparse(url)
+                domain = parsed.netloc
+                if domain and domain.lower() not in seen and "." in domain:
+                    common = {"twitter.com", "instagram.com", "facebook.com",
+                              "youtube.com", "reddit.com", "tiktok.com",
+                              "linkedin.com", "github.com", "t.me",
+                              "linktr.ee", "bit.ly"}
+                    if domain.lower() not in common:
+                        seen.add(domain.lower())
+                        pivot_identifiers.append((domain, "domain"))
+
+        for entity in findings.entities:
+            etype = entity.entity_type
+            evalue = entity.entity_value.strip()
+            if not evalue or evalue.lower() in seen:
+                continue
+
+            if etype == "account" and ":" in evalue:
+                continue
+
+            if etype == "domain" and "." in evalue:
+                seen.add(evalue.lower())
+                pivot_identifiers.append((evalue, "domain"))
+            elif etype == "ip" and __import__("re").match(r"\d+\.\d+\.\d+\.\d+", evalue):
+                seen.add(evalue.lower())
+                pivot_identifiers.append((evalue, "ip"))
+
+        if not pivot_identifiers:
+            return
+
+        pivots_done = 0
+        pivot_results: list[dict] = []
+
+        for piv_id, piv_type in pivot_identifiers[:_max_pivots]:
+            try:
+                log.info("Recursive pivot (hop %d): %s (%s)", _hop + 1, piv_id, piv_type)
+
+                if piv_type == "email":
+                    from app.breach_client import check_breaches, BREACH_ENABLED
+                    if BREACH_ENABLED:
+                        breach_data = check_breaches(piv_id)
+                        findings.metadata.setdefault("pivot_breaches", {})[piv_id] = breach_data
+                        if breach_data.get("total_breaches"):
+                            findings.entities.append(EnrichedEntity(
+                                entity_type="email",
+                                entity_value=piv_id,
+                                confidence=0.7,
+                                enrichment_sources=["pivot_breach"],
+                                raw={"breaches": breach_data.get("total_breaches"),
+                                     "password_exposed": breach_data.get("password_exposed")},
+                            ))
+
+                    from app.email_accounts import check_email_accounts, EMAIL_ACCOUNTS_ENABLED
+                    if EMAIL_ACCOUNTS_ENABLED:
+                        accts = check_email_accounts(piv_id)
+                        findings.metadata.setdefault("pivot_email_accounts", {})[piv_id] = accts
+                        for svc in accts.get("services", []):
+                            findings.entities.append(EnrichedEntity(
+                                entity_type="account",
+                                entity_value=f"{svc['service']}: {piv_id}",
+                                confidence=0.75,
+                                enrichment_sources=["pivot_email_accounts"],
+                                raw={"service": svc.get("service"), "category": svc.get("category")},
+                            ))
+
+                elif piv_type == "domain":
+                    whois_data = self._scraper.whois_lookup(piv_id)
+                    dns_data = self._scraper.dns_lookup(piv_id)
+                    findings.metadata.setdefault("pivot_domains", {})[piv_id] = {
+                        "whois": whois_data, "dns": dns_data,
+                    }
+                    registrant = whois_data.get("registrant_name") or whois_data.get("registrant_org")
+                    if registrant and registrant.lower() not in seen:
+                        seen.add(registrant.lower())
+                        findings.entities.append(EnrichedEntity(
+                            entity_type="PERSON" if " " in registrant else "ORG",
+                            entity_value=registrant,
+                            confidence=0.7,
+                            enrichment_sources=["pivot_whois"],
+                            raw={"domain": piv_id},
+                        ))
+
+                elif piv_type == "ip":
+                    if self._geo_client:
+                        geo_pt = self._geo_client.ip_geolocate(piv_id)
+                        if geo_pt:
+                            findings.geo_points.append({
+                                "lat": geo_pt.lat, "lon": geo_pt.lon,
+                                "label": f"Pivot IP {piv_id} ({geo_pt.label})",
+                                "source": "pivot_ip_geolocation",
+                                "confidence": geo_pt.confidence * 0.8,
+                            })
+
+                pivot_results.append({"identifier": piv_id, "type": piv_type, "status": "ok"})
+                pivots_done += 1
+
+            except Exception as exc:
+                log.debug("Recursive pivot failed for %s: %s", piv_id, exc)
+                pivot_results.append({"identifier": piv_id, "type": piv_type, "status": f"error: {exc}"})
+
+        findings.metadata["recursive_pivots"] = {
+            "hop": _hop + 1,
+            "pivots_attempted": len(pivot_identifiers[:_max_pivots]),
+            "pivots_completed": pivots_done,
+            "results": pivot_results,
+        }
 
     def enrich_entities(
         self,
