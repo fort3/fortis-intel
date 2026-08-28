@@ -327,9 +327,16 @@ def _single_pass_analysis(
     if reverse_search_context:
         prompt += f"\n\nReverse image search found these related results (use to help narrow location): {reverse_search_context}"
 
-    raw = _call_vision(image_bytes, prompt, detail="high", max_tokens=1200)
+    try:
+        raw = _call_vision(image_bytes, prompt, detail="high", max_tokens=4096)
+    except Exception as exc:
+        model_name = os.getenv('DEEPSEEK_VISION_MODEL', 'deepseek-v4-flash-vision-exp')
+        err_msg = f"{type(exc).__name__}: {exc}"
+        return {"enabled": True, "clues": None, "geo_points": [],
+                "error": f"Vision API failed ({model_name}): {err_msg}"}
     if not raw:
-        return {"enabled": True, "clues": None, "geo_points": [], "error": "Vision API returned no response"}
+        return {"enabled": True, "clues": None, "geo_points": [],
+                "error": "Vision API client not initialised — check DEEPSEEK_API_KEY"}
 
     clues = _parse_clues(raw)
     geo_points = _geocode_clues(clues)
@@ -358,13 +365,17 @@ def _two_pass_analysis(
         observe_prompt += f"\n\nImage context: {context}"
 
     log.info("Vision geo pass 1: observation")
-    obs_raw = _call_vision(image_bytes, observe_prompt, detail="high", max_tokens=1200)
-    if not obs_raw:
-        print("[VISION GEO] Pass 1 (observation) returned no response — check DEEPSEEK_API_KEY "
-              f"and DEEPSEEK_VISION_MODEL (current: {os.getenv('DEEPSEEK_VISION_MODEL', 'deepseek-v4-flash-vision-exp')})")
+    try:
+        obs_raw = _call_vision(image_bytes, observe_prompt, detail="high", max_tokens=4096)
+    except Exception as exc:
+        model_name = os.getenv('DEEPSEEK_VISION_MODEL', 'deepseek-v4-flash-vision-exp')
+        err_msg = f"{type(exc).__name__}: {exc}"
+        print(f"[VISION GEO] Pass 1 (observation) failed: {err_msg}")
         return {"enabled": True, "clues": None, "geo_points": [],
-                "error": f"Vision API observation pass failed — model '{os.getenv('DEEPSEEK_VISION_MODEL', 'deepseek-v4-flash-vision-exp')}' "
-                         f"returned no response. Check the console log for the specific API error."}
+                "error": f"Vision API observation pass failed ({model_name}): {err_msg}"}
+    if not obs_raw:
+        return {"enabled": True, "clues": None, "geo_points": [],
+                "error": "Vision API client not initialised — check DEEPSEEK_API_KEY"}
 
     observations = _parse_observations(obs_raw)
 
@@ -386,7 +397,11 @@ def _two_pass_analysis(
     synth_prompt = _SYNTHESIZE_PROMPT_TEMPLATE.format(observations=obs_summary)
 
     log.info("Vision geo pass 2: synthesis")
-    synth_raw = _call_vision(image_bytes, synth_prompt, detail="low", max_tokens=1024)
+    try:
+        synth_raw = _call_vision(image_bytes, synth_prompt, detail="low", max_tokens=4096)
+    except Exception as exc:
+        log.warning("Vision geo pass 2 failed: %s", exc)
+        synth_raw = None
     if not synth_raw:
         # Fall back to single-pass result from observations
         clues = _observations_to_clues(observations)
@@ -489,7 +504,11 @@ def _refinement_pass(
             log.debug("Country features unavailable: %s", exc)
 
     log.info("Vision geo pass 3: refinement for '%s, %s'", top_name, top_country)
-    raw = _call_vision(image_bytes, prompt, detail="high", max_tokens=1024)
+    try:
+        raw = _call_vision(image_bytes, prompt, detail="high", max_tokens=4096)
+    except Exception as exc:
+        log.warning("Refinement pass failed: %s", exc)
+        return None
     if not raw:
         log.debug("Refinement pass returned no response")
         return None

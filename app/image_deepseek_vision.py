@@ -79,7 +79,11 @@ def _call_vision(
     detail: str = "auto",
     max_tokens: int = 1024,
 ) -> str | None:
-    """Send a single image + text prompt to DeepSeek Vision. Returns the response text."""
+    """Send a single image + text prompt to DeepSeek Vision. Returns the response text.
+
+    Raises on API errors so callers can surface the message.
+    Returns ``None`` only when the client cannot be initialised.
+    """
     client = _get_client()
     if client is None:
         return None
@@ -87,27 +91,22 @@ def _call_vision(
     b64, media_type = _encode_image(image_bytes)
     data_url = f"data:{media_type};base64,{b64}"
 
-    try:
-        response = client.chat.completions.create(
-            model=DEEPSEEK_VISION_MODEL,
-            messages=[{
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                    {
-                        "type": "image_url",
-                        "image_url": {"url": data_url, "detail": detail},
-                    },
-                ],
-            }],
-            max_tokens=max_tokens,
-            temperature=0.2,
-        )
-        return response.choices[0].message.content
-    except Exception as exc:
-        print(f"[DEEPSEEK VISION] API call failed: {type(exc).__name__}: {exc}")
-        log.error("DeepSeek Vision API call failed: %s", exc)
-        return None
+    response = client.chat.completions.create(
+        model=DEEPSEEK_VISION_MODEL,
+        messages=[{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": prompt},
+                {
+                    "type": "image_url",
+                    "image_url": {"url": data_url, "detail": detail},
+                },
+            ],
+        }],
+        max_tokens=max_tokens,
+        temperature=0.2,
+    )
+    return response.choices[0].message.content
 
 
 # ---------------------------------------------------------------------------
@@ -174,13 +173,22 @@ def describe_image(
     if context:
         prompt += f"\n\nAdditional investigation context: {context}"
 
-    description = _call_vision(image_bytes, prompt, detail="auto", max_tokens=1024)
+    error = None
+    try:
+        description = _call_vision(image_bytes, prompt, detail="auto", max_tokens=4096)
+    except Exception as exc:
+        log.error("DeepSeek Vision describe_image failed: %s", exc)
+        description = None
+        error = f"{type(exc).__name__}: {exc}"
 
-    return {
+    result = {
         "description": description,
         "model": DEEPSEEK_VISION_MODEL,
         "enabled": True,
     }
+    if error:
+        result["error"] = error
+    return result
 
 
 def interpret_forensics(
@@ -196,9 +204,13 @@ def interpret_forensics(
         f" for {filename}" if filename else "",
     )
 
-    interpretation = _call_vision(
-        ela_image_bytes, _FORENSICS_PROMPT, detail="high", max_tokens=768,
-    )
+    try:
+        interpretation = _call_vision(
+            ela_image_bytes, _FORENSICS_PROMPT, detail="high", max_tokens=4096,
+        )
+    except Exception as exc:
+        log.error("DeepSeek Vision interpret_forensics failed: %s", exc)
+        interpretation = None
     return {
         "interpretation": interpretation,
         "model": DEEPSEEK_VISION_MODEL,
@@ -218,7 +230,11 @@ def analyse_keyframe(
     if video_context:
         prompt += f"\n\nVideo source context: {video_context}"
 
-    analysis = _call_vision(frame_bytes, prompt, detail="auto", max_tokens=768)
+    try:
+        analysis = _call_vision(frame_bytes, prompt, detail="auto", max_tokens=4096)
+    except Exception as exc:
+        log.error("DeepSeek Vision analyse_keyframe failed: %s", exc)
+        analysis = None
     return {
         "analysis": analysis,
         "model": DEEPSEEK_VISION_MODEL,
