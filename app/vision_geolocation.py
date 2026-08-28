@@ -125,7 +125,7 @@ Respond in this JSON format (no markdown fences):
 # ---------------------------------------------------------------------------
 # Pass 2: Synthesise location hypotheses from observations
 # ---------------------------------------------------------------------------
-_SYNTHESIZE_PROMPT_TEMPLATE = """You are an expert geolocation analyst. Based on these visual observations from an image, determine the most likely geographic location(s).
+_SYNTHESIZE_PROMPT_TEMPLATE = """You are an expert geolocation analyst. Based on these visual observations from an image, you MUST determine the most likely geographic location(s). You MUST always provide at least one location with coordinates.
 
 OBSERVED CLUES:
 {observations}
@@ -134,20 +134,27 @@ METHODOLOGY:
 1. Start with the highest-diagnostic-value clues (text, signs, license plates)
 2. Cross-reference infrastructure clues (driving side, sign system, road markings) to narrow the country
 3. Use architectural and environmental clues to narrow the region
-4. Estimate approximate coordinates if you can identify a specific area
+4. You MUST estimate approximate coordinates — use your knowledge of world geography
 
 For each candidate location, explain your reasoning chain — which specific clues support it and which clues could contradict it.
 
-If you recognise a specific landmark, building, intersection, or place: name it precisely and estimate its coordinates.
+If you recognise a specific landmark, building, intersection, or place: name it precisely and provide its coordinates.
 
-If you can only narrow to a country or region: provide the most likely specific city or area within that region.
+If you can only narrow to a country or region: provide the most likely specific city or area within that region, and use that city's coordinates as your estimate.
 
-IMPORTANT: Do not guess randomly. Only propose locations supported by multiple corroborating clues. Rate your confidence honestly:
+CRITICAL RULES:
+- NEVER return empty "locations" or "coordinates_estimated" arrays
+- Even if uncertain, you MUST provide your BEST GUESS with an appropriate low confidence (0.1-0.3)
+- An approximate location with low confidence is ALWAYS better than no location
+- If you can narrow to a continent → pick the most likely country → use its capital or largest city
+- Use your world knowledge to provide lat/lon for every location you identify
+
+Confidence scale:
 - 0.9+: Readable address, recognisable landmark, or multiple decisive clues
 - 0.7-0.9: Strong clues (language + sign system + architecture all consistent)
 - 0.5-0.7: Moderate clues (consistent pattern but could match multiple locations)
 - 0.3-0.5: Weak inference (general region based on vegetation/climate only)
-- <0.3: Very uncertain, limited clues
+- 0.1-0.3: Very uncertain best guess from limited clues
 
 Respond in this JSON format (no markdown fences):
 {{
@@ -219,7 +226,7 @@ Respond in this JSON format (no markdown fences):
 # ---------------------------------------------------------------------------
 # Single-pass prompt (fallback / fast mode)
 # ---------------------------------------------------------------------------
-_SINGLE_PASS_PROMPT = """You are an expert geolocation analyst trained in GeoGuessr methodology and Bellingcat OSINT verification. Identify the geographic location in this image using ONLY visual clues.
+_SINGLE_PASS_PROMPT = """You are an expert geolocation analyst trained in GeoGuessr methodology and Bellingcat OSINT verification. Your SOLE task is to determine the geographic location of this image. You MUST provide your best location estimate — even if uncertain, give your best guess with a low confidence score.
 
 Use this systematic approach:
 1. **Text first**: Read ALL visible text — signs, license plates, store names, ads. Transcribe exactly. Identify the language and script.
@@ -230,20 +237,29 @@ Use this systematic approach:
 6. **Vegetation & terrain**: Plant species, landscape, soil colour, climate indicators.
 7. **Vehicles & culture**: Car brands, clothing, commercial chains, flags.
 
-Cross-reference ALL clues to narrow the location. If you recognise a specific landmark or place, name it precisely and estimate coordinates.
+Cross-reference ALL clues to narrow the location. If you recognise a specific landmark or place, name it precisely.
+
+CRITICAL RULES:
+- You MUST always provide at least one entry in "locations" and one entry in "coordinates_estimated"
+- Even if you are only 10% sure, provide your BEST GUESS with an appropriate low confidence
+- An approximate location (city, region, or country centroid) with low confidence is ALWAYS better than returning nothing
+- Use your knowledge of world geography to estimate coordinates for any location you identify
+- Prefer specific locations: "Osaka, Japan" over "East Asia", "Lagos, Nigeria" over "West Africa"
+- If you can only narrow to a country, use the capital city or largest city as coordinates
 
 Rate confidence honestly:
 - 0.9+: Readable address or recognisable landmark
 - 0.7-0.9: Multiple strong clues all pointing to same location
 - 0.5-0.7: Consistent pattern but could match multiple locations
-- <0.5: Uncertain, limited clues
+- 0.3-0.5: Weak inference from general clues (vegetation, architecture style)
+- 0.1-0.3: Very uncertain best guess based on limited clues
 
 Respond in this JSON format (no markdown fences):
 {
   "locations": [
     {
       "name": "specific place, city, or region name",
-      "country": "country name or null",
+      "country": "country name",
       "region": "state/province/region or null",
       "confidence": 0.0 to 1.0,
       "reasoning": "which visual clues support this location"
@@ -259,8 +275,7 @@ Respond in this JSON format (no markdown fences):
   "key_clues": ["the most diagnostic visual clues found"]
 }
 
-If you cannot determine any location, return {"locations": [], "coordinates_estimated": [], "key_clues": ["reason why"]}.
-Be specific — prefer "Osaka, Japan" over "East Asia". Include ALL candidate locations ranked by confidence."""
+NEVER return empty locations or coordinates_estimated arrays. Always provide your best estimate."""
 
 
 def extract_geo_clues(
@@ -354,6 +369,15 @@ def _two_pass_analysis(
     if reverse_search_context:
         obs_summary += f"\n\nReverse image search context: {reverse_search_context}"
 
+    # Inject country feature reference table (filtered by driving side)
+    try:
+        from app.geo_features import build_feature_reference
+        feature_ref = build_feature_reference(observations)
+        if feature_ref:
+            obs_summary += f"\n\n{feature_ref}"
+    except Exception as exc:
+        log.debug("Country feature reference unavailable: %s", exc)
+
     # Pass 2: Synthesize location hypotheses (text-only, no image needed)
     synth_prompt = _SYNTHESIZE_PROMPT_TEMPLATE.format(observations=obs_summary)
 
@@ -430,17 +454,43 @@ def _refinement_pass(
         alternatives=alternatives,
     )
 
+    # Inject Overpass spatial context if coordinates are available
+    coords = clues.get("coordinates_estimated", [])
+    if coords and coords[0].get("lat") is not None:
+        try:
+            from app.overpass_client import build_spatial_context, OVERPASS_ENABLED
+            if OVERPASS_ENABLED:
+                spatial = build_spatial_context(
+                    float(coords[0]["lat"]),
+                    float(coords[0]["lon"]),
+                )
+                if spatial:
+                    prompt += f"\n\n{spatial}"
+                    prompt += "\n\nUse this spatial data to verify: do the nearby streets, landmarks, and amenities match what you see in the image?"
+        except Exception as exc:
+            log.debug("Overpass spatial context unavailable: %s", exc)
+
+    # Inject detailed country features for candidate countries
+    candidate_countries = list({
+        loc.get("country") for loc in locations[:4]
+        if loc.get("country")
+    })
+    if candidate_countries:
+        try:
+            from app.geo_features import build_focused_reference
+            focused = build_focused_reference(candidate_countries)
+            if focused:
+                prompt += f"\n\n{focused}"
+        except Exception as exc:
+            log.debug("Country features unavailable: %s", exc)
+
     log.info("Vision geo pass 3: refinement for '%s, %s'", top_name, top_country)
     raw = _call_vision(image_bytes, prompt, detail="high", max_tokens=1024)
     if not raw:
         log.debug("Refinement pass returned no response")
         return None
 
-    parsed = _parse_clues(raw)
-    if not parsed or parsed.get("locations"):
-        return parsed
-
-    return parsed
+    return _parse_clues(raw)
 
 
 def _merge_refinement(
@@ -739,8 +789,10 @@ def _geocode_clues(clues: dict[str, Any]) -> list[dict[str, Any]]:
     """Geocode parsed location clues into geo_point dicts."""
     geo_points: list[dict[str, Any]] = []
 
-    # Handle both "coordinates_mentioned" and "coordinates_estimated" keys
     coords = clues.get("coordinates_estimated", clues.get("coordinates_mentioned", []))
+    locations = clues.get("locations", [])
+    log.info("Geocoding clues: %d locations, %d coordinate estimates",
+             len(locations), len(coords) if isinstance(coords, list) else 0)
     for coord in coords:
         lat = coord.get("lat")
         lon = coord.get("lon")
@@ -762,7 +814,6 @@ def _geocode_clues(clues: dict[str, Any]) -> list[dict[str, Any]]:
             except (ValueError, TypeError):
                 pass
 
-    locations = clues.get("locations", [])
     if not locations:
         return geo_points
 
@@ -797,10 +848,14 @@ def _geocode_clues(clues: dict[str, Any]) -> list[dict[str, Any]]:
         try:
             result = geo.geocode(query)
             if result is None and len(query_parts) > 1:
-                # Try without region (name + country)
                 fallback_query = f"{name}, {country}" if country else name
                 result = geo.geocode(fallback_query)
+            if result is None and country:
+                result = geo.geocode(country)
             if result is None:
+                result = geo.geocode(name)
+            if result is None:
+                log.debug("All geocode attempts failed for '%s'", query)
                 continue
 
             model_conf = loc.get("confidence", 0.4)

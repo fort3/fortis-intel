@@ -4073,8 +4073,8 @@ function renderImageAnalysisSection(images) {
                 var pLabel = pred.address || pred.place_name || '#' + pred.rank;
                 h += '<div style="font-size:0.88em;padding:0.15em 0">' +
                     escapeHtml(pLabel) +
-                    ' <span style="opacity:0.6">(' + (pred.lat || '?').toFixed(3) + ', ' + (pred.lon || '?').toFixed(3) + ')</span>' +
-                    ' <span class="ch-platform">p=' + (pred.probability * 100).toFixed(1) + '%</span></div>';
+                    ' <span style="opacity:0.6">(' + (pred.lat != null ? pred.lat.toFixed(3) : '?') + ', ' + (pred.lon != null ? pred.lon.toFixed(3) : '?') + ')</span>' +
+                    ' <span class="ch-platform">p=' + ((pred.probability || 0) * 100).toFixed(1) + '%</span></div>';
             }
             h += '</div></div>';
         }

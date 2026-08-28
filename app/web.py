@@ -2634,6 +2634,7 @@ def create_app():
                 })
 
             # Vision geolocation fallback when EXIF is absent
+            vision_clues = None
             if not data_points:
                 try:
                     from app.vision_geolocation import extract_geo_clues
@@ -2641,6 +2642,16 @@ def create_app():
                     if DEEPSEEK_VISION_ENABLED:
                         for img_data in image_bytes_list:
                             vr = extract_geo_clues(img_data)
+                            print(f"[VISION GEO] Result: enabled={vr.get('enabled')}, "
+                                  f"method={vr.get('method')}, "
+                                  f"geo_points={len(vr.get('geo_points', []))}, "
+                                  f"error={vr.get('error', 'none')}")
+                            if vr.get("clues"):
+                                vision_clues = vr["clues"]
+                                locs = vr["clues"].get("locations", [])
+                                if locs:
+                                    print(f"[VISION GEO] Locations identified: "
+                                          f"{[l.get('name','?')+' ('+str(l.get('confidence','?'))+')' for l in locs[:3]]}")
                             for vgp in vr.get("geo_points", []):
                                 data_points.append({
                                     "type": "coordinates",
@@ -2653,8 +2664,12 @@ def create_app():
                                 })
                         if data_points:
                             print(f"[VISION GEO] Found {len(data_points)} location(s) via AI vision analysis")
+                    else:
+                        print("[VISION GEO] Skipped — DEEPSEEK_VISION_ENABLED is False")
                 except Exception as exc:
                     print(f"[WARN] Vision geolocation failed (non-fatal): {exc}")
+                    import traceback
+                    traceback.print_exc()
 
                 # GeoCLIP local model fallback
                 try:
@@ -2662,6 +2677,11 @@ def create_app():
                     if GEOCLIP_ENABLED:
                         for img_data in image_bytes_list:
                             gc = predict_location(img_data)
+                            print(f"[GEOCLIP] Result: enabled={gc.get('enabled')}, "
+                                  f"available={gc.get('available')}, "
+                                  f"predictions={len(gc.get('predictions', []))}, "
+                                  f"geo_points={len(gc.get('geo_points', []))}, "
+                                  f"error={gc.get('error', 'none')}")
                             for gcp in gc.get("geo_points", []):
                                 data_points.append({
                                     "type": "coordinates",
@@ -2673,14 +2693,22 @@ def create_app():
                                 })
                         if data_points:
                             print(f"[GEOCLIP] Found {len(data_points)} location(s) via GeoCLIP")
+                    else:
+                        print("[GEOCLIP] Skipped — GEOCLIP_ENABLED is False")
+                except ImportError:
+                    print("[GEOCLIP] Skipped — geoclip package not installed")
                 except Exception as exc:
                     print(f"[WARN] GeoCLIP failed (non-fatal): {exc}")
 
             if not data_points:
-                return jsonify({
-                    "error": "No location data found. Images contain no EXIF GPS data "
-                    "and AI vision analysis could not identify a location."
-                }), 400
+                err_detail = "No location data found. Images contain no EXIF GPS data."
+                if vision_clues and vision_clues.get("locations"):
+                    loc_names = [l.get("name", "?") for l in vision_clues["locations"][:3]]
+                    err_detail += (f" AI vision identified possible location(s): "
+                                   f"{', '.join(loc_names)}, but geocoding to coordinates failed.")
+                else:
+                    err_detail += " AI vision analysis could not identify a location."
+                return jsonify({"error": err_detail}), 400
 
             data = {"data_points": data_points}
             subject_context = ""

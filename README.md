@@ -936,6 +936,9 @@ All modules degrade gracefully -- missing optional dependencies disable individu
 | `GEOCLIP_ENABLED` | `true` | Toggle GeoCLIP local GPS prediction module |
 | `GEOCLIP_TOP_K` | `5` | Number of top GeoCLIP predictions to return |
 | `GEOCLIP_MIN_PROB` | `0.01` | Minimum GeoCLIP probability threshold for geo points |
+| `OVERPASS_ENABLED` | `true` | Toggle Overpass API spatial context for vision geo refinement |
+| `OVERPASS_RADIUS_M` | `500` | Search radius in metres for nearby OSM features |
+| `OVERPASS_TIMEOUT` | `10` | Overpass API query timeout in seconds |
 
 ### Media Geolocation Enrichment
 
@@ -956,7 +959,7 @@ Estimates location from video content using OpenCV keyframe analysis (`app/video
 3. **EXIF from video frames** -- Extracts GPS metadata embedded in video frame headers (source: `video_exif`, confidence: 0.90)
 4. **OCR + geocoding** -- When pytesseract is installed, detects text in frames (signs, banners, watermarks) and geocodes location mentions via spaCy NER + Nominatim (source: `video_landmark`, confidence: 0.50-0.55)
 5. **Text region detection** -- OpenCV MSER detects text-heavy regions in frames for targeted OCR analysis
-6. **AI Vision geolocation** -- Two-pass DeepSeek Vision analysis: (1) exhaustive observation with GeoGuessr methodology, (2) location hypothesis synthesis, (3) optional refinement pass that re-examines the image to confirm or refute the top hypothesis. Geocodes identified locations (source: `vision_geolocation`, confidence: 0.25-0.75). Works without EXIF data
+6. **AI Vision geolocation** -- Three-pass DeepSeek Vision analysis: (1) exhaustive observation with GeoGuessr methodology, (2) location hypothesis synthesis with country feature cross-referencing (30+ country database of bollards, sign systems, road markings, license plates), (3) refinement pass with Overpass API spatial verification (nearby streets, POIs, landmarks from OpenStreetMap). Geocodes identified locations (source: `vision_geolocation`, confidence: 0.25-0.75). Works without EXIF data
 7. **GeoCLIP embedding** -- Local contrastive learning model predicts GPS coordinates directly from images without API calls (source: `geoclip`, confidence: 0.10-0.80). Cross-references with vision geolocation for higher accuracy
 
 **Optional dependencies**: `opencv-python>=4.9.0`, `imagehash>=4.3.0`, `pytesseract` (for OCR), `geoclip` (for local GPS prediction). The system degrades gracefully — without OpenCV, video analysis is skipped entirely. Vision geolocation requires `DEEPSEEK_API_KEY` only. GeoCLIP runs fully offline after initial model download.
@@ -1060,8 +1063,10 @@ Fortis-Intelligence-Hub/
 |   |-- image_stego.py           # Steganography detection (LSB, RS analysis, sample pairs)
 |   |-- image_vision.py          # CLIP zero-shot classification + landmark detection
 |   |-- image_deepseek_vision.py # DeepSeek Vision AI scene analysis + OSINT assessment
-|   |-- vision_geolocation.py   # AI vision-based geolocation (two-pass + refinement)
+|   |-- vision_geolocation.py   # AI vision-based geolocation (three-pass + spatial verification)
 |   |-- geoclip_locator.py     # GeoCLIP local GPS prediction from images
+|   |-- geo_features.py        # Country visual feature database (30+ countries)
+|   |-- overpass_client.py     # OpenStreetMap Overpass API spatial context
 |   |-- url_fuzzer.py            # URL endpoint fuzzing for domain recon (elevated auth)
 |   |-- video_geo.py             # Video keyframe extraction + landmark geolocation
 |   |-- social_client.py         # Social media integrations (API + curl_cffi scrape fallbacks)

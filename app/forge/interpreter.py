@@ -33,8 +33,10 @@ CHAIN_DESCRIPTIONS = {
     "image_steganography": "LSB, RS analysis, and sample pairs steganography detection",
     "image_clip_vision": "CLIP zero-shot classification, landmark detection, and content safety",
     "image_deepseek_vision": "DeepSeek Vision AI scene description, object identification, text extraction, and OSINT assessment",
-    "vision_geolocation": "AI vision-based geolocation — two-pass clue extraction with multi-round refinement, geocodes candidate locations",
+    "vision_geolocation": "AI vision-based geolocation — two-pass clue extraction with country feature cross-referencing, Overpass spatial verification, and multi-round refinement",
     "geoclip_locator": "GeoCLIP local GPS prediction — contrastive learning model predicts coordinates from images without API calls",
+    "geo_features": "Country visual feature database — bollards, sign systems, road markings, license plates for 30+ countries",
+    "overpass_client": "OpenStreetMap Overpass API — spatial context queries for nearby streets, POIs, landmarks, admin boundaries",
     "url_endpoint_fuzzing": "URL endpoint fuzzing for domain recon — probes common paths to discover exposed endpoints (elevated authorization required)",
 }
 
