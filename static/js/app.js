@@ -4172,7 +4172,12 @@ function renderImageAnalysisSection(images) {
         }
 
         // Vision Geolocation
-        if (img.vision_geo && img.vision_geo.geo_points && img.vision_geo.geo_points.length > 0) {
+        if (img.vision_geo && img.vision_geo.error) {
+            h += '<div class="img-analysis-row vision-geo-block" style="opacity:0.7">' +
+                '<strong>AI Vision Geolocation</strong> ' +
+                '<span class="wi-badge ch-badge-low">error</span>' +
+                '<div style="font-size:0.82em;color:var(--text-muted);margin-top:2px">' + escapeHtml(img.vision_geo.error) + '</div></div>';
+        } else if (img.vision_geo && img.vision_geo.geo_points && img.vision_geo.geo_points.length > 0) {
             var vgClues = img.vision_geo.clues || {};
             h += '<div class="img-analysis-row vision-geo-block">' +
                 '<strong>AI Vision Geolocation</strong> ' +
@@ -4212,7 +4217,13 @@ function renderImageAnalysisSection(images) {
         }
 
         // GeoCLIP predictions
-        if (img.geoclip && img.geoclip.geo_points && img.geoclip.geo_points.length > 0) {
+        if (img.geoclip && img.geoclip.enabled === false) {
+            var gcReason = img.geoclip.reason || 'disabled';
+            h += '<div class="img-analysis-row geoclip-block" style="opacity:0.7">' +
+                '<strong>GeoCLIP Embedding</strong> ' +
+                '<span class="wi-badge ch-badge-low">unavailable</span>' +
+                '<div style="font-size:0.82em;color:var(--text-muted);margin-top:2px">' + escapeHtml(gcReason) + '</div></div>';
+        } else if (img.geoclip && img.geoclip.geo_points && img.geoclip.geo_points.length > 0) {
             h += '<div class="img-analysis-row geoclip-block">' +
                 '<strong>GeoCLIP Embedding</strong> ' +
                 '<span class="wi-badge ch-badge-medium">' + img.geoclip.geo_points.length + ' prediction(s)</span>';

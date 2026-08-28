@@ -2679,6 +2679,7 @@ def create_app():
                             gc = predict_location(img_data)
                             print(f"[GEOCLIP] Result: enabled={gc.get('enabled')}, "
                                   f"available={gc.get('available')}, "
+                                  f"reason={gc.get('reason', 'ok')}, "
                                   f"predictions={len(gc.get('predictions', []))}, "
                                   f"geo_points={len(gc.get('geo_points', []))}, "
                                   f"error={gc.get('error', 'none')}")

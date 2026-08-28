@@ -36,6 +36,7 @@ def _get_client():
 
         api_key = os.getenv("DEEPSEEK_API_KEY")
         if not api_key:
+            print("[DEEPSEEK VISION] DEEPSEEK_API_KEY not set — Vision disabled")
             log.warning("DEEPSEEK_API_KEY not set — DeepSeek Vision disabled")
             return None
         _client = OpenAI(api_key=api_key, base_url=_BASE_URL)
@@ -104,6 +105,7 @@ def _call_vision(
         )
         return response.choices[0].message.content
     except Exception as exc:
+        print(f"[DEEPSEEK VISION] API call failed: {type(exc).__name__}: {exc}")
         log.error("DeepSeek Vision API call failed: %s", exc)
         return None
 

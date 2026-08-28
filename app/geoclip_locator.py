@@ -68,11 +68,13 @@ def predict_location(
     ``geo_points`` (ready for the map pipeline), and metadata.
     """
     if not GEOCLIP_ENABLED:
-        return {"enabled": False, "predictions": [], "geo_points": []}
+        return {"enabled": False, "reason": "GEOCLIP_ENABLED env var is false", "predictions": [], "geo_points": []}
 
     model = _get_model()
     if model is None:
-        return {"enabled": False, "available": False, "predictions": [], "geo_points": []}
+        return {"enabled": False, "available": False,
+                "reason": "geoclip package not installed (pip install geoclip)" if not _available else "model load failed",
+                "predictions": [], "geo_points": []}
 
     top_k = top_k or GEOCLIP_TOP_K
 

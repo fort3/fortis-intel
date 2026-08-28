@@ -360,7 +360,11 @@ def _two_pass_analysis(
     log.info("Vision geo pass 1: observation")
     obs_raw = _call_vision(image_bytes, observe_prompt, detail="high", max_tokens=1200)
     if not obs_raw:
-        return {"enabled": True, "clues": None, "geo_points": [], "error": "Vision API observation pass failed"}
+        print("[VISION GEO] Pass 1 (observation) returned no response — check DEEPSEEK_API_KEY "
+              f"and DEEPSEEK_VISION_MODEL (current: {os.getenv('DEEPSEEK_VISION_MODEL', 'deepseek-v4-flash-vision-exp')})")
+        return {"enabled": True, "clues": None, "geo_points": [],
+                "error": f"Vision API observation pass failed — model '{os.getenv('DEEPSEEK_VISION_MODEL', 'deepseek-v4-flash-vision-exp')}' "
+                         f"returned no response. Check the console log for the specific API error."}
 
     observations = _parse_observations(obs_raw)
 
