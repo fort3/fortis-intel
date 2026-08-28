@@ -90,6 +90,7 @@ GEO_SOURCES = {
     "mention": {"label": "Text Mention", "confidence_default": 0.4, "point_type": "inferred"},
     "timezone": {"label": "Timezone Inference", "confidence_default": 0.3, "point_type": "inferred"},
     "vision_geolocation": {"label": "AI Vision Geo", "confidence_default": 0.55, "point_type": "inferred"},
+    "geoclip": {"label": "GeoCLIP Embedding", "confidence_default": 0.45, "point_type": "inferred"},
 }
 
 SCENARIO_TYPES = {

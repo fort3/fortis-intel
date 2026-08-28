@@ -21,6 +21,11 @@ let watchPanelOpen = false;
 let kbPanelOpen = false;
 let lastAnalysisData = null;
 
+// Task loading state: tracks active loading animations per tool
+// so they survive tool switches and get properly cleaned up
+let _taskLoadingState = {};  // { toolName: { title, detail, phases, phaseIndex, intervalId } }
+let _activeLoadingTool = null;
+
 /* ====================================================================
    UTILITY FUNCTIONS
    ==================================================================== */
@@ -48,27 +53,20 @@ function showLoading() {
 }
 
 /**
- * Hide global loading scanline animation.
+ * Hide global loading scanline animation and clean up task loading state.
  */
 function hideLoading() {
     const el = document.getElementById('globalLoading');
     if (el) el.classList.remove('active');
     const scanline = document.getElementById('resultsScanline');
     if (scanline) scanline.classList.remove('active');
+    clearTaskLoading();
 }
 
 /**
- * Show a full-panel loading animation in the results area.
- * @param {string} title - Task name, e.g. "Investigation"
- * @param {string} detail - Context line, e.g. "Scanning 5 platforms"
- * @param {string[]} [phases] - Phase step labels to show beneath
+ * Build the task-loading HTML string for a given state.
  */
-function showTaskLoading(title, detail, phases) {
-    showLoading();
-    showResults();
-    var content = document.getElementById('resultsContent');
-    if (!content) return;
-
+function _buildTaskLoadingHtml(title, detail, phases, phaseIndex) {
     var html = '<div class="task-loading">';
 
     // Radar animation
@@ -96,18 +94,123 @@ function showTaskLoading(title, detail, phases) {
         html += '<div class="task-loading-detail">' + escapeHtml(detail) + '</div>';
     }
 
-    // Phase steps
+    // Phase steps with completed/active/pending states
     if (phases && phases.length > 0) {
         html += '<div class="task-loading-phases" id="taskLoadingPhases">';
         phases.forEach(function(p, idx) {
-            html += '<span class="phase-step' + (idx === 0 ? ' active' : '') + '" data-phase="' + idx + '">' + escapeHtml(p) + '</span>';
+            var cls = 'phase-step';
+            if (idx < phaseIndex) cls += ' completed';
+            else if (idx === phaseIndex) cls += ' active';
+            html += '<span class="' + cls + '" data-phase="' + idx + '">' + escapeHtml(p) + '</span>';
         });
         html += '</div>';
     }
 
     html += '</div>';
-    content.innerHTML = html;
+    return html;
+}
+
+/**
+ * Show a full-panel loading animation in the results area.
+ * Tracks state per-tool so it survives tool switches and
+ * auto-advances phase steps on a timer.
+ * @param {string} title - Task name, e.g. "Investigation"
+ * @param {string} detail - Context line, e.g. "Scanning 5 platforms"
+ * @param {string[]} [phases] - Phase step labels to show beneath
+ */
+function showTaskLoading(title, detail, phases) {
+    showLoading();
+    showResults();
+
+    // Clear any existing timer for this tool
+    var tool = currentTool;
+    if (_taskLoadingState[tool] && _taskLoadingState[tool].intervalId) {
+        clearInterval(_taskLoadingState[tool].intervalId);
+    }
+
+    var state = {
+        title: title,
+        detail: detail,
+        phases: phases || [],
+        phaseIndex: 0,
+        intervalId: null,
+        tool: tool
+    };
+
+    _taskLoadingState[tool] = state;
+    _activeLoadingTool = tool;
+
+    var content = document.getElementById('resultsContent');
+    if (!content) return;
+
+    content.innerHTML = _buildTaskLoadingHtml(title, detail, phases, 0);
     content.style.display = '';
+
+    // Auto-advance phases on a timer
+    if (phases && phases.length > 1) {
+        var phaseDuration = Math.max(3000, Math.min(8000, 25000 / phases.length));
+        state.intervalId = setInterval(function() {
+            var s = _taskLoadingState[tool];
+            if (!s) { clearInterval(state.intervalId); return; }
+
+            s.phaseIndex++;
+            if (s.phaseIndex >= s.phases.length) {
+                s.phaseIndex = s.phases.length - 1;
+                clearInterval(s.intervalId);
+                s.intervalId = null;
+                return;
+            }
+
+            // Update DOM if this tool is currently visible
+            var phasesEl = document.getElementById('taskLoadingPhases');
+            if (phasesEl && currentTool === tool) {
+                var steps = phasesEl.querySelectorAll('.phase-step');
+                steps.forEach(function(step, idx) {
+                    step.classList.remove('active', 'completed');
+                    if (idx < s.phaseIndex) step.classList.add('completed');
+                    else if (idx === s.phaseIndex) step.classList.add('active');
+                });
+            }
+        }, phaseDuration);
+    }
+}
+
+/**
+ * Clear the task loading state for the current (or specified) tool.
+ * Stops the phase timer and removes from state tracking.
+ * Call this on both success AND error before rendering results.
+ */
+function clearTaskLoading(toolName) {
+    var tool = toolName || currentTool;
+    var state = _taskLoadingState[tool];
+    if (state) {
+        if (state.intervalId) clearInterval(state.intervalId);
+        delete _taskLoadingState[tool];
+    }
+    if (_activeLoadingTool === tool) {
+        _activeLoadingTool = null;
+    }
+}
+
+/**
+ * Restore the loading animation for a tool if one is active.
+ * Called when switching back to a tool that has a pending operation.
+ * @returns {boolean} true if a loading state was restored
+ */
+function _restoreTaskLoading(toolName) {
+    var state = _taskLoadingState[toolName];
+    if (!state) return false;
+
+    showLoading();
+    showResults();
+    var content = document.getElementById('resultsContent');
+    if (!content) return false;
+
+    content.innerHTML = _buildTaskLoadingHtml(
+        state.title, state.detail, state.phases, state.phaseIndex
+    );
+    content.style.display = '';
+    return true;
 }
 
 /**
@@ -452,8 +555,13 @@ function selectTool(toolName) {
         submitBtn.innerHTML = '&#x25B6; ' + (labels[toolName] || 'Execute');
     }
 
-    // Clear results when switching tools
-    clearResults();
+    // Restore loading state if the target tool has a pending operation,
+    // otherwise clear results
+    if (_taskLoadingState[toolName]) {
+        _restoreTaskLoading(toolName);
+    } else {
+        clearResults();
+    }
 }
 
 /* ====================================================================
@@ -589,6 +697,8 @@ async function uploadReport() {
 
         if (data.error) {
             showToast('Upload error: ' + data.error, 'error');
+            var errContent = document.getElementById('resultsContent');
+            if (errContent) errContent.innerHTML = '<div class="result-section result-error"><p>Error: ' + escapeHtml(data.error) + '</p></div>';
             hideLoading();
             return;
         }
@@ -668,6 +778,8 @@ async function enrichWithOsint() {
         const data = await response.json();
         if (data.error) {
             showToast('Enrichment error: ' + data.error, 'error');
+            var errEl = document.getElementById('resultsContent');
+            if (errEl) errEl.innerHTML = '<div class="result-section result-error"><p>Error: ' + escapeHtml(data.error) + '</p></div>';
         } else {
             showToast('Report enriched with OSINT data.', 'success');
             if (data.analysis) {
@@ -676,6 +788,8 @@ async function enrichWithOsint() {
         }
     } catch (error) {
         showToast('Enrichment failed: ' + error.message, 'error');
+        var content = document.getElementById('resultsContent');
+        if (content) content.innerHTML = '<div class="result-section result-error"><p>Error: ' + escapeHtml(error.message) + '</p></div>';
     } finally {
         hideLoading();
     }
@@ -769,6 +883,8 @@ async function runInvestigation() {
 
         if (data.error) {
             showToast('Investigation error: ' + data.error, 'error');
+            var content = document.getElementById('resultsContent');
+            if (content) content.innerHTML = '<div class="result-section result-error"><p>Error: ' + escapeHtml(data.error) + '</p></div>';
             hideLoading();
             return;
         }
@@ -871,6 +987,8 @@ async function runGeolocation() {
             renderAnalysis(data);
         } catch (error) {
             showToast('Geolocation failed: ' + error.message, 'error');
+            var errEl = document.getElementById('resultsContent');
+            if (errEl) errEl.innerHTML = '<div class="result-section result-error"><p>Error: ' + escapeHtml(error.message) + '</p></div>';
         } finally {
             hideLoading();
         }
@@ -941,6 +1059,8 @@ async function runGeolocation() {
         renderAnalysis(data);
     } catch (error) {
         showToast('Triangulation failed: ' + error.message, 'error');
+        var errEl = document.getElementById('resultsContent');
+        if (errEl) errEl.innerHTML = '<div class="result-section result-error"><p>Error: ' + escapeHtml(error.message) + '</p></div>';
     } finally {
         hideLoading();
     }
@@ -1019,6 +1139,7 @@ async function runBatchInvestigation() {
 
         if (data.error) {
             showToast('Batch error: ' + data.error, 'error');
+            if (content) content.innerHTML = '<div class="result-section result-error"><p>Error: ' + escapeHtml(data.error) + '</p></div>';
             hideLoading();
             return;
         }
@@ -1110,6 +1231,7 @@ async function runBatchInvestigation() {
 
     } catch (error) {
         showToast('Batch investigation failed: ' + error.message, 'error');
+        if (content) content.innerHTML = '<div class="result-section result-error"><p>Error: ' + escapeHtml(error.message) + '</p></div>';
     } finally {
         hideLoading();
     }
@@ -1202,6 +1324,7 @@ async function createMonitor() {
 
     } catch (error) {
         showToast('Monitor creation failed: ' + error.message, 'error');
+        if (content) content.innerHTML = '<div class="result-section result-error"><p>Error: ' + escapeHtml(error.message) + '</p></div>';
     } finally {
         hideLoading();
     }
@@ -1283,6 +1406,8 @@ async function runScenario() {
 
         if (data.error) {
             showToast('Scenario error: ' + data.error, 'error');
+            var content = document.getElementById('resultsContent');
+            if (content) content.innerHTML = '<div class="result-section result-error"><p>Error: ' + escapeHtml(data.error) + '</p></div>';
             hideLoading();
             return;
         }
@@ -1882,6 +2007,7 @@ function renderMap(mapData) {
         user_input: '#d97706',
         osint: '#7c3aed',
         vision_geolocation: '#e879f9',
+        geoclip: '#a78bfa',
         default: '#2563eb'
     };
 
@@ -2051,7 +2177,8 @@ function renderMap(mapData) {
             geotag: 'Social Geotag', social: 'Social', geocoding: 'Geocoded',
             address: 'Address', mention: 'Mention', manual: 'Manual',
             user_input: 'User Input', osint: 'OSINT',
-            vision_geolocation: 'AI Vision Geo'
+            vision_geolocation: 'AI Vision Geo',
+            geoclip: 'GeoCLIP Embedding'
         };
         var LegendControl = L.Control.extend({
             options: { position: 'bottomright' },
@@ -3918,6 +4045,38 @@ function renderImageAnalysisSection(images) {
                 '<span class="wi-badge ch-badge-info">No locations resolved</span>' +
                 '<div style="margin-top:0.4em;font-size:0.88em;opacity:0.85"><em>Clues found:</em> ' +
                 escapeHtml(img.vision_geo.clues.key_clues.join(' · ')) + '</div></div>';
+        }
+
+        // GeoCLIP predictions
+        if (img.geoclip && img.geoclip.geo_points && img.geoclip.geo_points.length > 0) {
+            h += '<div class="img-analysis-row geoclip-block">' +
+                '<strong>GeoCLIP Embedding</strong> ' +
+                '<span class="wi-badge ch-badge-medium">' + img.geoclip.geo_points.length + ' prediction(s)</span>';
+            h += '<div style="margin-top:0.3em">';
+            for (var gci = 0; gci < img.geoclip.geo_points.length; gci++) {
+                var gcp = img.geoclip.geo_points[gci];
+                var gcConf = gcp.confidence ? (gcp.confidence * 100).toFixed(0) + '%' : '?';
+                var gcProb = gcp.geoclip_probability ? ' (p=' + (gcp.geoclip_probability * 100).toFixed(1) + '%)' : '';
+                h += '<div style="font-size:0.88em;padding:0.15em 0">' +
+                    '<span class="wi-badge" style="font-size:0.8em;background:#a78bfa">' + gcConf + '</span> ' +
+                    escapeHtml(gcp.label || 'Prediction #' + (gci + 1)) + gcProb +
+                    ' <span style="opacity:0.6">(' + (gcp.lat || '?') + ', ' + (gcp.lon || '?') + ')</span></div>';
+            }
+            h += '</div></div>';
+        } else if (img.geoclip && img.geoclip.predictions && img.geoclip.predictions.length > 0) {
+            h += '<div class="img-analysis-row geoclip-block">' +
+                '<strong>GeoCLIP Embedding</strong> ' +
+                '<span class="wi-badge ch-badge-info">' + img.geoclip.predictions.length + ' prediction(s)</span>';
+            h += '<div style="margin-top:0.3em">';
+            for (var gpi = 0; gpi < Math.min(img.geoclip.predictions.length, 3); gpi++) {
+                var pred = img.geoclip.predictions[gpi];
+                var pLabel = pred.address || pred.place_name || '#' + pred.rank;
+                h += '<div style="font-size:0.88em;padding:0.15em 0">' +
+                    escapeHtml(pLabel) +
+                    ' <span style="opacity:0.6">(' + (pred.lat || '?').toFixed(3) + ', ' + (pred.lon || '?').toFixed(3) + ')</span>' +
+                    ' <span class="ch-platform">p=' + (pred.probability * 100).toFixed(1) + '%</span></div>';
+            }
+            h += '</div></div>';
         }
 
         // Reverse search

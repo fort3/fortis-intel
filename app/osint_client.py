@@ -848,6 +848,26 @@ class OSINTClient:
             except Exception as exc:
                 log.warning("Vision geolocation failed for uploads (non-fatal): %s", exc)
 
+            # GeoCLIP local model geolocation
+            try:
+                from app.geoclip_locator import predict_location, GEOCLIP_ENABLED
+                if GEOCLIP_ENABLED:
+                    pre_gc = len(geo_points)
+                    for i, img_data in enumerate(image_bytes):
+                        gc_result = predict_location(
+                            img_data,
+                            filename=filenames[i] if i < len(filenames) else None,
+                        )
+                        for gcp in gc_result.get("geo_points", []):
+                            gcp["media_url"] = filenames[i] if i < len(filenames) else "upload"
+                            gcp["platform"] = "user_upload"
+                            geo_points.append(gcp)
+                    gc_count = len(geo_points) - pre_gc
+                    if gc_count:
+                        log.info("GeoCLIP added %d points from uploaded images", gc_count)
+            except Exception as exc:
+                log.warning("GeoCLIP failed for uploads (non-fatal): %s", exc)
+
         return geo_points
 
     def _geocode_entity_locations(

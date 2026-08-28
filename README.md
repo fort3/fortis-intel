@@ -813,6 +813,7 @@ The platform is designed to run with minimal configuration. Core features that w
 - CLIP zero-shot image classification via sentence-transformers (no API key needed, model downloads automatically)
 - DeepSeek Vision AI scene analysis (uses existing `DEEPSEEK_API_KEY` -- no additional key needed)
 - AI Vision geolocation -- identifies locations from visual clues when EXIF is absent (uses existing `DEEPSEEK_API_KEY`)
+- GeoCLIP local GPS prediction -- predicts coordinates from images without any API (requires `pip install geoclip`, model downloads automatically)
 - Manual EXIF extraction from uploaded images
 - Manual coordinate entry for triangulation
 - Knowledge Base management
@@ -900,7 +901,7 @@ The geolocation card supports direct image uploads for GPS triangulation. Upload
 
 ### Image OSINT Analysis
 
-The platform includes six image analysis modules that run on uploaded images during investigations and via the `/analyze-image` endpoint:
+The platform includes seven image analysis modules that run on uploaded images during investigations and via the `/analyze-image` endpoint:
 
 | Module | Function | Dependencies | API Key |
 |---|---|---|---|
@@ -909,9 +910,10 @@ The platform includes six image analysis modules that run on uploaded images dur
 | **Steganography Detection** | LSB extraction, RS analysis, sample pairs statistical test | Pillow, numpy | None |
 | **CLIP Vision** | Zero-shot image classification (22 OSINT categories), landmark detection (50 locations), content safety screening | sentence-transformers (CLIP model) | None |
 | **DeepSeek Vision AI** | Contextual scene description, object/entity identification, text/signage transcription, location clue analysis, temporal clue detection, OSINT relevance assessment | openai (OpenAI-compatible client) | `DEEPSEEK_API_KEY` (shared with LLM) |
-| **AI Vision Geolocation** | Visual clue extraction (architecture, signs, vegetation, terrain, road markings, vehicles) with automatic geocoding to map coordinates. Works without EXIF data | openai (OpenAI-compatible client), geopy | `DEEPSEEK_API_KEY` (shared with LLM) |
+| **AI Vision Geolocation** | Two-pass visual clue extraction (architecture, signs, vegetation, terrain, road markings, vehicles) with multi-round refinement and automatic geocoding to map coordinates. Works without EXIF data | openai (OpenAI-compatible client), geopy | `DEEPSEEK_API_KEY` (shared with LLM) |
+| **GeoCLIP Embedding** | Local GPS prediction from images via contrastive learning (MIT license). Returns ranked coordinate predictions without API calls | geoclip, Pillow | None (runs locally) |
 
-All modules degrade gracefully -- missing optional dependencies disable individual modules without affecting others. CLIP leverages the same `sentence-transformers` infrastructure used by the civilian harm classifier. The perceptual hash cache (LRU, max 5000 entries) enables cross-investigation duplicate detection.
+All modules degrade gracefully -- missing optional dependencies disable individual modules without affecting others. CLIP leverages the same `sentence-transformers` infrastructure used by the civilian harm classifier. The perceptual hash cache (LRU, max 5000 entries) enables cross-investigation duplicate detection. GeoCLIP downloads its model (~1.5 GB) on first use and caches it locally.
 
 **DeepSeek Vision** uses the `deepseek-v4-flash-vision-exp` model via the same API key and base URL as the text LLM. It provides free-form, contextual image understanding — the model actually sees the image and returns structured OSINT observations including scene description, visible text transcription, location/temporal clues, and intelligence relevance assessment. Vision descriptions are injected into the LLM analysis context alongside CLIP classifications, enabling the analyst model to reason over detailed visual evidence. Supports JPEG, PNG, GIF, and WebP images up to 32 MB, with detail level control (`low`/`high`/`auto`).
 
@@ -928,6 +930,12 @@ All modules degrade gracefully -- missing optional dependencies disable individu
 | `IMAGE_SEARCH_TIMEOUT` | `30` | Per-engine timeout in seconds for reverse image search |
 | `DEEPSEEK_VISION_ENABLED` | `true` | Toggle DeepSeek Vision AI scene analysis module |
 | `DEEPSEEK_VISION_MODEL` | `deepseek-v4-flash-vision-exp` | DeepSeek Vision model for contextual image understanding |
+| `VISION_GEO_TWO_PASS` | `true` | Enable two-pass (observe + synthesise) vision geolocation |
+| `VISION_GEO_REFINE` | `true` | Enable multi-round refinement pass (third pass confirms/refutes top hypothesis) |
+| `VISION_GEO_REFINE_THRESHOLD` | `0.3` | Minimum confidence to trigger refinement (skips very low or very high confidence) |
+| `GEOCLIP_ENABLED` | `true` | Toggle GeoCLIP local GPS prediction module |
+| `GEOCLIP_TOP_K` | `5` | Number of top GeoCLIP predictions to return |
+| `GEOCLIP_MIN_PROB` | `0.01` | Minimum GeoCLIP probability threshold for geo points |
 
 ### Media Geolocation Enrichment
 
@@ -948,9 +956,10 @@ Estimates location from video content using OpenCV keyframe analysis (`app/video
 3. **EXIF from video frames** -- Extracts GPS metadata embedded in video frame headers (source: `video_exif`, confidence: 0.90)
 4. **OCR + geocoding** -- When pytesseract is installed, detects text in frames (signs, banners, watermarks) and geocodes location mentions via spaCy NER + Nominatim (source: `video_landmark`, confidence: 0.50-0.55)
 5. **Text region detection** -- OpenCV MSER detects text-heavy regions in frames for targeted OCR analysis
-6. **AI Vision geolocation** -- DeepSeek Vision analyses keyframes for architectural styles, signage, vegetation, terrain, road infrastructure, and cultural markers, then geocodes identified locations (source: `vision_geolocation`, confidence: 0.25-0.75). Works without EXIF data
+6. **AI Vision geolocation** -- Two-pass DeepSeek Vision analysis: (1) exhaustive observation with GeoGuessr methodology, (2) location hypothesis synthesis, (3) optional refinement pass that re-examines the image to confirm or refute the top hypothesis. Geocodes identified locations (source: `vision_geolocation`, confidence: 0.25-0.75). Works without EXIF data
+7. **GeoCLIP embedding** -- Local contrastive learning model predicts GPS coordinates directly from images without API calls (source: `geoclip`, confidence: 0.10-0.80). Cross-references with vision geolocation for higher accuracy
 
-**Optional dependencies**: `opencv-python>=4.9.0`, `imagehash>=4.3.0`, `pytesseract` (for OCR). The system degrades gracefully — without OpenCV, video analysis is skipped entirely. Vision geolocation requires `DEEPSEEK_API_KEY` only.
+**Optional dependencies**: `opencv-python>=4.9.0`, `imagehash>=4.3.0`, `pytesseract` (for OCR), `geoclip` (for local GPS prediction). The system degrades gracefully — without OpenCV, video analysis is skipped entirely. Vision geolocation requires `DEEPSEEK_API_KEY` only. GeoCLIP runs fully offline after initial model download.
 
 #### Unified Geo Signal Aggregation
 
@@ -964,6 +973,7 @@ All geolocation signals from an investigation are aggregated onto a single map w
 | Social geotags | Platform check-ins and place objects | 0.85 | `geotag` |
 | NLP location mentions | spaCy GPE/LOC entities + Nominatim geocoding | 0.55 | `nlp_mention` |
 | AI Vision geolocation | DeepSeek Vision clue extraction + geocoding | 0.25-0.75 | `vision_geolocation` |
+| GeoCLIP embedding | Local contrastive learning GPS prediction | 0.10-0.80 | `geoclip` |
 | IP geolocation | GeoIP2 / MaxMind | varies | `ip` |
 
 Each signal carries confidence scores and source attribution. When 2+ geo points exist, automatic weighted-centroid triangulation (with DBSCAN clustering for 5+ points) computes a confidence radius and center point. The map legend dynamically shows only the source types present in each investigation.
@@ -973,7 +983,7 @@ The investigation pipeline (`OSINTClient.investigate()`) runs geo extraction in 
 2. `_extract_media_geo()` -- EXIF GPS from downloaded images
 3. `_extract_video_geo()` -- Video keyframe analysis (requires OpenCV), including AI Vision geolocation of keyframes
 4. `_geocode_entity_locations()` -- NLP-extracted place names geocoded to coordinates
-5. `extract_geo_from_uploaded_media()` -- EXIF + AI Vision geolocation fallback for user-uploaded images (no EXIF required)
+5. `extract_geo_from_uploaded_media()` -- EXIF + AI Vision geolocation + GeoCLIP fallback for user-uploaded images (no EXIF required)
 
 ### Data Protection & Compliance
 
@@ -1050,7 +1060,8 @@ Fortis-Intelligence-Hub/
 |   |-- image_stego.py           # Steganography detection (LSB, RS analysis, sample pairs)
 |   |-- image_vision.py          # CLIP zero-shot classification + landmark detection
 |   |-- image_deepseek_vision.py # DeepSeek Vision AI scene analysis + OSINT assessment
-|   |-- vision_geolocation.py   # AI vision-based geolocation (clue extraction + geocoding)
+|   |-- vision_geolocation.py   # AI vision-based geolocation (two-pass + refinement)
+|   |-- geoclip_locator.py     # GeoCLIP local GPS prediction from images
 |   |-- url_fuzzer.py            # URL endpoint fuzzing for domain recon (elevated auth)
 |   |-- video_geo.py             # Video keyframe extraction + landmark geolocation
 |   |-- social_client.py         # Social media integrations (API + curl_cffi scrape fallbacks)

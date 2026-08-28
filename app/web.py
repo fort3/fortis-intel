@@ -1749,9 +1749,25 @@ def create_app():
                         img_result["vision"] = clip_analyze_image(file_bytes, fname)
                     if DEEPSEEK_VISION_ENABLED:
                         img_result["deepseek_vision"] = deepseek_describe_image(file_bytes, fname)
+
+                        # Build reverse search context for vision geo
+                        rs_context = None
+                        rs = img_result.get("reverse_search")
+                        if rs:
+                            rs_parts = []
+                            for eng in ("yandex_results", "google_lens_results", "bing_results"):
+                                eng_data = rs.get(eng)
+                                if eng_data and eng_data.get("matches"):
+                                    for match in eng_data["matches"][:3]:
+                                        title = match.get("title", "")
+                                        if title:
+                                            rs_parts.append(title)
+                            if rs_parts:
+                                rs_context = "; ".join(rs_parts[:8])
+
                         try:
                             from app.vision_geolocation import extract_geo_clues
-                            vgeo = extract_geo_clues(file_bytes, fname)
+                            vgeo = extract_geo_clues(file_bytes, fname, reverse_search_context=rs_context)
                             img_result["vision_geo"] = vgeo
                             if vgeo.get("geo_points"):
                                 existing_geo = findings_dict.get("geo_points", [])
@@ -1763,6 +1779,23 @@ def create_app():
                                 print(f"[VISION GEO] {fname}: {len(vgeo['geo_points'])} location(s) from visual clues")
                         except Exception as vge:
                             print(f"[WARN] Vision geo failed for {fname} (non-fatal): {vge}")
+
+                    # GeoCLIP local model geolocation
+                    try:
+                        from app.geoclip_locator import predict_location, GEOCLIP_ENABLED
+                        if GEOCLIP_ENABLED:
+                            gc_result = predict_location(file_bytes, filename=fname)
+                            img_result["geoclip"] = gc_result
+                            if gc_result.get("geo_points"):
+                                existing_geo = findings_dict.get("geo_points", [])
+                                for gcp in gc_result["geo_points"]:
+                                    gcp["media_url"] = fname
+                                    gcp["platform"] = "user_upload"
+                                existing_geo.extend(gc_result["geo_points"])
+                                findings_dict["geo_points"] = existing_geo
+                                print(f"[GEOCLIP] {fname}: {len(gc_result['geo_points'])} location(s)")
+                    except Exception as gce:
+                        print(f"[WARN] GeoCLIP failed for {fname} (non-fatal): {gce}")
                     image_analysis_results.append(img_result)
                 except Exception as exc:
                     print(f"[WARN] Image analysis failed for {fname} (non-fatal): {exc}")
@@ -2380,11 +2413,29 @@ def create_app():
                 if run_deepseek:
                     img_result["deepseek_vision"] = deepseek_describe_image(file_bytes, f.filename)
                 if run_vision_geo:
+                    rs_ctx = None
+                    rs = img_result.get("reverse_search")
+                    if rs:
+                        rs_parts = []
+                        for eng in ("yandex_results", "google_lens_results", "bing_results"):
+                            eng_data = rs.get(eng)
+                            if eng_data and eng_data.get("matches"):
+                                for m in eng_data["matches"][:3]:
+                                    if m.get("title"):
+                                        rs_parts.append(m["title"])
+                        if rs_parts:
+                            rs_ctx = "; ".join(rs_parts[:8])
                     try:
                         from app.vision_geolocation import extract_geo_clues
-                        img_result["vision_geo"] = extract_geo_clues(file_bytes, f.filename)
+                        img_result["vision_geo"] = extract_geo_clues(file_bytes, f.filename, reverse_search_context=rs_ctx)
                     except Exception as vge:
                         print(f"[WARN] Vision geo failed for {f.filename}: {vge}")
+                    try:
+                        from app.geoclip_locator import predict_location, GEOCLIP_ENABLED
+                        if GEOCLIP_ENABLED:
+                            img_result["geoclip"] = predict_location(file_bytes, filename=f.filename)
+                    except Exception as gce:
+                        print(f"[WARN] GeoCLIP failed for {f.filename}: {gce}")
                 results.append(img_result)
             except Exception as exc:
                 results.append({"filename": f.filename, "error": str(exc)})
@@ -2604,6 +2655,26 @@ def create_app():
                             print(f"[VISION GEO] Found {len(data_points)} location(s) via AI vision analysis")
                 except Exception as exc:
                     print(f"[WARN] Vision geolocation failed (non-fatal): {exc}")
+
+                # GeoCLIP local model fallback
+                try:
+                    from app.geoclip_locator import predict_location, GEOCLIP_ENABLED
+                    if GEOCLIP_ENABLED:
+                        for img_data in image_bytes_list:
+                            gc = predict_location(img_data)
+                            for gcp in gc.get("geo_points", []):
+                                data_points.append({
+                                    "type": "coordinates",
+                                    "lat": gcp["lat"],
+                                    "lon": gcp["lon"],
+                                    "label": gcp.get("label", "GeoCLIP Prediction"),
+                                    "source": "geoclip",
+                                    "confidence": gcp.get("confidence", 0.4),
+                                })
+                        if data_points:
+                            print(f"[GEOCLIP] Found {len(data_points)} location(s) via GeoCLIP")
+                except Exception as exc:
+                    print(f"[WARN] GeoCLIP failed (non-fatal): {exc}")
 
             if not data_points:
                 return jsonify({
