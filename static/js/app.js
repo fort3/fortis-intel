@@ -2577,6 +2577,7 @@ function openWatchPanel() {
     if (overlay) overlay.classList.add('open');
 
     watchPanelOpen = true;
+    loadWatchMonitors();
     loadWatchFindings();
     startWatchRefresh();
 }
@@ -2593,6 +2594,149 @@ function closeWatchPanel() {
 
     watchPanelOpen = false;
     stopWatchRefresh();
+}
+
+/**
+ * Load and render active monitors in the Watch panel.
+ */
+async function loadWatchMonitors() {
+    var container = document.getElementById('watchMonitors');
+    var emptyState = document.getElementById('watchEmpty');
+    if (!container) return;
+
+    try {
+        var response = await fetchApi('/monitor/list');
+        if (!response.ok) return;
+        var data = await response.json();
+        var monitors = data.monitors || [];
+
+        if (monitors.length === 0) {
+            container.innerHTML = '';
+            if (emptyState) emptyState.style.display = '';
+            return;
+        }
+
+        if (emptyState) emptyState.style.display = 'none';
+
+        var html = '<div class="watch-monitors-section">' +
+            '<h4 style="margin:0 0 8px;font-size:13px;text-transform:uppercase;letter-spacing:1px;color:var(--text-muted);">' +
+            'Active Monitors (' + monitors.length + ')</h4>';
+
+        for (var i = 0; i < monitors.length; i++) {
+            var mon = monitors[i];
+            var mid = mon.monitor_id || '';
+            var isActive = mon.status === 'active';
+            var isPaused = mon.status === 'paused';
+            var statusColor = isActive ? 'var(--success)' : isPaused ? 'var(--warning)' : 'var(--text-muted)';
+            var statusLabel = isActive ? 'Active' : isPaused ? 'Paused' : mon.status || 'unknown';
+            var platforms = (mon.platforms || []).join(', ');
+            var lastPoll = mon.last_poll ? formatTimestamp(mon.last_poll) : 'never';
+
+            html += '<div class="watch-monitor-card" data-monitor-id="' + escapeHtml(mid) + '">' +
+                '<div style="display:flex;justify-content:space-between;align-items:center;">' +
+                '<div style="flex:1;min-width:0;">' +
+                '<div style="font-weight:600;font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">' +
+                escapeHtml(mon.query || '') + '</div>' +
+                '<div style="font-size:11px;color:var(--text-muted);margin-top:2px;">' +
+                '<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:' + statusColor + ';margin-right:4px;vertical-align:middle;"></span>' +
+                statusLabel + ' &middot; ' +
+                escapeHtml(mon.monitor_type || 'keyword') + ' &middot; ' +
+                'every ' + (mon.interval_minutes || '?') + 'min</div>' +
+                '<div style="font-size:10px;color:var(--text-muted);margin-top:1px;">' +
+                escapeHtml(platforms) + ' &middot; last poll: ' + lastPoll + '</div>' +
+                '</div>' +
+                '<div style="display:flex;gap:4px;margin-left:8px;flex-shrink:0;">';
+
+            if (isActive) {
+                html += '<button class="btn btn-sm btn-ghost watch-pause-btn" data-monitor-id="' + escapeHtml(mid) + '" title="Pause monitor">&#x23F8;</button>';
+            } else if (isPaused) {
+                html += '<button class="btn btn-sm btn-ghost watch-resume-btn" data-monitor-id="' + escapeHtml(mid) + '" title="Resume monitor">&#x25B6;</button>';
+            }
+            html += '<button class="btn btn-sm btn-ghost watch-delete-btn" data-monitor-id="' + escapeHtml(mid) + '" title="Delete monitor" style="color:var(--error);">&#x2715;</button>';
+
+            html += '</div></div></div>';
+        }
+
+        html += '</div>';
+        container.innerHTML = html;
+
+    } catch (e) {
+        console.warn('[Watch] Monitor list load failed:', e);
+    }
+}
+
+/**
+ * Pause an active monitor.
+ */
+async function pauseMonitor(monitorId) {
+    try {
+        var response = await fetchApi('/monitor/' + encodeURIComponent(monitorId) + '/pause', {
+            method: 'POST',
+            body: JSON.stringify({})
+        });
+        if (response.ok) {
+            var data = await response.json();
+            if (data.success === false) {
+                showToast('Pause failed: ' + (data.error || 'Unknown error'), 'error');
+            } else {
+                showToast('Monitor paused.', 'info');
+                loadWatchMonitors();
+            }
+        } else {
+            showToast('Pause failed: server returned ' + response.status, 'error');
+        }
+    } catch (e) {
+        showToast('Pause failed: ' + e.message, 'error');
+    }
+}
+
+/**
+ * Resume a paused monitor.
+ */
+async function resumeMonitor(monitorId) {
+    try {
+        var response = await fetchApi('/monitor/' + encodeURIComponent(monitorId) + '/resume', {
+            method: 'POST',
+            body: JSON.stringify({})
+        });
+        if (response.ok) {
+            var data = await response.json();
+            if (data.success === false) {
+                showToast('Resume failed: ' + (data.error || 'Unknown error'), 'error');
+            } else {
+                showToast('Monitor resumed.', 'success');
+                loadWatchMonitors();
+            }
+        } else {
+            showToast('Resume failed: server returned ' + response.status, 'error');
+        }
+    } catch (e) {
+        showToast('Resume failed: ' + e.message, 'error');
+    }
+}
+
+/**
+ * Delete a monitor permanently.
+ */
+async function deleteMonitor(monitorId) {
+    try {
+        var response = await fetchApi('/monitor/' + encodeURIComponent(monitorId) + '/delete', {
+            method: 'DELETE'
+        });
+        if (response.ok) {
+            var data = await response.json();
+            if (data.success === false) {
+                showToast('Delete failed: ' + (data.error || 'Unknown error'), 'error');
+            } else {
+                showToast('Monitor deleted.', 'info');
+                loadWatchMonitors();
+            }
+        } else {
+            showToast('Delete failed: server returned ' + response.status, 'error');
+        }
+    } catch (e) {
+        showToast('Delete failed: ' + e.message, 'error');
+    }
 }
 
 /**
@@ -3350,6 +3494,26 @@ document.addEventListener('DOMContentLoaded', function () {
             var dismissBtn = e.target.closest('.watch-dismiss-btn');
             if (dismissBtn) {
                 dismissFinding(dismissBtn.dataset.findingId);
+                return;
+            }
+
+            var pauseBtn = e.target.closest('.watch-pause-btn');
+            if (pauseBtn) {
+                pauseMonitor(pauseBtn.dataset.monitorId);
+                return;
+            }
+
+            var resumeBtn = e.target.closest('.watch-resume-btn');
+            if (resumeBtn) {
+                resumeMonitor(resumeBtn.dataset.monitorId);
+                return;
+            }
+
+            var deleteBtn = e.target.closest('.watch-delete-btn');
+            if (deleteBtn) {
+                if (confirm('Delete this monitor permanently?')) {
+                    deleteMonitor(deleteBtn.dataset.monitorId);
+                }
                 return;
             }
         });

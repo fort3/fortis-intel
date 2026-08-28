@@ -1634,6 +1634,43 @@ small, .text-sm {
   padding: 4px 10px;
 }
 
+/* Monitor management cards */
+.watch-monitors-section {
+  margin-bottom: 16px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--border);
+}
+
+.watch-monitor-card {
+  padding: 10px 12px;
+  background: var(--bg-elevated);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  margin-bottom: 6px;
+  transition: border-color var(--transition-fast);
+}
+
+.watch-monitor-card:hover {
+  border-color: var(--border-active);
+}
+
+.watch-monitor-card .btn-ghost {
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 2px 6px;
+  font-size: 12px;
+  cursor: pointer;
+  color: var(--text-secondary);
+  transition: all var(--transition-fast);
+}
+
+.watch-monitor-card .btn-ghost:hover {
+  border-color: var(--border-active);
+  color: var(--text-primary);
+  background: var(--bg-hover);
+}
+
 /* ==========================================================================
    21. KNOWLEDGE BASE PANEL
    ========================================================================== */

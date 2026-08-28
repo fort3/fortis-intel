@@ -621,7 +621,9 @@
       <button class="slide-panel-close" id="watchClose">&times;</button>
     </div>
     <div class="slide-panel-body" id="watchBody">
-      <div class="results-empty" style="min-height:200px;">
+      <!-- Active monitors list -->
+      <div id="watchMonitors"></div>
+      <div class="results-empty" id="watchEmpty" style="min-height:200px;">
         <div class="results-empty-icon">&#x1F4E1;</div>
         <div class="results-empty-text">No Active Monitors</div>
         <div class="results-empty-hint">Create a feed monitor to start watching</div>
