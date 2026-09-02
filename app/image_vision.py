@@ -106,18 +106,31 @@ class _CLIPModel:
         with self._lock:
             if self._model is not None or not self._available:
                 return
-            try:
-                from sentence_transformers import SentenceTransformer
+            retries = 2
+            for attempt in range(retries + 1):
+                try:
+                    from sentence_transformers import SentenceTransformer
 
-                log.info(
-                    "Loading CLIP model: %s (~340 MB on first download)",
-                    self._model_name,
-                )
-                self._model = SentenceTransformer(self._model_name)
-                log.info("CLIP model ready: %s", self._model_name)
-            except Exception as exc:
-                log.warning("CLIP model unavailable: %s", exc)
-                self._available = False
+                    log.info(
+                        "Loading CLIP model: %s (~340 MB on first download) [attempt %d/%d]",
+                        self._model_name, attempt + 1, retries + 1,
+                    )
+                    self._model = SentenceTransformer(self._model_name)
+                    log.info("CLIP model ready: %s", self._model_name)
+                    return
+                except Exception as exc:
+                    if attempt < retries:
+                        log.warning("CLIP model load attempt %d failed, retrying: %s", attempt + 1, exc)
+                        import time
+                        time.sleep(2)
+                    else:
+                        log.warning(
+                            "CLIP model unavailable after %d attempts: %s. "
+                            "Ensure 'transformers' and 'torch' are installed: "
+                            "pip install transformers torch sentence-transformers",
+                            retries + 1, exc,
+                        )
+                        self._available = False
 
     # -- encoding ----------------------------------------------------------
 

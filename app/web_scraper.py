@@ -218,9 +218,12 @@ class WebScraper:
     def dns_lookup(self, domain: str) -> dict[str, Any]:
         record_types = ["A", "AAAA", "MX", "TXT", "NS", "SOA", "CNAME"]
         results: dict[str, list[str]] = {rt: [] for rt in record_types}
+        resolver = dns.resolver.Resolver()
+        resolver.timeout = 5.0
+        resolver.lifetime = 10.0
         for rtype in record_types:
             try:
-                answers = dns.resolver.resolve(domain, rtype)
+                answers = resolver.resolve(domain, rtype)
                 for rdata in answers:
                     if rtype == "MX":
                         results[rtype].append(f"{rdata.preference} {rdata.exchange}")
@@ -234,7 +237,8 @@ class WebScraper:
                         )
                     else:
                         results[rtype].append(str(rdata))
-            except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer, dns.resolver.NoNameservers):
+            except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer,
+                    dns.resolver.NoNameservers, dns.resolver.LifetimeTimeout):
                 log.debug("No %s records for %r", rtype, domain)
             except Exception:
                 log.exception("DNS %s lookup failed for %r", rtype, domain)

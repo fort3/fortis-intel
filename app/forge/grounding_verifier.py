@@ -115,15 +115,30 @@ def _get_model():
             log.debug("Could not reuse civilian harm model: %s", exc)
 
         # Fall back to loading our own instance
-        try:
-            from sentence_transformers import SentenceTransformer
-            from app.civilian_harm import HARM_MODEL_NAME
-            log.info("Grounding verifier: loading model %s", HARM_MODEL_NAME)
-            _model = SentenceTransformer(HARM_MODEL_NAME)
-            log.info("Grounding verifier: model loaded")
-        except Exception as exc:
-            log.warning("Grounding verifier model unavailable: %s", exc)
-            _model_available = False
+        retries = 2
+        for attempt in range(retries + 1):
+            try:
+                from sentence_transformers import SentenceTransformer
+                from app.civilian_harm import HARM_MODEL_NAME
+                log.info("Grounding verifier: loading model %s [attempt %d/%d]",
+                         HARM_MODEL_NAME, attempt + 1, retries + 1)
+                _model = SentenceTransformer(HARM_MODEL_NAME)
+                log.info("Grounding verifier: model loaded")
+                break
+            except Exception as exc:
+                if attempt < retries:
+                    log.warning("Grounding verifier load attempt %d failed, retrying: %s",
+                                attempt + 1, exc)
+                    import time
+                    time.sleep(2)
+                else:
+                    log.warning(
+                        "Grounding verifier model unavailable after %d attempts: %s. "
+                        "Ensure 'transformers' and 'torch' are installed: "
+                        "pip install transformers torch sentence-transformers",
+                        retries + 1, exc,
+                    )
+                    _model_available = False
 
         return _model
 

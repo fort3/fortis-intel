@@ -132,20 +132,35 @@ class CivilianHarmClassifier:
         with self._lock:
             if self._model is not None or not self._available:
                 return
-            try:
-                from sentence_transformers import SentenceTransformer
-                log.info("Loading civilian harm model: %s", self._model_name)
-                self._model = SentenceTransformer(self._model_name)
-                self._concept_embeddings = self._model.encode(
-                    HARM_CONCEPTS, normalize_embeddings=True,
-                )
-                log.info(
-                    "CivilianHarmClassifier ready — %d concepts encoded",
-                    len(HARM_CONCEPTS),
-                )
-            except Exception as exc:
-                log.warning("Civilian harm model unavailable: %s", exc)
-                self._available = False
+            retries = 2
+            for attempt in range(retries + 1):
+                try:
+                    from sentence_transformers import SentenceTransformer
+                    log.info("Loading civilian harm model: %s [attempt %d/%d]",
+                             self._model_name, attempt + 1, retries + 1)
+                    self._model = SentenceTransformer(self._model_name)
+                    self._concept_embeddings = self._model.encode(
+                        HARM_CONCEPTS, normalize_embeddings=True,
+                    )
+                    log.info(
+                        "CivilianHarmClassifier ready — %d concepts encoded",
+                        len(HARM_CONCEPTS),
+                    )
+                    return
+                except Exception as exc:
+                    if attempt < retries:
+                        log.warning("Civilian harm model load attempt %d failed, retrying: %s",
+                                    attempt + 1, exc)
+                        import time
+                        time.sleep(2)
+                    else:
+                        log.warning(
+                            "Civilian harm model unavailable after %d attempts: %s. "
+                            "Ensure 'transformers' and 'torch' are installed: "
+                            "pip install transformers torch sentence-transformers",
+                            retries + 1, exc,
+                        )
+                        self._available = False
 
     def _semantic_score(self, text: str) -> tuple[float, list[str]]:
         """Compute semantic similarity between text and harm concepts."""
