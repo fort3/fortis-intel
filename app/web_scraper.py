@@ -538,3 +538,346 @@ class WebScraper:
         except Exception:
             log.exception("VirusTotal lookup failed for %r (type=%s)", indicator, indicator_type)
             return {}
+
+    # ------------------------------------------------------------------
+    # crt.sh — Certificate Transparency (free, no API key)
+    # ------------------------------------------------------------------
+
+    def crtsh_lookup(self, domain: str) -> dict[str, Any]:
+        """Query crt.sh for SSL/TLS certificates issued for a domain.
+
+        Returns subdomains, issuers, and certificate timeline. No API key required.
+        """
+        try:
+            resp = self._http.get(
+                "https://crt.sh/",
+                params={"q": f"%.{domain}", "output": "json"},
+                timeout=15,
+            )
+            if resp.status_code != 200:
+                return {}
+
+            entries = resp.json()
+            subdomains = set()
+            issuers = set()
+            certs = []
+
+            for entry in entries[:500]:
+                name_value = entry.get("name_value", "")
+                for name in name_value.split("\n"):
+                    name = name.strip().lower()
+                    if name and name != domain and not name.startswith("*"):
+                        subdomains.add(name)
+
+                issuer = entry.get("issuer_name", "")
+                if issuer:
+                    issuers.add(issuer)
+
+                certs.append({
+                    "id": entry.get("id"),
+                    "common_name": entry.get("common_name", ""),
+                    "name_value": name_value,
+                    "issuer": issuer,
+                    "not_before": entry.get("not_before", ""),
+                    "not_after": entry.get("not_after", ""),
+                })
+
+            log.info("crt.sh lookup for %s: %d certs, %d subdomains",
+                     domain, len(certs), len(subdomains))
+
+            return {
+                "domain": domain,
+                "total_certs": len(entries),
+                "subdomains": sorted(subdomains)[:100],
+                "issuers": sorted(issuers),
+                "recent_certs": certs[:20],
+            }
+        except Exception:
+            log.exception("crt.sh lookup failed for %r", domain)
+            return {}
+
+    # ------------------------------------------------------------------
+    # AbuseIPDB — IP reputation (free tier: 1000 checks/day)
+    # ------------------------------------------------------------------
+
+    def abuseipdb_check(self, ip: str) -> dict[str, Any]:
+        """Check an IP address against AbuseIPDB.
+
+        Requires ABUSEIPDB_API_KEY env var. Free tier allows 1000 checks/day.
+        """
+        api_key = os.environ.get("ABUSEIPDB_API_KEY")
+        if not api_key:
+            return {}
+
+        try:
+            resp = self._http.get(
+                "https://api.abuseipdb.com/api/v2/check",
+                headers={"Key": api_key, "Accept": "application/json"},
+                params={"ipAddress": ip, "maxAgeInDays": "90", "verbose": ""},
+                timeout=10,
+            )
+            resp.raise_for_status()
+            data = resp.json().get("data", {})
+
+            log.info("AbuseIPDB check for %s: score=%d, reports=%d",
+                     ip, data.get("abuseConfidenceScore", 0),
+                     data.get("totalReports", 0))
+
+            return {
+                "ip": ip,
+                "abuse_score": data.get("abuseConfidenceScore", 0),
+                "total_reports": data.get("totalReports", 0),
+                "country": data.get("countryCode", ""),
+                "isp": data.get("isp", ""),
+                "domain": data.get("domain", ""),
+                "is_tor": data.get("isTor", False),
+                "is_whitelisted": data.get("isWhitelisted", False),
+                "usage_type": data.get("usageType", ""),
+                "last_reported": data.get("lastReportedAt", ""),
+            }
+        except Exception:
+            log.exception("AbuseIPDB check failed for %r", ip)
+            return {}
+
+    # ------------------------------------------------------------------
+    # AlienVault OTX — Threat intelligence (free, 10K requests/hour)
+    # ------------------------------------------------------------------
+
+    def otx_lookup(self, indicator: str, indicator_type: str = "domain") -> dict[str, Any]:
+        """Query AlienVault OTX for threat intelligence.
+
+        indicator_type: 'domain', 'ip', 'hostname', 'url', 'hash'
+        Requires OTX_API_KEY env var. Free tier: 10,000 requests/hour.
+        """
+        api_key = os.environ.get("OTX_API_KEY")
+        if not api_key:
+            return {}
+
+        type_map = {
+            "domain": ("domain", "general"),
+            "ip": ("IPv4", "general"),
+            "hostname": ("hostname", "general"),
+            "hash": ("file", "general"),
+        }
+        section_info = type_map.get(indicator_type)
+        if not section_info:
+            return {}
+
+        otx_type, section = section_info
+
+        try:
+            base = "https://otx.alienvault.com/api/v1"
+            headers = {"X-OTX-API-KEY": api_key}
+
+            general_resp = self._http.get(
+                f"{base}/indicators/{otx_type}/{indicator}/{section}",
+                headers=headers,
+                timeout=15,
+            )
+            general_resp.raise_for_status()
+            general = general_resp.json()
+
+            result = {
+                "indicator": indicator,
+                "type": indicator_type,
+                "pulse_count": general.get("pulse_info", {}).get("count", 0),
+                "reputation": general.get("reputation", 0),
+                "country": general.get("country_name", ""),
+                "asn": general.get("asn", ""),
+            }
+
+            pulses = general.get("pulse_info", {}).get("pulses", [])
+            result["pulses"] = [
+                {
+                    "name": p.get("name", ""),
+                    "description": p.get("description", "")[:200],
+                    "created": p.get("created", ""),
+                    "tags": p.get("tags", [])[:10],
+                    "adversary": p.get("adversary", ""),
+                    "tlp": p.get("TLP", ""),
+                }
+                for p in pulses[:10]
+            ]
+
+            result["tags"] = list(set(
+                tag for p in pulses[:20] for tag in p.get("tags", [])
+            ))[:30]
+
+            log.info("OTX lookup for %s (%s): %d pulses, reputation=%s",
+                     indicator, indicator_type,
+                     result["pulse_count"], result["reputation"])
+
+            return result
+        except Exception:
+            log.exception("OTX lookup failed for %r (type=%s)", indicator, indicator_type)
+            return {}
+
+    # ------------------------------------------------------------------
+    # Hunter.io — Email finder & domain search (free: 25 searches/month)
+    # ------------------------------------------------------------------
+
+    def hunter_domain_search(self, domain: str) -> dict[str, Any]:
+        """Find email addresses associated with a domain via Hunter.io.
+
+        Requires HUNTER_API_KEY env var. Free tier: 25 searches/month.
+        """
+        api_key = os.environ.get("HUNTER_API_KEY")
+        if not api_key:
+            return {}
+
+        try:
+            resp = self._http.get(
+                "https://api.hunter.io/v2/domain-search",
+                params={"domain": domain, "api_key": api_key, "limit": 20},
+                timeout=10,
+            )
+            resp.raise_for_status()
+            data = resp.json().get("data", {})
+
+            emails = []
+            for e in data.get("emails", []):
+                emails.append({
+                    "email": e.get("value", ""),
+                    "type": e.get("type", ""),
+                    "confidence": e.get("confidence", 0),
+                    "first_name": e.get("first_name", ""),
+                    "last_name": e.get("last_name", ""),
+                    "position": e.get("position", ""),
+                    "department": e.get("department", ""),
+                })
+
+            log.info("Hunter.io domain search for %s: %d emails found", domain, len(emails))
+
+            return {
+                "domain": domain,
+                "organization": data.get("organization", ""),
+                "email_pattern": data.get("pattern", ""),
+                "emails": emails,
+                "total": data.get("total", 0),
+            }
+        except Exception:
+            log.exception("Hunter.io domain search failed for %r", domain)
+            return {}
+
+    def hunter_email_verify(self, email: str) -> dict[str, Any]:
+        """Verify an email address via Hunter.io.
+
+        Requires HUNTER_API_KEY env var.
+        """
+        api_key = os.environ.get("HUNTER_API_KEY")
+        if not api_key:
+            return {}
+
+        try:
+            resp = self._http.get(
+                "https://api.hunter.io/v2/email-verifier",
+                params={"email": email, "api_key": api_key},
+                timeout=10,
+            )
+            resp.raise_for_status()
+            data = resp.json().get("data", {})
+
+            return {
+                "email": email,
+                "status": data.get("status", ""),
+                "result": data.get("result", ""),
+                "score": data.get("score", 0),
+                "disposable": data.get("disposable", False),
+                "webmail": data.get("webmail", False),
+                "mx_records": data.get("mx_records", False),
+                "smtp_server": data.get("smtp_server", False),
+            }
+        except Exception:
+            log.exception("Hunter.io email verify failed for %r", email)
+            return {}
+
+    # ------------------------------------------------------------------
+    # EmailRep — Email reputation (free: 1000 checks/day, no key needed for basic)
+    # ------------------------------------------------------------------
+
+    def emailrep_check(self, email: str) -> dict[str, Any]:
+        """Check email reputation via EmailRep.io.
+
+        Free tier: basic info without API key. With EMAILREP_API_KEY: full data.
+        """
+        try:
+            headers = {"User-Agent": "Fortis Intelligence Hub OSINT Platform"}
+            api_key = os.environ.get("EMAILREP_API_KEY")
+            if api_key:
+                headers["Key"] = api_key
+
+            resp = self._http.get(
+                f"https://emailrep.io/{email}",
+                headers=headers,
+                timeout=10,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
+            details = data.get("details", {})
+            return {
+                "email": email,
+                "reputation": data.get("reputation", ""),
+                "suspicious": data.get("suspicious", False),
+                "references": data.get("references", 0),
+                "blacklisted": details.get("blacklisted", False),
+                "malicious_activity": details.get("malicious_activity", False),
+                "credentials_leaked": details.get("credentials_leaked", False),
+                "data_breach": details.get("data_breach", False),
+                "first_seen": details.get("first_seen", ""),
+                "last_seen": details.get("last_seen", ""),
+                "domain_exists": details.get("domain_exists", True),
+                "deliverable": details.get("deliverable", True),
+                "free_provider": details.get("free_provider", False),
+                "disposable": details.get("disposable", False),
+                "spam": details.get("spam", False),
+                "profiles": details.get("profiles", []),
+            }
+        except Exception:
+            log.exception("EmailRep check failed for %r", email)
+            return {}
+
+    # ------------------------------------------------------------------
+    # Numverify — Phone number validation (free: 100 requests/month)
+    # ------------------------------------------------------------------
+
+    def numverify_lookup(self, phone: str) -> dict[str, Any]:
+        """Validate and geolocate a phone number via Numverify.
+
+        Requires NUMVERIFY_API_KEY env var. Free tier: 100 requests/month.
+        """
+        api_key = os.environ.get("NUMVERIFY_API_KEY")
+        if not api_key:
+            return {}
+
+        try:
+            resp = self._http.get(
+                "http://apilayer.net/api/validate",
+                params={"access_key": api_key, "number": phone},
+                timeout=10,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+
+            if not data.get("valid"):
+                return {"phone": phone, "valid": False}
+
+            log.info("Numverify lookup for %s: %s, %s %s",
+                     phone, data.get("carrier", "?"),
+                     data.get("country_name", "?"), data.get("location", "?"))
+
+            return {
+                "phone": phone,
+                "valid": True,
+                "local_format": data.get("local_format", ""),
+                "international_format": data.get("international_format", ""),
+                "country_prefix": data.get("country_prefix", ""),
+                "country_code": data.get("country_code", ""),
+                "country_name": data.get("country_name", ""),
+                "location": data.get("location", ""),
+                "carrier": data.get("carrier", ""),
+                "line_type": data.get("line_type", ""),
+            }
+        except Exception:
+            log.exception("Numverify lookup failed for %r", phone)
+            return {}

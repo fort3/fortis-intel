@@ -1,6 +1,6 @@
 # Fortis Intelligence Hub — User Guide
 
-**Version 1.3** | **Last Updated: August 2026**
+**Version 1.4** | **Last Updated: September 2026**
 
 ---
 
@@ -45,7 +45,10 @@
 - **Image Forensics**: ELA tampering detection, steganography, reverse search, CLIP classification
 - **AI-Powered Analysis**: RAG-based Q&A, entity extraction, LLM-driven insights
 - **Feed Monitoring**: Background feed polling with Celery and auto-enrichment (including Telegram channel monitoring)
-- **Deanonymization Pipeline**: Breach lookup, username enumeration (80+ sites), email-to-accounts resolution, recursive pivoting, and attribution chain scoring
+- **Deanonymization Pipeline**: Breach lookup, username enumeration (700+ sites via WhatsMyName), email-to-accounts resolution, recursive pivoting, and attribution chain scoring
+- **Report Integrity Scorecard**: 12-layer verification — grounding, fact accuracy, consistency, contradiction detection — displayed as a visual scorecard in every investigation result
+- **OSINT API Enrichment**: crt.sh (cert transparency), AbuseIPDB (IP reputation), AlienVault OTX (threat intel), Hunter.io (email discovery), EmailRep (email reputation), Numverify (phone validation)
+- **Real-Time Pipeline Progress**: Live 12-stage progress indicator during investigations via Server-Sent Events
 - **Civilian Harm Detection**: Bellingcat-inspired semantic scoring for conflict zones
 - **Multi-format Export**: PDF, STIX 2.1, JSON, CSV, Markdown, Google Drive
 - **Governance**: ForgeChain 3-verifier consensus for all LLM-driven operations
@@ -80,7 +83,7 @@
 5. **Review Results**
    - **Analysis tab**: LLM-generated investigation report with profile data, posts, entities, and insights
    - **Credential Exposure**: Breach history, password exposure alerts, data class badges (appears for email targets)
-   - **Username Enumeration**: Matched accounts across 80+ platforms, grouped by category
+   - **Username Enumeration**: Matched accounts across 700+ platforms (WhatsMyName), grouped by category
    - **Attribution Chain**: Visual identity chain with per-link confidence scoring
    - **Map tab**: Appears if geolocation data was found (EXIF, IP geo)
    - **Graph tab**: Entity relationship graph rendered with Cytoscape.js
@@ -184,7 +187,7 @@ The core OSINT feature for investigating usernames, emails, domains, and IP addr
 
 The system automatically identifies:
 - **Username**: `@username`, `username` (searches Twitter, Reddit, Instagram, etc.)
-- **Email**: `user@example.com` (breach databases, social profiles)
+- **Email**: `user@example.com` (breach databases, social profiles, EmailRep reputation, Hunter.io verification)
 - **Domain**: `example.com`, `www.example.com` (WHOIS, DNS, subdomains)
 - **IP Address**: `8.8.8.8` (geolocation, reverse DNS, co-hosted domains)
 
@@ -241,15 +244,19 @@ You can also manually set the identifier type via the dropdown.
 **Domain Investigation**
 - **WHOIS**: Registrant, registrar, creation/expiration dates
 - **DNS Records**: A, MX, TXT, CNAME records
-- **Subdomains**: DNSdumpster enumeration
+- **Subdomains**: DNSdumpster enumeration + crt.sh certificate transparency logs
 - **HTTP Headers**: Server info, security headers, cookies
 - **Reverse DNS/IP**: Co-hosted domains on same IP
 - **Wayback Machine**: Historical snapshots, subdomain discovery
+- **Threat Intel**: AlienVault OTX pulse data and reputation (when `OTX_API_KEY` set)
+- **Email Discovery**: Hunter.io domain email search (when `HUNTER_API_KEY` set)
 
 **IP Address Investigation**
 - **Geolocation**: Country, city, coordinates, ISP, ASN
 - **Reverse DNS**: Hostnames pointing to this IP
 - **Reverse IP**: Other domains hosted on same IP
+- **Abuse Reports**: AbuseIPDB confidence score and report history (when `ABUSEIPDB_API_KEY` set)
+- **Threat Intel**: AlienVault OTX pulse data and reputation (when `OTX_API_KEY` set)
 
 #### Civilian Harm Analysis (Optional)
 
@@ -732,7 +739,7 @@ Flare-inspired attribution chain for unmasking anonymous identities. Runs automa
 - Results: breach count, data classes exposed, password exposure flag, paste mentions
 
 **2. Username Enumeration**
-- Sherlock-style HTTP probing across 80+ platforms
+- Sherlock-style HTTP probing across 700+ platforms (built-in 80+ sites merged with WhatsMyName community dataset)
 - Categories: Developer (GitHub, GitLab, HackerOne, npm, Docker Hub), Security (Bugcrowd, TryHackMe, HackTheBox), Social (Pinterest, Tumblr, Medium, Bluesky), Gaming (Steam, Chess.com), Media (Twitch, SoundCloud), Commerce (eBay, Etsy, Patreon), Professional (Behance, Dribbble)
 - 20 concurrent workers, 8-second timeout per site
 - No API keys required -- pure HTTP probing
@@ -798,8 +805,14 @@ Flare-inspired attribution chain for unmasking anonymous identities. Runs automa
 
 - Without `HIBP_API_KEY`: breach lookup is skipped entirely (no errors)
 - Without `LEAKCHECK_API_KEY`: only HIBP is queried
-- Username enumeration requires no API keys (HTTP probing only)
+- Username enumeration requires no API keys (HTTP probing only); WhatsMyName dataset auto-fetched from GitHub
 - Email-to-accounts requires no API keys (direct service probing)
+- Without `ABUSEIPDB_API_KEY`: IP abuse checks skipped
+- Without `OTX_API_KEY`: threat intel lookups skipped
+- Without `HUNTER_API_KEY`: email discovery and verification skipped
+- Without `NUMVERIFY_API_KEY`: phone validation skipped
+- EmailRep basic queries work without an API key
+- crt.sh certificate transparency lookups require no API key
 - Attribution chain scoring runs on entity graph data already collected
 
 ---
@@ -899,14 +912,14 @@ The ACH section renders as formatted markdown in a collapsible panel.
 
 #### Self-Consistency Check
 
-**Opt-in feature** (disabled by default). When enabled via `SELF_CONSISTENCY_ENABLED=true`:
+**Enabled by default** with 2 runs. Configurable via `SELF_CONSISTENCY_ENABLED` and `SELF_CONSISTENCY_RUNS`:
 
-- Runs the investigation chain 3 times (configurable via `SELF_CONSISTENCY_RUNS`)
+- Runs the investigation chain multiple times (default: 2, configurable)
 - Compares claims across all runs using semantic similarity
 - Claims appearing in >=66% of runs are "stable"; others are "unstable"
 - Unstable claims may be LLM confabulations that change with each run
 
-**Note:** This costs 2-3x the normal LLM API usage per investigation.
+**Note:** This costs 2x the normal LLM API usage per investigation (with default 2 runs). Set `SELF_CONSISTENCY_ENABLED=false` to disable.
 
 #### Provenance Trail
 
@@ -927,6 +940,45 @@ Prevents a hallucination feedback loop in the Knowledge Base:
 - During RAG retrieval, LLM-generated chunks are labelled `[PRIOR ANALYSIS - not a primary source]`
 - The RAG prompt instructs the LLM to treat prior analysis as secondary reference only
 - A cosine similarity threshold (0.3) filters out irrelevant chunks
+
+#### Field-Level Fact Verification
+
+Extracts specific facts (dates, IP addresses, email addresses, usernames, URLs, domains) from the LLM report using regex and cross-checks each against the raw OSINT data:
+
+- **Confirmed**: The exact fact appears in source data (normalized matching for dates, case-insensitive for emails/domains)
+- **Unconfirmed**: The fact does not appear in any source — may be hallucinated
+
+**Verdicts:** ACCURATE (>=85% confirmed), PARTIALLY_ACCURATE (>=60%), LOW_ACCURACY (<60%)
+
+This catches fabricated specifics that semantic-similarity grounding would miss (e.g., an invented IP address that "sounds right" but wasn't in any source).
+
+#### Cross-Source Contradiction Detection
+
+Automatically detects conflicts between different OSINT sources:
+
+- **Geo disagreements**: When two sources place the same entity >500km apart (measured via haversine distance), flagged as HIGH severity
+- **Type conflicts**: When an entity appears as different types across sources (e.g., listed as both a person and an organisation), flagged as MEDIUM severity
+
+Contradictions appear as flagged items in the Integrity Scorecard with severity badges and detail text.
+
+#### Integrity Scorecard (Frontend)
+
+Every investigation result displays a visual Integrity Scorecard below the main analysis, showing:
+
+1. **Grounding Score**: Percentage of claims supported by source data, with verdict badge
+2. **Fact Accuracy**: Percentage of extracted facts confirmed in raw OSINT data
+3. **Consistency**: Self-consistency stability score across multiple LLM runs
+4. **Contradictions**: List of cross-source conflicts with severity tags
+
+Each metric is colour-coded (green/amber/red) for quick visual assessment.
+
+#### Pipeline Progress Indicator
+
+A real-time 12-stage progress bar appears during investigations, streaming updates via Server-Sent Events (SSE):
+
+1. Starting → 2. Collecting OSINT → 3. Classifying content → 4. Extracting entities → 5. Analysing with LLM → 6. Verifying output → 7. Checking facts → 8. Auditing bias → 9. Generating hypotheses → 10. Refining report → 11. Web intelligence → 12. Complete
+
+The progress indicator updates live without page refreshes, showing the current stage name and a fill bar.
 
 #### Claim Decomposition
 
@@ -1047,7 +1099,7 @@ The LLM is prohibited from generating specific dates, usernames, URLs, or statis
 2. Set Depth to **Deep** to maximise data collection
 3. Click **Investigate**
 4. Review the results:
-   - **Username Enumeration**: Shows which of 80+ platforms have an account with this username (GitHub, Steam, HackTheBox, etc.)
+   - **Username Enumeration**: Shows which of 700+ platforms have an account with this username (GitHub, Steam, HackTheBox, etc.) via WhatsMyName integration
    - **Credential Exposure**: If any associated email was found in breach data, shows which services were compromised and what data was exposed
    - **Email Account Registrations**: Discovers which services a linked email is registered on
    - **Recursive Pivots**: Auto-investigates emails found in profile bios and domains from profile URLs
@@ -1176,14 +1228,20 @@ The LLM is prohibited from generating specific dates, usernames, URLs, or statis
 | `IMAGE_STEGO_ENABLED` | `true` | Enable steganography detection |
 | `IMAGE_VISION_ENABLED` | `true` | Enable CLIP classification |
 | `TINEYE_API_KEY` | (none) | Optional TinEye API key |
-| `SELF_CONSISTENCY_ENABLED` | `false` | Enable multi-run claim stability analysis |
-| `SELF_CONSISTENCY_RUNS` | `3` | Number of investigation chain runs for self-consistency |
+| `SELF_CONSISTENCY_ENABLED` | `true` | Enable multi-run claim stability analysis |
+| `SELF_CONSISTENCY_RUNS` | `2` | Number of investigation chain runs for self-consistency |
 | `BREACH_ENABLED` | `true` | Enable credential exposure lookup |
 | `HIBP_API_KEY` | (none) | HaveIBeenPwned v3 API key |
 | `LEAKCHECK_API_KEY` | (none) | LeakCheck API key |
-| `USERNAME_ENUM_ENABLED` | `true` | Enable username enumeration (80+ sites) |
+| `USERNAME_ENUM_ENABLED` | `true` | Enable username enumeration (700+ sites) |
 | `USERNAME_ENUM_WORKERS` | `20` | Concurrent probe threads |
+| `WHATSMYNAME_ENABLED` | `true` | Enable WhatsMyName community dataset for username enum |
 | `EMAIL_ACCOUNTS_ENABLED` | `true` | Enable email-to-accounts resolution |
+| `ABUSEIPDB_API_KEY` | (none) | AbuseIPDB API key (free: 1,000 checks/day) |
+| `OTX_API_KEY` | (none) | AlienVault OTX API key (free: 10,000 req/hr) |
+| `HUNTER_API_KEY` | (none) | Hunter.io API key (free: 25 searches/month) |
+| `EMAILREP_API_KEY` | (none) | EmailRep API key (basic queries work without key) |
+| `NUMVERIFY_API_KEY` | (none) | Numverify API key (free: 100 lookups/month) |
 
 For the full list of environment variables, see `README.md`.
 
@@ -1196,6 +1254,12 @@ For the full list of environment variables, see `README.md`.
 | YouTube | 10,000 units/day | N/A |
 | Instagram | 200 req/hour | N/A |
 | Mastodon | Varies by instance | Varies by instance |
+| AbuseIPDB | 1,000 checks/day | N/A |
+| AlienVault OTX | 10,000 req/hour | N/A |
+| Hunter.io | 25 searches/month (free) | N/A |
+| Numverify | 100 lookups/month (free) | N/A |
+| crt.sh | No formal limit | No formal limit |
+| EmailRep | 100 req/month (free key) | Basic queries allowed |
 
 ### Supported File Formats
 
@@ -1216,4 +1280,4 @@ For the full list of environment variables, see `README.md`.
 **End of User Guide**
 
 *For deployment instructions, see `README.md`*
-*Last updated: August 28, 2026*
+*Last updated: September 2, 2026*

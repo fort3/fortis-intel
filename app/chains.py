@@ -985,6 +985,8 @@ RULES:
 - Do NOT mention the verification process, grounding scores, bias audit, or any quality-control methodology. The reader should see a polished report, not a behind-the-scenes view.
 - Maintain the standard brief structure: Executive Summary, Key Findings, Subject Profile, Geospatial Intelligence, Threat & Risk Indicators, Timeline, Intelligence Gaps & Recommendations. Skip sections with no relevant data.
 - Keep inline source attribution (e.g. "(Twitter, HIGH confidence)") but drop framework-specific markup.
+- Preserve source lineage: every key claim must cite at least one data source in parentheses — e.g. "(WHOIS records)", "(Twitter @handle)", "(DNS A-record)". If a claim draws on multiple sources, cite all of them: "(WHOIS + DNS + reverse-IP)". If a claim cannot be attributed to any source, flag it as unverified.
+- Where the fact verification found unconfirmed facts (dates, IPs, emails, handles not in source data), remove or caveat those facts.
 - Be concise. If removing low-confidence claims makes a section too thin, merge it into another section or drop it.
 
 RAW INVESTIGATION REPORT:

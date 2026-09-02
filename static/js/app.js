@@ -185,11 +185,68 @@ function clearTaskLoading(toolName) {
     var state = _taskLoadingState[tool];
     if (state) {
         if (state.intervalId) clearInterval(state.intervalId);
+        if (state.eventSource) {
+            state.eventSource.close();
+            state.eventSource = null;
+        }
         delete _taskLoadingState[tool];
     }
     if (_activeLoadingTool === tool) {
         _activeLoadingTool = null;
     }
+}
+
+var _STAGE_NAMES = {
+    dorking: 'Dorking',
+    osint_collection: 'OSINT Collection',
+    context_prep: 'Context Prep',
+    llm_analysis: 'LLM Analysis',
+    final_dorking: 'Final Dorking',
+    consolidation: 'Consolidation',
+    grounding: 'Grounding',
+    fact_verification: 'Fact Check',
+    consistency: 'Consistency',
+    hypotheses: 'Hypotheses',
+    bias_audit: 'Bias Audit',
+    refinement: 'Refinement'
+};
+var _STAGE_ORDER = Object.keys(_STAGE_NAMES);
+
+function connectPipelineSSE(sessionId) {
+    var tool = currentTool;
+    var state = _taskLoadingState[tool];
+    if (!state) return;
+
+    try {
+        var es = new EventSource('/pipeline-status/' + sessionId);
+        state.eventSource = es;
+
+        es.onmessage = function(event) {
+            try {
+                var data = JSON.parse(event.data);
+                var stages = data.stages || {};
+                var phasesEl = document.getElementById('taskLoadingPhases');
+                if (!phasesEl || currentTool !== tool) return;
+
+                var steps = phasesEl.querySelectorAll('.phase-step');
+                _STAGE_ORDER.forEach(function(stageKey, idx) {
+                    if (idx >= steps.length) return;
+                    var status = stages[stageKey] || 'pending';
+                    steps[idx].classList.remove('active', 'completed');
+                    if (status === 'done') steps[idx].classList.add('completed');
+                    else if (status === 'running') steps[idx].classList.add('active');
+                });
+
+                if (data.current === 'complete') {
+                    es.close();
+                }
+            } catch (e) {}
+        };
+
+        es.onerror = function() {
+            es.close();
+        };
+    } catch (e) {}
 }
 
 /**
@@ -831,8 +888,12 @@ async function runInvestigation() {
     showTaskLoading(
         'Investigation',
         scopeMsg + ' for ' + subject.value.trim(),
-        ['OSINT Collection', 'Analysis', 'Web Intel', 'Refinement']
+        ['Dorking', 'OSINT Collection', 'Context Prep', 'LLM Analysis',
+         'Final Dorking', 'Consolidation', 'Grounding', 'Fact Check',
+         'Consistency', 'Hypotheses', 'Bias Audit', 'Refinement']
     );
+
+    var pipelineId = 'inv_' + Math.random().toString(36).substr(2, 16);
 
     try {
         const webSearchCb = document.getElementById('investWebSearch');
@@ -843,6 +904,9 @@ async function runInvestigation() {
         var requestBody;
         var requestHeaders = {};
 
+        // Start SSE pipeline progress tracking
+        connectPipelineSSE(pipelineId);
+
         if (hasMedia) {
             // Use FormData for multipart upload when media files are attached
             var fd = new FormData();
@@ -852,6 +916,7 @@ async function runInvestigation() {
             fd.append('depth', depthSelect ? depthSelect.value : 'standard');
             fd.append('investigation_purpose', purposeTextarea ? purposeTextarea.value.trim() : '');
             fd.append('web_search', webSearchCb ? webSearchCb.checked : true);
+            fd.append('pipeline_id', pipelineId);
             for (var i = 0; i < mediaFiles.length; i++) {
                 fd.append('media_files', mediaFiles[i]);
             }
@@ -864,7 +929,8 @@ async function runInvestigation() {
                 platforms: platforms,
                 depth: depthSelect ? depthSelect.value : 'standard',
                 investigation_purpose: purposeTextarea ? purposeTextarea.value.trim() : '',
-                web_search: webSearchCb ? webSearchCb.checked : true
+                web_search: webSearchCb ? webSearchCb.checked : true,
+                pipeline_id: pipelineId
             });
         }
 
@@ -1897,6 +1963,9 @@ function renderAnalysis(data) {
         }
         if (data.recursive_pivots) {
             html += renderRecursivePivotsSection(data.recursive_pivots);
+        }
+        if (data.grounding || data.fact_verification || data.self_consistency || data.contradictions) {
+            html += renderIntegrityScorecard(data);
         }
 
         content.innerHTML = html;
@@ -4773,6 +4842,90 @@ function renderRecursivePivotsSection(rp) {
                 'border:1px solid #f9731633">' + escapeHtml(d) + '</span>';
         });
         h += '</div></div>';
+    }
+
+    h += '</div></div>';
+    return h;
+}
+
+function renderIntegrityScorecard(data) {
+    var h = '<div class="result-section integrity-scorecard">';
+    h += '<div class="ch-header" onclick="this.parentElement.classList.toggle(\'ch-collapsed\')">';
+    h += '<h4>Report Integrity Scorecard</h4>';
+    h += '<span class="ch-toggle">&#9660;</span></div>';
+    h += '<div class="ch-body">';
+
+    h += '<div class="integrity-grid">';
+
+    if (data.grounding) {
+        var g = data.grounding;
+        var gColor = g.verdict === 'WELL_GROUNDED' ? '#22c55e' :
+                     g.verdict === 'PARTIALLY_GROUNDED' ? '#f59e0b' :
+                     g.verdict === 'SKIPPED' ? '#6b7280' : '#ef4444';
+        h += '<div class="integrity-card">';
+        h += '<div class="integrity-label">Grounding</div>';
+        h += '<div class="integrity-score" style="color:' + gColor + '">' +
+            Math.round((g.grounded_ratio || 0) * 100) + '%</div>';
+        h += '<div class="integrity-verdict" style="color:' + gColor + '">' +
+            (g.verdict || '').replace(/_/g, ' ') + '</div>';
+        h += '<div class="integrity-detail">' + (g.total_claims || 0) + ' claims, ' +
+            (g.ungrounded_claims || 0) + ' ungrounded</div>';
+        h += '</div>';
+    }
+
+    if (data.fact_verification) {
+        var f = data.fact_verification;
+        var fColor = f.verdict === 'ACCURATE' ? '#22c55e' :
+                     f.verdict === 'PARTIALLY_ACCURATE' ? '#f59e0b' :
+                     f.verdict === 'NO_FACTS' ? '#6b7280' : '#ef4444';
+        h += '<div class="integrity-card">';
+        h += '<div class="integrity-label">Fact Accuracy</div>';
+        h += '<div class="integrity-score" style="color:' + fColor + '">' +
+            Math.round((f.accuracy_ratio || 0) * 100) + '%</div>';
+        h += '<div class="integrity-verdict" style="color:' + fColor + '">' +
+            (f.verdict || '').replace(/_/g, ' ') + '</div>';
+        h += '<div class="integrity-detail">' + (f.total_facts || 0) + ' facts, ' +
+            (f.unconfirmed_count || 0) + ' unconfirmed</div>';
+        if (f.unconfirmed && f.unconfirmed.length > 0) {
+            h += '<div class="integrity-flagged">';
+            f.unconfirmed.slice(0, 5).forEach(function(uf) {
+                h += '<span class="flag-tag">' + escapeHtml(uf.type) + '=' +
+                    escapeHtml(uf.value) + '</span>';
+            });
+            h += '</div>';
+        }
+        h += '</div>';
+    }
+
+    if (data.self_consistency) {
+        var sc = data.self_consistency;
+        var scColor = sc.verdict === 'CONSISTENT' ? '#22c55e' :
+                      sc.verdict === 'MOSTLY_CONSISTENT' ? '#f59e0b' : '#ef4444';
+        h += '<div class="integrity-card">';
+        h += '<div class="integrity-label">Consistency</div>';
+        h += '<div class="integrity-score" style="color:' + scColor + '">' +
+            Math.round((sc.consistency_ratio || 0) * 100) + '%</div>';
+        h += '<div class="integrity-verdict" style="color:' + scColor + '">' +
+            (sc.verdict || '').replace(/_/g, ' ') + '</div>';
+        h += '<div class="integrity-detail">' + (sc.runs_completed || 0) + ' runs, ' +
+            (sc.unstable_claims || 0) + ' unstable claims</div>';
+        h += '</div>';
+    }
+
+    h += '</div>';
+
+    if (data.contradictions && data.contradictions.length > 0) {
+        h += '<div class="contradictions-section">';
+        h += '<div class="integrity-label" style="margin-top:0.8em">Contradictions Detected</div>';
+        data.contradictions.forEach(function(c) {
+            var sevColor = c.severity === 'high' ? '#ef4444' : '#f59e0b';
+            h += '<div class="contradiction-item" style="border-left:3px solid ' + sevColor + '">';
+            h += '<span class="flag-tag" style="background:' + sevColor + '22;color:' +
+                sevColor + '">' + escapeHtml(c.type.replace(/_/g, ' ')) + '</span> ';
+            h += '<span>' + escapeHtml(c.detail) + '</span>';
+            h += '</div>';
+        });
+        h += '</div>';
     }
 
     h += '</div></div>';

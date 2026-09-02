@@ -279,9 +279,9 @@ def verify_grounding(report_text: str, osint_context: str) -> dict:
         result["warnings"].append(
             "Sentence-transformers model unavailable; grounding check skipped."
         )
-        result["verdict"] = "WELL_GROUNDED"
-        result["grounded_ratio"] = 1.0
-        result["grounded_claims"] = len(claims)
+        result["verdict"] = "SKIPPED"
+        result["grounded_ratio"] = 0.0
+        result["grounded_claims"] = 0
         return result
 
     # Chunk the OSINT context
@@ -361,8 +361,116 @@ def verify_grounding(report_text: str, osint_context: str) -> dict:
     except Exception as exc:
         log.warning("Grounding verification failed: %s", exc)
         result["warnings"].append(f"Grounding check error: {str(exc)[:200]}")
-        result["verdict"] = "WELL_GROUNDED"
-        result["grounded_ratio"] = 1.0
-        result["grounded_claims"] = len(claims)
+        result["verdict"] = "UNKNOWN"
+        result["grounded_ratio"] = 0.0
+        result["grounded_claims"] = 0
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# Field-level fact verification (A2)
+# ---------------------------------------------------------------------------
+
+_FACT_EXTRACTORS = {
+    "date": re.compile(
+        r"\b(\d{1,2}[/-]\d{1,2}[/-]\d{2,4}|\d{4}-\d{2}-\d{2})\b"
+    ),
+    "ip": re.compile(
+        r"\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\b"
+    ),
+    "email": re.compile(
+        r"\b([a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+)\b"
+    ),
+    "handle": re.compile(r"(?<!\w)@([a-zA-Z0-9_]{2,30})\b"),
+    "url": re.compile(r"(https?://[^\s)<>\"]+)"),
+    "percentage": re.compile(r"\b(\d+(?:\.\d+)?)\s*%"),
+    "year": re.compile(r"\b((?:19|20)\d{2})\b"),
+    "ipv4_port": re.compile(
+        r"\b(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}:\d{1,5})\b"
+    ),
+    "domain": re.compile(
+        r"\b([a-zA-Z0-9](?:[a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?"
+        r"\.(?:com|org|net|io|co|gov|edu|info|xyz|me|dev|app|uk|de|ru|cn|"
+        r"biz|tech|online|site|shop|club|top))\b"
+    ),
+}
+
+
+def _extract_facts(text: str) -> list[dict]:
+    """Extract typed factual tokens from text."""
+    facts = []
+    seen = set()
+    for fact_type, pattern in _FACT_EXTRACTORS.items():
+        for m in pattern.finditer(text):
+            val = m.group(1) if m.lastindex else m.group(0)
+            key = (fact_type, val.lower())
+            if key not in seen:
+                seen.add(key)
+                facts.append({
+                    "type": fact_type,
+                    "value": val,
+                    "position": m.start(),
+                })
+    return facts
+
+
+def verify_facts(report_text: str, osint_context: str) -> dict:
+    """Cross-check specific facts in the report against raw OSINT data.
+
+    Unlike semantic grounding (which measures overall similarity), this
+    performs exact/normalised matching of concrete data points — dates,
+    IPs, emails, handles, URLs, domains — to catch fabricated specifics
+    that semantic similarity might miss.
+
+    Returns:
+        confirmed: facts found in source data
+        unconfirmed: facts NOT found in source data (potential hallucinations)
+        accuracy_ratio: confirmed / total
+    """
+    report_facts = _extract_facts(report_text)
+    if not report_facts:
+        return {
+            "confirmed": [],
+            "unconfirmed": [],
+            "total_facts": 0,
+            "accuracy_ratio": 1.0,
+            "verdict": "NO_FACTS",
+        }
+
+    context_lower = osint_context.lower()
+    context_facts_set = set()
+    for fact_type, pattern in _FACT_EXTRACTORS.items():
+        for m in pattern.finditer(osint_context):
+            val = m.group(1) if m.lastindex else m.group(0)
+            context_facts_set.add((fact_type, val.lower()))
+
+    confirmed = []
+    unconfirmed = []
+
+    for fact in report_facts:
+        key = (fact["type"], fact["value"].lower())
+        if key in context_facts_set or fact["value"].lower() in context_lower:
+            confirmed.append(fact)
+        else:
+            unconfirmed.append(fact)
+
+    total = len(report_facts)
+    ratio = len(confirmed) / total if total > 0 else 1.0
+
+    if ratio >= 0.85:
+        verdict = "ACCURATE"
+    elif ratio >= 0.6:
+        verdict = "PARTIALLY_ACCURATE"
+    else:
+        verdict = "LOW_ACCURACY"
+
+    return {
+        "confirmed": confirmed,
+        "unconfirmed": unconfirmed,
+        "total_facts": total,
+        "confirmed_count": len(confirmed),
+        "unconfirmed_count": len(unconfirmed),
+        "accuracy_ratio": round(ratio, 3),
+        "verdict": verdict,
+    }

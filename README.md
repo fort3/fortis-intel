@@ -7,7 +7,8 @@ An OSINT-driven intelligence and analysis platform for open-source intelligence 
 ## Key Features
 
 - **Multi-Platform OSINT** -- Investigate usernames, emails, domains, and IPs across Twitter/X, Reddit, YouTube, Instagram, Mastodon, Facebook, TikTok, and Telegram
-- **Domain & IP Intelligence** -- First-class domain/IP investigations with WHOIS, DNS records, DNSdumpster subdomain enumeration, reverse DNS, reverse IP (co-hosted domains), HTTP header probing via HackerTarget API, Wayback Machine historical enrichment, and **URL endpoint fuzzing** (curated 245-path wordlist for admin panels, API surfaces, config files, dev artifacts, and backup files — elevated authorization required)
+- **Domain & IP Intelligence** -- First-class domain/IP investigations with WHOIS, DNS records, DNSdumpster subdomain enumeration, **crt.sh certificate transparency** (no API key), reverse DNS, reverse IP (co-hosted domains), HTTP header probing via HackerTarget API, **AbuseIPDB** IP reputation scoring, **AlienVault OTX** threat intelligence pulses, Wayback Machine historical enrichment, and **URL endpoint fuzzing** (curated 245-path wordlist — elevated authorization required)
+- **Email & Phone Intelligence** -- **Hunter.io** domain email discovery and email verification, **EmailRep** email reputation (suspicious activity, breach exposure, known profiles), **Numverify** phone number validation and geolocation
 - **Wayback Machine / Archive.org** -- Domain enrichment via CDX API: historical snapshot timeline, archived subdomain discovery, content change detection (digest comparison), and robots.txt policy history. No API key required
 - **Anti-Detection HTTP** -- All outbound HTTP uses curl_cffi with Chrome TLS fingerprinting to bypass bot detection; thread-safe per-thread session isolation for Windows COM compatibility
 - **API-Free Scrape Fallbacks** -- Every platform works without API keys via curl_cffi-powered scrape fallbacks (Reddit .json endpoints, Twitter syndication API, TikTok embedded JSON, Facebook mbasic)
@@ -20,15 +21,34 @@ An OSINT-driven intelligence and analysis platform for open-source intelligence 
 - **Separated LLM Pipeline** -- RAG (FAISS vectorstore) for document Q&A only; Knowledge Graph (NetworkX entity relationships) for OSINT multi-source enrichment -- no token waste from parallel injection
 - **RAG Knowledge Base** -- Upload PDF and Markdown reports, index them with FAISS vectorstore, and ask natural-language questions with automatic KB feedback from previous analyses
 - **Analytical Scenarios** -- Generate pattern-of-life, network mapping, location prediction, and influence analysis from collected OSINT data with entity graph context
-- **Deanonymization Pipeline** -- Flare-inspired attribution chain: HaveIBeenPwned + LeakCheck credential exposure lookup, Sherlock-style username enumeration across 80+ platforms, Holehe-style email-to-accounts resolution, recursive pivot engine (auto-investigates discovered identifiers to 2-hop depth), and confidence-scored attribution chains (CONFIRMED/STRONG/MODERATE/CIRCUMSTANTIAL)
+- **Deanonymization Pipeline** -- Flare-inspired attribution chain: HaveIBeenPwned + LeakCheck credential exposure lookup, Sherlock-style username enumeration across **700+ platforms** (built-in 90 + WhatsMyName community dataset), Holehe-style email-to-accounts resolution, recursive pivot engine (auto-investigates discovered identifiers to 2-hop depth), and confidence-scored attribution chains (CONFIRMED/STRONG/MODERATE/CIRCUMSTANTIAL)
 - **Feed Monitoring** -- Set up keyword, username, hashtag, and Telegram channel monitors with Celery background tasks, automatic enrichment, and civilian harm scoring on new findings
 - **GDPR & NIST CSF 2.0 Compliance** -- Tiered data retention, right to erasure (Art. 17), GDPR Art. 30 processing records, NIST CSF function mapping, system credential leak detection (subject PII is never blocked)
 - **ForgeChain Governance** -- Every LLM request passes through a 3-verifier consensus gate (rule, safety, consistency) before execution
-- **Analysis Integrity Framework** -- Nine-layer accuracy system: output grounding verification (semantic similarity check that report claims are present in source data), NATO Admiralty source reliability grading (A-F per source), RAG contamination guard (prevents hallucination feedback loops), competing hypotheses generation (ACH), claim decomposition (CONFIRMED/INFERRED/ASSUMED tagging), self-consistency checking (multi-run stability analysis), provenance trail (chain-of-custody from raw data to report), bias audit (source concentration, confirmation pattern, temporal skew, coverage gaps, single-source claims), and multilingual NER (xx_ent_wiki_sm with language-aware confidence)
+- **Analysis Integrity Framework** -- Twelve-layer accuracy system: output grounding verification (semantic similarity), **field-level fact verification** (exact-match checking of dates, IPs, emails, handles, URLs against raw source data), **weighted entity confidence scoring** (NATO Admiralty grade-based, replaces naive source-count formula), **cross-source contradiction detection** (type conflicts, geo disagreements >500km), self-consistency checking (enabled by default, 2 runs), NATO Admiralty source reliability grading (A-F per source), RAG contamination guard, competing hypotheses generation (ACH), claim decomposition (CONFIRMED/INFERRED/ASSUMED), **source lineage enforcement** (every report claim must cite data sources), provenance trail, bias audit (source concentration, confirmation, temporal skew, coverage gaps, single-source), and multilingual NER
 - **Elevated Authorization** -- Investigation endpoints support elevated authorization for privileged analysts handling sensitive cases and active reconnaissance features (URL endpoint fuzzing)
 - **Entity Relationship Graphs** -- Cytoscape.js-powered interactive graphs with click-to-drill-down entity detail popups; graph context fed directly to LLM for entity-aware analysis
 - **Professional Export** -- PDF with section-aware layout, TLP classification banner, table of contents, and executive summary highlighting. Also Markdown (with TLP metadata), STIX 2.1, CSV, JSON, and Google Drive export with map snapshots
 - **Docker Ready** -- Dockerfile and docker-compose.yml for containerized deployment with Redis, Celery worker, and Celery beat
+- **Real-Time Pipeline Progress** -- Server-Sent Events (SSE) stream 12-stage pipeline progress to the frontend during investigations, replacing timer-based fake progress with actual stage completion tracking
+
+---
+
+## Compared to the Field
+
+| Capability | Fortis | Maltego | SpiderFoot | Recorded Future | Maigret |
+|---|---|---|---|---|---|
+| Username enumeration sites | **700+** (WhatsMyName) | ~50 transforms | ~200 modules | N/A | 3,100+ |
+| Report accuracy verification | **12-layer** (grounding + fact check + contradiction + consistency) | None | None | Confidence scoring only | None |
+| Source reliability grading | **NATO Admiralty A-F** per data point | No standard | Simple tagging | Proprietary score | None |
+| Free OSINT API integrations | **7** (crt.sh, AbuseIPDB, OTX, EmailRep, Hunter, Numverify, DuckDuckGo) | Paid transforms | Some free | Enterprise only | None |
+| Civilian harm detection | **Bellingcat methodology** (semantic + keyword) | None | None | Partial | None |
+| LLM-powered analysis | DeepSeek + Vision | None | None | Proprietary AI | None |
+| Entity graph analysis | Cytoscape.js interactive | **400+ transforms** | Basic graph | Advanced graph | None |
+| Self-hosted / open source | **Yes** | No (commercial) | Yes | No (SaaS) | Yes |
+| Cost | **Free** (self-hosted) | $999+/yr | Free tier | Enterprise pricing | Free |
+
+Fortis prioritizes **reporting accuracy** over raw data volume. Where platforms like Maltego and SpiderFoot focus on data collection breadth, Fortis adds a 12-layer integrity framework that catches hallucinated facts, flags cross-source contradictions, and enforces source lineage — capabilities typically only found in enterprise platforms like Recorded Future.
 
 ---
 
@@ -48,8 +68,9 @@ An OSINT-driven intelligence and analysis platform for open-source intelligence 
 | NLP | spaCy (NER), langdetect (language detection) |
 | Civilian Harm | sentence-transformers (paraphrase-multilingual-MiniLM-L12-v2), Bellingcat methodology |
 | Image OSINT | Pillow (ELA/forensics), imagehash (perceptual hashing), numpy (steganography), CLIP (zero-shot classification via sentence-transformers), DeepSeek Vision API (contextual scene analysis) |
-| Deanonymization | HaveIBeenPwned v3 + LeakCheck (breach lookup), HTTP username enumeration (80+ sites), Holehe-style email-to-accounts, recursive pivot engine, attribution chain scoring |
-| Domain/IP Intel | python-whois, dnspython, HackerTarget API (DNSdumpster, reverse DNS/IP), Wayback Machine CDX API |
+| Deanonymization | HaveIBeenPwned v3 + LeakCheck (breach lookup), HTTP username enumeration (700+ sites via WhatsMyName), Holehe-style email-to-accounts, recursive pivot engine, attribution chain scoring |
+| Domain/IP Intel | python-whois, dnspython, HackerTarget API, crt.sh (cert transparency), AbuseIPDB (IP reputation), AlienVault OTX (threat intel), Wayback Machine CDX API |
+| Email/Phone Intel | Hunter.io (email finder + verify), EmailRep (email reputation), Numverify (phone validation) |
 | Web Intelligence | duckduckgo-search (Google dork queries, no API key required) |
 | Geolocation | geopy, MaxMind GeoLite2, DBSCAN clustering |
 | Video Analysis | OpenCV keyframe extraction, imagehash deduplication, pytesseract OCR |
@@ -551,24 +572,33 @@ The classifier uses semantic similarity against 15 civilian harm concepts (Belli
 | `BREACH_ENABLED` | Master toggle for breach/credential exposure lookup | `true` |
 | `HIBP_API_KEY` | HaveIBeenPwned v3 API key (paid, $3.50/month) | (none) |
 | `LEAKCHECK_API_KEY` | LeakCheck API key (secondary breach source) | (none) |
-| `USERNAME_ENUM_ENABLED` | Master toggle for username enumeration across 80+ platforms | `true` |
+| `USERNAME_ENUM_ENABLED` | Master toggle for username enumeration across 700+ platforms | `true` |
 | `USERNAME_ENUM_TIMEOUT` | Per-site HTTP probe timeout in seconds | `8` |
 | `USERNAME_ENUM_WORKERS` | Concurrent worker threads for username probing | `20` |
+| `WHATSMYNAME_ENABLED` | Enable WhatsMyName community dataset (600+ additional sites) | `true` |
 | `EMAIL_ACCOUNTS_ENABLED` | Master toggle for email-to-accounts resolution | `true` |
 | `EMAIL_ACCOUNTS_TIMEOUT` | Per-service probe timeout in seconds | `10` |
 
-The breach client queries HaveIBeenPwned v3 (breached accounts, paste mentions, password exposure) and LeakCheck as a secondary source. Without API keys, breach lookup is skipped gracefully. Username enumeration and email-to-accounts resolution require no API keys -- they use direct HTTP probing.
+Username enumeration now uses two sources: a built-in curated database of ~90 high-signal OSINT sites plus the WhatsMyName community dataset (600+ sites fetched and cached at startup). Without API keys, breach lookup is skipped gracefully; username enum and email-to-accounts require no keys.
 
-The recursive pivot engine runs automatically when new identifiers (emails, domains, usernames) are discovered in profile bios and URLs. It is depth-limited to 2 hops with a maximum of 5 pivots per hop to prevent runaway investigations.
+### OSINT API Settings
 
-Attribution chain scoring traverses the entity graph from the seed identifier outward, scoring each link based on evidence type (credential reuse, same email, platform registration, avatar match, etc.). Overall confidence is the product of individual link scores. Chain strength is classified as HIGH (>0.60), MODERATE (>0.35), LOW (>0.15), or INSUFFICIENT.
+| Env Variable | Description | Default |
+|---|---|---|
+| `ABUSEIPDB_API_KEY` | AbuseIPDB API key for IP reputation (free: 1,000 checks/day) | (none) |
+| `OTX_API_KEY` | AlienVault OTX API key for threat intelligence (free: 10K requests/hr) | (none) |
+| `HUNTER_API_KEY` | Hunter.io API key for email finder + verification (free: 25 searches/mo) | (none) |
+| `EMAILREP_API_KEY` | EmailRep API key for full email reputation (basic works without key) | (none) |
+| `NUMVERIFY_API_KEY` | Numverify API key for phone validation (free: 100 requests/mo) | (none) |
+
+All OSINT APIs degrade gracefully when keys are not configured — the corresponding enrichment is simply skipped. crt.sh (certificate transparency) requires no API key.
 
 ### Analysis Integrity Settings
 
 | Env Variable | Description | Default |
 |---|---|---|
-| `SELF_CONSISTENCY_ENABLED` | Enable multi-run self-consistency check (costs 2-3× LLM calls) | `false` |
-| `SELF_CONSISTENCY_RUNS` | Number of runs for self-consistency analysis | `3` |
+| `SELF_CONSISTENCY_ENABLED` | Enable multi-run self-consistency check (costs 2× LLM calls) | `true` |
+| `SELF_CONSISTENCY_RUNS` | Number of runs for self-consistency analysis | `2` |
 
 ---
 
@@ -832,7 +862,9 @@ The platform is designed to run with minimal configuration. Core features that w
 - Image forensics (ELA, clone detection, metadata analysis) via Pillow (no API key needed)
 - Steganography detection (LSB, RS analysis, sample pairs) via Pillow + numpy (no API key needed)
 - CLIP zero-shot image classification via sentence-transformers (no API key needed, model downloads automatically)
-- Username enumeration across 80+ platforms via HTTP probing (no API key needed)
+- Username enumeration across 700+ platforms via HTTP probing + WhatsMyName (no API key needed)
+- Certificate transparency via crt.sh (no API key needed)
+- Email reputation basics via EmailRep (no API key needed for basic checks)
 - Email-to-accounts resolution via direct service probing (no API key needed)
 - Attribution chain scoring from entity graph data (no API key needed)
 - DeepSeek Vision AI scene analysis (uses existing `DEEPSEEK_API_KEY` -- no additional key needed)

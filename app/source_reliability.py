@@ -61,10 +61,13 @@ _PLATFORM_GRADES: dict[str, str] = {
     "whois": "A",
     "dns": "A",
     "ssl_cert": "A",
+    "crt.sh": "A",
     # B -- Structured scans / editorial oversight
     "shodan": "B",
     "news": "B",
     "newsapi": "B",
+    "abuseipdb": "B",
+    "otx": "B",
     # C -- Platform-verified possible / published content
     "twitter": "C",
     "x": "C",
@@ -310,6 +313,14 @@ def tag_entity_reliability(
             "social_search": "twitter",
             "news": "news",
             "nlp": "web_scrape",
+            "crt.sh": "crt.sh",
+            "abuseipdb": "abuseipdb",
+            "otx": "otx",
+            "username_enum": "web_scrape",
+            "email_accounts": "web_scrape",
+            "pivot_breach": "web_scrape",
+            "pivot_email_accounts": "web_scrape",
+            "pivot_whois": "whois",
         }
         mapped = source_map.get(src_lower, src_lower)
         grade = _PLATFORM_GRADES.get(mapped, "F")
@@ -334,3 +345,154 @@ def format_reliability_tag(reliability: dict[str, str]) -> str:
     grade = reliability.get("grade", "F")
     label = reliability.get("label", GRADE_LABELS.get(grade, "?"))
     return f"[{grade} - {label}]"
+
+
+# ---------------------------------------------------------------------------
+# Per-entity confidence scoring (A3)
+# ---------------------------------------------------------------------------
+
+_GRADE_WEIGHT = {"A": 1.0, "B": 0.85, "C": 0.65, "D": 0.45, "E": 0.25, "F": 0.1}
+
+_SOURCE_MAP = {
+    "whois": "whois",
+    "dns": "dns",
+    "dnsdumpster": "dns",
+    "reverse_dns": "dns",
+    "reverse_ip": "dns",
+    "ip_geolocation": "shodan",
+    "ip_intel": "shodan",
+    "domain_intel": "whois",
+    "social_search": "twitter",
+    "news": "news",
+    "nlp": "web_scrape",
+    "username_enum": "web_scrape",
+    "email_accounts": "web_scrape",
+    "pivot_breach": "web_scrape",
+    "pivot_email_accounts": "web_scrape",
+    "pivot_whois": "whois",
+    "crt.sh": "crt.sh",
+    "abuseipdb": "abuseipdb",
+    "otx": "otx",
+}
+
+
+def compute_entity_confidence(
+    enrichment_sources: list[str],
+    has_geo: bool = False,
+    profile_count: int = 0,
+    mention_count: int = 0,
+) -> dict[str, Any]:
+    """Compute a weighted confidence score for an enriched entity.
+
+    Considers source reliability grades rather than raw source count.
+    Returns the score plus a breakdown of contributing factors.
+    """
+    if not enrichment_sources:
+        return {"score": 0.1, "breakdown": {"reason": "no enrichment sources"}}
+
+    unique_platforms = set()
+    total_weight = 0.0
+    breakdown = {}
+
+    for src in enrichment_sources:
+        mapped = _SOURCE_MAP.get(src.lower(), src.lower())
+        grade = _PLATFORM_GRADES.get(mapped, "F")
+        weight = _GRADE_WEIGHT.get(grade, 0.1)
+        unique_platforms.add(mapped)
+        total_weight += weight
+        breakdown[src] = {"grade": grade, "weight": weight}
+
+    base = min(total_weight / max(len(enrichment_sources), 1), 1.0)
+
+    corroboration_bonus = min(len(unique_platforms) * 0.08, 0.24)
+    geo_bonus = 0.05 if has_geo else 0.0
+    profile_bonus = min(profile_count * 0.03, 0.12)
+    mention_bonus = min(mention_count * 0.02, 0.08)
+
+    score = min(base + corroboration_bonus + geo_bonus + profile_bonus + mention_bonus, 0.99)
+    score = round(max(score, 0.05), 3)
+
+    return {
+        "score": score,
+        "unique_platforms": len(unique_platforms),
+        "corroboration_bonus": round(corroboration_bonus, 3),
+        "breakdown": breakdown,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Cross-source contradiction detection (A4)
+# ---------------------------------------------------------------------------
+
+def detect_contradictions(entities: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Detect contradictions among entities from different sources.
+
+    Groups entities by value and checks for conflicting information:
+    - Same entity value with different types
+    - Geo points with large spatial disagreement
+    - Conflicting raw data (e.g. whois registrant vs social profile name)
+    """
+    contradictions = []
+
+    value_groups: dict[str, list[dict]] = {}
+    for ent in entities:
+        val = str(ent.get("entity_value", "")).strip().lower()
+        if val:
+            value_groups.setdefault(val, []).append(ent)
+
+    for val, group in value_groups.items():
+        if len(group) < 2:
+            continue
+
+        types = set(e.get("entity_type", "unknown") for e in group)
+        if len(types) > 1:
+            contradictions.append({
+                "type": "type_conflict",
+                "entity_value": val,
+                "conflicting_types": sorted(types),
+                "severity": "medium",
+                "detail": f"Entity '{val}' appears as {', '.join(sorted(types))} across sources",
+            })
+
+    geo_entities = [e for e in entities if e.get("geo_points")]
+    if len(geo_entities) >= 2:
+        from math import radians, cos, sin, asin, sqrt
+
+        def _haversine(lat1, lon1, lat2, lon2):
+            lat1, lon1, lat2, lon2 = map(radians, [lat1, lon1, lat2, lon2])
+            dlat = lat2 - lat1
+            dlon = lon2 - lon1
+            a = sin(dlat / 2) ** 2 + cos(lat1) * cos(lat2) * sin(dlon / 2) ** 2
+            return 2 * 6371 * asin(sqrt(a))
+
+        all_geo = []
+        for ent in geo_entities:
+            for gp in ent.get("geo_points", []):
+                lat, lon = gp.get("lat"), gp.get("lon")
+                if lat is not None and lon is not None:
+                    all_geo.append({
+                        "lat": lat, "lon": lon,
+                        "source": gp.get("source", "unknown"),
+                        "entity": ent.get("entity_value", ""),
+                    })
+
+        for i in range(len(all_geo)):
+            for j in range(i + 1, len(all_geo)):
+                dist = _haversine(
+                    all_geo[i]["lat"], all_geo[i]["lon"],
+                    all_geo[j]["lat"], all_geo[j]["lon"],
+                )
+                if dist > 500:
+                    contradictions.append({
+                        "type": "geo_disagreement",
+                        "entities": [all_geo[i]["entity"], all_geo[j]["entity"]],
+                        "distance_km": round(dist, 1),
+                        "sources": [all_geo[i]["source"], all_geo[j]["source"]],
+                        "severity": "high" if dist > 2000 else "medium",
+                        "detail": (
+                            f"Geo sources disagree by {dist:.0f}km: "
+                            f"{all_geo[i]['source']} vs {all_geo[j]['source']}"
+                        ),
+                    })
+
+    return contradictions

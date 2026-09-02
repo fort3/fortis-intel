@@ -18,10 +18,10 @@ from typing import Any
 log = logging.getLogger(__name__)
 
 SELF_CONSISTENCY_ENABLED: bool = os.environ.get(
-    "SELF_CONSISTENCY_ENABLED", "false"
+    "SELF_CONSISTENCY_ENABLED", "true"
 ).lower() in ("true", "1", "yes")
 
-SELF_CONSISTENCY_RUNS: int = int(os.environ.get("SELF_CONSISTENCY_RUNS", "3"))
+SELF_CONSISTENCY_RUNS: int = int(os.environ.get("SELF_CONSISTENCY_RUNS", "2"))
 
 _FILLER_PATTERNS = re.compile(
     r"^(#{1,4}\s|---|\*\*\*|>|in summary|based on|overall|"

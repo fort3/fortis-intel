@@ -29,6 +29,8 @@ from app.source_reliability import (
     tag_web_mention_reliability,
     tag_entity_reliability,
     get_source_reliability,
+    compute_entity_confidence,
+    detect_contradictions,
 )
 
 log = logging.getLogger(__name__)
@@ -263,8 +265,28 @@ class OSINTClient:
                     except Exception as exc:
                         log.warning("URL fuzzing failed for %s (non-fatal): %s", domain, exc)
 
+                crtsh_data = self._scraper.crtsh_lookup(domain)
+                if crtsh_data:
+                    domain_intel["crtsh"] = crtsh_data
+                    for crt_sub in crtsh_data.get("subdomains", [])[:50]:
+                        if crt_sub != domain:
+                            findings.entities.append(EnrichedEntity(
+                                entity_type="subdomain",
+                                entity_value=crt_sub,
+                                confidence=0.9,
+                                enrichment_sources=["crt.sh"],
+                            ))
+
+                otx_domain = self._scraper.otx_lookup(domain, "domain")
+                if otx_domain:
+                    domain_intel["otx"] = otx_domain
+
                 findings.metadata["domain_intel"] = domain_intel
                 enrichment_sources = ["whois", "dns", "dnsdumpster"]
+                if crtsh_data:
+                    enrichment_sources.append("crt.sh")
+                if otx_domain:
+                    enrichment_sources.append("otx")
                 findings.entities.append(EnrichedEntity(
                     entity_type="domain",
                     entity_value=domain,
@@ -365,11 +387,28 @@ class OSINTClient:
                         "dns": dns_data,
                         "dnsdumpster": dnsdumpster,
                     }
+                ip_enrichment_sources = ["ip_geolocation", "reverse_dns", "reverse_ip"]
+
+                abuseipdb_data = self._scraper.abuseipdb_check(identifier)
+                if abuseipdb_data:
+                    findings.metadata["ip_intel"]["abuseipdb"] = abuseipdb_data
+                    ip_enrichment_sources.append("abuseipdb")
+                    if abuseipdb_data.get("abuse_score", 0) >= 25:
+                        findings.entities[-1].risk_indicators.append(
+                            f"AbuseIPDB score: {abuseipdb_data['abuse_score']}% "
+                            f"({abuseipdb_data.get('total_reports', 0)} reports)"
+                        ) if findings.entities else None
+
+                otx_ip = self._scraper.otx_lookup(identifier, "ip")
+                if otx_ip:
+                    findings.metadata["ip_intel"]["otx"] = otx_ip
+                    ip_enrichment_sources.append("otx")
+
                 findings.entities.append(EnrichedEntity(
                     entity_type="ip",
                     entity_value=identifier,
                     confidence=0.95,
-                    enrichment_sources=["ip_geolocation", "reverse_dns", "reverse_ip"],
+                    enrichment_sources=ip_enrichment_sources,
                 ))
                 log.info("IP intel collected for %r: reverse_dns=%s, co_hosted=%d",
                          identifier, reverse_dns or "none", len(co_hosted))
@@ -433,6 +472,77 @@ class OSINTClient:
                             ))
             except Exception as exc:
                 log.warning("Email accounts check failed (non-fatal): %s", exc)
+
+        # ── Email enrichment (Hunter.io + EmailRep) ──────────────
+        if id_type == "email":
+            try:
+                emailrep = self._scraper.emailrep_check(identifier)
+                if emailrep:
+                    findings.metadata["emailrep"] = emailrep
+                    if emailrep.get("suspicious"):
+                        findings.entities.append(EnrichedEntity(
+                            entity_type="email",
+                            entity_value=identifier,
+                            confidence=0.85,
+                            enrichment_sources=["emailrep"],
+                            risk_indicators=[
+                                f"EmailRep: suspicious ({emailrep.get('reputation', 'unknown')} reputation)"
+                            ],
+                            raw=emailrep,
+                        ))
+            except Exception as exc:
+                log.warning("EmailRep check failed (non-fatal): %s", exc)
+
+            try:
+                hunter_verify = self._scraper.hunter_email_verify(identifier)
+                if hunter_verify:
+                    findings.metadata["hunter_verify"] = hunter_verify
+            except Exception as exc:
+                log.warning("Hunter.io email verify failed (non-fatal): %s", exc)
+
+        # ── Domain email discovery (Hunter.io) ───────────────────
+        if id_type in ("domain", "url"):
+            try:
+                domain_for_hunter = identifier
+                if id_type == "url":
+                    from urllib.parse import urlparse
+                    domain_for_hunter = urlparse(identifier).netloc or identifier
+                hunter_emails = self._scraper.hunter_domain_search(domain_for_hunter)
+                if hunter_emails and hunter_emails.get("emails"):
+                    findings.metadata["hunter_domain"] = hunter_emails
+                    for he in hunter_emails["emails"][:10]:
+                        findings.entities.append(EnrichedEntity(
+                            entity_type="email",
+                            entity_value=he["email"],
+                            confidence=he.get("confidence", 50) / 100.0,
+                            enrichment_sources=["hunter.io"],
+                            raw={
+                                "name": f"{he.get('first_name', '')} {he.get('last_name', '')}".strip(),
+                                "position": he.get("position", ""),
+                                "department": he.get("department", ""),
+                            },
+                        ))
+            except Exception as exc:
+                log.warning("Hunter.io domain search failed (non-fatal): %s", exc)
+
+        # ── Phone validation (Numverify) ─────────────────────────
+        if id_type == "phone":
+            try:
+                numverify = self._scraper.numverify_lookup(identifier)
+                if numverify and numverify.get("valid"):
+                    findings.metadata["numverify"] = numverify
+                    if numverify.get("location"):
+                        loc = numverify["location"]
+                        country = numverify.get("country_name", "")
+                        findings.entities.append(EnrichedEntity(
+                            entity_type="phone",
+                            entity_value=numverify.get("international_format", identifier),
+                            confidence=0.9,
+                            enrichment_sources=["numverify"],
+                            raw=numverify,
+                        ))
+            except Exception as exc:
+                log.warning("Numverify lookup failed (non-fatal): %s", exc)
 
         # ── Recursive pivot: sub-investigate discovered identifiers ──
         self._recursive_pivot(findings, depth, elevated_authorization)
@@ -714,7 +824,13 @@ class OSINTClient:
                             })
                     enriched.enrichment_sources.append("ip_intel")
 
-                enriched.confidence = 0.5 + 0.1 * len(enriched.enrichment_sources)
+                conf_result = compute_entity_confidence(
+                    enrichment_sources=enriched.enrichment_sources,
+                    has_geo=bool(enriched.geo_points),
+                    profile_count=len(enriched.profiles),
+                    mention_count=len(enriched.web_mentions),
+                )
+                enriched.confidence = conf_result["score"]
 
             except Exception as exc:
                 log.error("Entity enrichment failed for %s=%s: %s", etype, evalue, exc)

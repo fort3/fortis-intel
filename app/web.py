@@ -11,6 +11,7 @@ import json as _json
 import os
 import re
 import sys
+import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict
@@ -97,7 +98,8 @@ from app.intel_graph import (
 )
 from app.forge import gated_invoke
 from app.forge.config import FORGE_ENABLED
-from app.forge.grounding_verifier import verify_grounding
+from app.forge.grounding_verifier import verify_grounding, verify_facts
+from app.source_reliability import detect_contradictions
 from app.forge.chain_store import get_chain_store
 from app.forge.replay import get_session_replay
 from app.osint_client import OSINTClient
@@ -133,6 +135,39 @@ LOG_DIR = BASE_DIR / "logs"
 stored_reports: dict = {}
 _MAX_STORED_REPORTS = 500
 _KB_CONTEXT_MAX_CHARS = 2000
+
+# ── Pipeline progress tracking ───────────────────────────────────
+import threading
+import json as _json_mod
+
+_pipeline_progress: dict[str, dict] = {}
+_pipeline_lock = threading.Lock()
+
+_INVESTIGATION_STAGES = [
+    "dorking", "osint_collection", "context_prep", "llm_analysis",
+    "final_dorking", "consolidation", "grounding", "fact_verification",
+    "consistency", "hypotheses", "bias_audit", "refinement",
+]
+
+
+def _update_pipeline(session_id: str, stage: str, status: str = "running"):
+    """Update the progress state for a pipeline session."""
+    with _pipeline_lock:
+        if session_id not in _pipeline_progress:
+            _pipeline_progress[session_id] = {
+                "stages": {s: "pending" for s in _INVESTIGATION_STAGES},
+                "current": stage,
+                "started_at": time.time(),
+            }
+        _pipeline_progress[session_id]["stages"][stage] = status
+        _pipeline_progress[session_id]["current"] = stage
+        if status == "done":
+            remaining = [
+                s for s, st in _pipeline_progress[session_id]["stages"].items()
+                if st == "pending"
+            ]
+            if not remaining:
+                _pipeline_progress[session_id]["current"] = "complete"
 
 _shared_osint_client: OSINTClient | None = None
 _shared_geo_client: GeoClient | None = None
@@ -418,7 +453,9 @@ def _findings_to_context(findings_dict: dict) -> str:
             conf_str = f"{conf:.0%}" if isinstance(conf, float) else str(conf)
             rel = e.get("source_reliability", {})
             rel_tag = f", Reliability: {rel['grade']}" if rel.get("grade") else ""
-            parts.append(f"  [{e.get('entity_type', '?')}{rel_tag}] {e.get('entity_value', '?')} (confidence: {conf_str})")
+            src_list = e.get("enrichment_sources", [])
+            src_tag = f", Sources: {'+'.join(src_list)}" if src_list else ""
+            parts.append(f"  [{e.get('entity_type', '?')}{rel_tag}] {e.get('entity_value', '?')} (confidence: {conf_str}{src_tag})")
 
     timeline = findings_dict.get("timeline", [])
     if timeline:
@@ -476,6 +513,32 @@ def _findings_to_context(findings_dict: dict) -> str:
             if len(fuzz_findings) > 30:
                 parts.append(f"    ... and {len(fuzz_findings) - 30} more")
 
+    crtsh = domain_intel.get("crtsh", {})
+    if crtsh:
+        parts.append(f"\n=== Certificate Transparency (crt.sh) [Reliability: A] ===")
+        parts.append(f"  Total certificates: {crtsh.get('total_certs', 0)}")
+        crt_subs = crtsh.get("subdomains", [])
+        if crt_subs:
+            parts.append(f"  Subdomains from certs: {len(crt_subs)}")
+            for s in crt_subs[:15]:
+                parts.append(f"    {s}")
+            if len(crt_subs) > 15:
+                parts.append(f"    ... and {len(crt_subs) - 15} more")
+        crt_issuers = crtsh.get("issuers", [])
+        if crt_issuers:
+            parts.append(f"  Certificate issuers: {', '.join(crt_issuers[:5])}")
+
+    otx_domain_data = domain_intel.get("otx", {})
+    if otx_domain_data:
+        parts.append(f"\n=== AlienVault OTX (Domain) [Reliability: B] ===")
+        parts.append(f"  Pulse count: {otx_domain_data.get('pulse_count', 0)}")
+        otx_tags = otx_domain_data.get("tags", [])
+        if otx_tags:
+            parts.append(f"  Tags: {', '.join(otx_tags[:15])}")
+        otx_pulses = otx_domain_data.get("pulses", [])
+        for p in otx_pulses[:5]:
+            parts.append(f"  Pulse: {p.get('name', '?')} — {p.get('description', '')[:100]}")
+
     ip_intel = metadata.get("ip_intel", {})
     if ip_intel:
         ip_rel = metadata.get("ip_intel_reliability", {})
@@ -489,12 +552,82 @@ def _findings_to_context(findings_dict: dict) -> str:
             for d in co[:10]:
                 parts.append(f"    {d}")
 
+        abuseipdb = ip_intel.get("abuseipdb", {})
+        if abuseipdb:
+            parts.append(f"\n  --- AbuseIPDB [Reliability: B] ---")
+            parts.append(f"  Abuse confidence score: {abuseipdb.get('abuse_score', 0)}%")
+            parts.append(f"  Total reports: {abuseipdb.get('total_reports', 0)}")
+            parts.append(f"  ISP: {abuseipdb.get('isp', '?')}")
+            parts.append(f"  Usage type: {abuseipdb.get('usage_type', '?')}")
+            if abuseipdb.get("is_tor"):
+                parts.append(f"  !! TOR EXIT NODE")
+            if abuseipdb.get("last_reported"):
+                parts.append(f"  Last reported: {abuseipdb['last_reported']}")
+
+        otx_ip_data = ip_intel.get("otx", {})
+        if otx_ip_data:
+            parts.append(f"\n  --- AlienVault OTX (IP) [Reliability: B] ---")
+            parts.append(f"  Pulse count: {otx_ip_data.get('pulse_count', 0)}")
+            otx_ip_tags = otx_ip_data.get("tags", [])
+            if otx_ip_tags:
+                parts.append(f"  Tags: {', '.join(otx_ip_tags[:15])}")
+            for p in otx_ip_data.get("pulses", [])[:5]:
+                parts.append(f"  Pulse: {p.get('name', '?')} — {p.get('description', '')[:100]}")
+
     ip_geo = metadata.get("ip_geolocation", {})
     if ip_geo:
         parts.append(f"\n=== IP Geolocation ===")
         for k in ("ip", "city", "country", "isp", "region"):
             if ip_geo.get(k):
                 parts.append(f"  {k.title()}: {ip_geo[k]}")
+
+    emailrep = metadata.get("emailrep", {})
+    if emailrep:
+        parts.append(f"\n=== Email Reputation (EmailRep) [Reliability: C] ===")
+        parts.append(f"  Reputation: {emailrep.get('reputation', '?')}")
+        parts.append(f"  Suspicious: {emailrep.get('suspicious', False)}")
+        parts.append(f"  References: {emailrep.get('references', 0)}")
+        if emailrep.get("credentials_leaked"):
+            parts.append(f"  !! Credentials leaked in data breach")
+        if emailrep.get("malicious_activity"):
+            parts.append(f"  !! Associated with malicious activity")
+        if emailrep.get("disposable"):
+            parts.append(f"  !! Disposable email address")
+        profiles = emailrep.get("profiles", [])
+        if profiles:
+            parts.append(f"  Known profiles: {', '.join(profiles[:10])}")
+        if emailrep.get("first_seen"):
+            parts.append(f"  First seen: {emailrep['first_seen']}")
+
+    hunter_verify = metadata.get("hunter_verify", {})
+    if hunter_verify:
+        parts.append(f"\n=== Email Verification (Hunter.io) [Reliability: B] ===")
+        parts.append(f"  Status: {hunter_verify.get('status', '?')}")
+        parts.append(f"  Score: {hunter_verify.get('score', 0)}")
+        if hunter_verify.get("disposable"):
+            parts.append(f"  !! Disposable email")
+        if hunter_verify.get("webmail"):
+            parts.append(f"  Webmail provider: yes")
+
+    hunter_domain = metadata.get("hunter_domain", {})
+    if hunter_domain:
+        parts.append(f"\n=== Domain Email Discovery (Hunter.io) [Reliability: B] ===")
+        parts.append(f"  Organization: {hunter_domain.get('organization', '?')}")
+        parts.append(f"  Email pattern: {hunter_domain.get('email_pattern', '?')}")
+        parts.append(f"  Total emails found: {hunter_domain.get('total', 0)}")
+        for he in hunter_domain.get("emails", [])[:8]:
+            name = f"{he.get('first_name', '')} {he.get('last_name', '')}".strip()
+            pos = he.get("position", "")
+            parts.append(f"  {he['email']} — {name}{f', {pos}' if pos else ''} (confidence: {he.get('confidence', 0)}%)")
+
+    numverify = metadata.get("numverify", {})
+    if numverify and numverify.get("valid"):
+        parts.append(f"\n=== Phone Validation (Numverify) [Reliability: B] ===")
+        parts.append(f"  Number: {numverify.get('international_format', '?')}")
+        parts.append(f"  Country: {numverify.get('country_name', '?')}")
+        parts.append(f"  Location: {numverify.get('location', '?')}")
+        parts.append(f"  Carrier: {numverify.get('carrier', '?')}")
+        parts.append(f"  Line type: {numverify.get('line_type', '?')}")
 
     errors = findings_dict.get("errors", [])
     if errors:
@@ -1665,9 +1798,14 @@ def create_app():
             clean_id = identifier
 
         session_id = f"inv_{uuid.uuid4().hex[:16]}"
+        if request.content_type and "multipart/form-data" in request.content_type:
+            pipeline_id = request.form.get("pipeline_id", session_id)
+        else:
+            pipeline_id = data.get("pipeline_id", session_id)
         user_hash = _get_user_hash()
         provenance = ProvenanceTrail(clean_id, identifier_type)
 
+        _update_pipeline(pipeline_id, "dorking")
         # ── Phase 1: Initial Dorking (Collection) ─────────────────────
         # Runs BEFORE platform backfill so the LLM sees the user's actual
         # platform selection (empty = broad web sweep with recommendations).
@@ -1697,6 +1835,8 @@ def create_app():
         if not platforms:
             platforms = list(SOCIAL_PLATFORMS.keys())
 
+        _update_pipeline(pipeline_id, "dorking", "done")
+        _update_pipeline(pipeline_id, "osint_collection")
         # ── Phase 2: OSINT Collection ─────────────────────────────────
         osint_client = _get_osint_client()
         geo_client = _get_geo_client()
@@ -1829,6 +1969,8 @@ def create_app():
         except Exception as exc:
             print(f"[WARN] Civilian harm scoring failed (non-fatal): {exc}")
 
+        _update_pipeline(pipeline_id, "osint_collection", "done")
+        _update_pipeline(pipeline_id, "context_prep")
         # ── Phase 3: Context Preparation ──────────────────────────────
         osint_context = _findings_to_context(findings_dict)
         geo_data_raw = findings_dict.get("geo_points", [])
@@ -2028,6 +2170,8 @@ def create_app():
         except Exception as exc:
             print(f"[WARN] Chart generation failed (non-fatal): {exc}")
 
+        _update_pipeline(pipeline_id, "context_prep", "done")
+        _update_pipeline(pipeline_id, "llm_analysis")
         # ── Phase 4: LLM Analysis ────────────────────────────────────
         # Include initial dork results in the OSINT data so the LLM can
         # reference web discoveries alongside platform findings.
@@ -2125,6 +2269,8 @@ def create_app():
             forgechain_block_id=result.block_id or "",
         )
 
+        _update_pipeline(pipeline_id, "llm_analysis", "done")
+        _update_pipeline(pipeline_id, "final_dorking")
         # ── Phase 5: Final Dorking + Report Consolidation ────────
         web_intelligence = None
         if web_search_enabled and DORK_VALIDATION_ENABLED:
@@ -2146,6 +2292,8 @@ def create_app():
             except Exception as exc:
                 print(f"[WARN] Final dorking failed (non-fatal): {exc}")
 
+        _update_pipeline(pipeline_id, "final_dorking", "done")
+        _update_pipeline(pipeline_id, "consolidation")
         # ── Phase 6: Report Consolidation ────────
         # Merge initial analysis + web intel + civilian harm into a single cohesive brief
         if web_intelligence and web_intelligence.get("text"):
@@ -2189,6 +2337,8 @@ def create_app():
                 analysis += "\n\n---\n\n## Web Intelligence\n\n" + web_intelligence["text"]
                 print(f"[WARN] Consolidation failed ({exc}), falling back to append")
 
+        _update_pipeline(pipeline_id, "consolidation", "done")
+        _update_pipeline(pipeline_id, "grounding")
         # ── Phase 7: Output Grounding Verification ────────
         grounding_result = None
         try:
@@ -2209,6 +2359,30 @@ def create_app():
                 f"{grounding_result.get('grounded_ratio', 0):.0%} grounded",
             )
 
+        _update_pipeline(pipeline_id, "grounding", "done")
+        _update_pipeline(pipeline_id, "fact_verification")
+        # ── Phase 7a: Field-Level Fact Verification ────────
+        fact_verification_result = None
+        try:
+            fact_verification_result = verify_facts(analysis, full_osint_context)
+            print(
+                f"[FACTS] {fact_verification_result['verdict']}: "
+                f"{fact_verification_result['accuracy_ratio']:.0%} facts confirmed "
+                f"({fact_verification_result['total_facts']} total, "
+                f"{fact_verification_result['unconfirmed_count']} unconfirmed)"
+            )
+        except Exception as exc:
+            print(f"[WARN] Fact verification failed (non-fatal): {exc}")
+
+        if fact_verification_result:
+            provenance.record_verification(
+                "Fact Verification",
+                fact_verification_result.get("verdict", ""),
+                f"{fact_verification_result.get('accuracy_ratio', 0):.0%} facts confirmed",
+            )
+
+        _update_pipeline(pipeline_id, "fact_verification", "done")
+        _update_pipeline(pipeline_id, "consistency")
         # ── Phase 7b: Self-Consistency Check (optional) ────────
         self_consistency_result = None
         if SELF_CONSISTENCY_ENABLED:
@@ -2235,6 +2409,8 @@ def create_app():
             except Exception as exc:
                 print(f"[WARN] Self-consistency check failed (non-fatal): {exc}")
 
+        _update_pipeline(pipeline_id, "consistency", "done")
+        _update_pipeline(pipeline_id, "hypotheses")
         # ── Phase 8: Competing Hypotheses (ACH) ────────
         competing_hypotheses = None
         try:
@@ -2249,6 +2425,8 @@ def create_app():
         except Exception as exc:
             print(f"[WARN] Competing hypotheses generation failed (non-fatal): {exc}")
 
+        _update_pipeline(pipeline_id, "hypotheses", "done")
+        _update_pipeline(pipeline_id, "bias_audit")
         # ── Phase 9: Bias Audit ────────
         bias_audit_result = None
         try:
@@ -2271,6 +2449,8 @@ def create_app():
                 f"{len(bias_audit_result.get('warnings', []))} warnings",
             )
 
+        _update_pipeline(pipeline_id, "bias_audit", "done")
+        _update_pipeline(pipeline_id, "refinement")
         # ── Phase 10: Report Refinement ────────
         # Use integrity results to produce a clean, high-confidence report.
         # All framework details stay in the background.
@@ -2297,6 +2477,18 @@ def create_app():
 
             hypotheses_summary = competing_hypotheses or "No competing hypotheses generated."
 
+            fact_summary = "No fact verification data available."
+            if fact_verification_result:
+                unconfirmed_facts = fact_verification_result.get("unconfirmed", [])
+                unconfirmed_list = "; ".join(
+                    f"{f['type']}={f['value']}" for f in unconfirmed_facts[:10]
+                ) if unconfirmed_facts else "none"
+                fact_summary = (
+                    f"Verdict: {fact_verification_result['verdict']}. "
+                    f"{fact_verification_result.get('accuracy_ratio', 0):.0%} facts confirmed. "
+                    f"Unconfirmed facts: {unconfirmed_list}"
+                )
+
             consistency_summary = "No consistency data available."
             if self_consistency_result:
                 unstable = self_consistency_result.get("unstable_details", [])
@@ -2312,7 +2504,7 @@ def create_app():
             refinement_chain = get_report_refinement_chain()
             refinement_input = {
                 "raw_report": analysis,
-                "grounding_summary": grounding_summary,
+                "grounding_summary": grounding_summary + "\n" + fact_summary,
                 "bias_summary": bias_summary,
                 "hypotheses_summary": hypotheses_summary[:6000],
                 "consistency_summary": consistency_summary,
@@ -2363,6 +2555,8 @@ def create_app():
             "image_analysis": image_analysis_results or None,
         }
 
+        _update_pipeline(pipeline_id, "refinement", "done")
+
         response = {
             "report_id": report_id,
             "session_id": session_id,
@@ -2382,6 +2576,10 @@ def create_app():
             "username_enum": findings_metadata.get("username_enum"),
             "email_accounts": findings_metadata.get("email_accounts"),
             "recursive_pivots": findings_metadata.get("recursive_pivots"),
+            "grounding": grounding_result,
+            "fact_verification": fact_verification_result,
+            "self_consistency": self_consistency_result if SELF_CONSISTENCY_ENABLED else None,
+            "contradictions": detect_contradictions(entities_data) or None,
         }
         if image_analysis_results:
             safe_results = []
@@ -2617,6 +2815,16 @@ def create_app():
         except Exception as exc:
             print(f"[WARN] Grounding verification failed in /enrich (non-fatal): {exc}")
 
+        enrich_fact_check = None
+        try:
+            enrich_fact_check = verify_facts(analysis, osint_context)
+            print(
+                f"[FACTS] /enrich {enrich_fact_check['verdict']}: "
+                f"{enrich_fact_check['accuracy_ratio']:.0%} facts confirmed"
+            )
+        except Exception as exc:
+            print(f"[WARN] Fact verification failed in /enrich (non-fatal): {exc}")
+
         report_id = _save_to_kb(
             source_route="/enrich",
             report_type="enrichment",
@@ -2636,6 +2844,8 @@ def create_app():
             "identifier": clean_id,
             "entity_count": len(entities_data),
             "metadata": findings_dict.get("metadata", {}),
+            "grounding": enrich_grounding,
+            "fact_verification": enrich_fact_check,
         }
         return jsonify(enrich_resp)
 
@@ -3240,6 +3450,16 @@ def create_app():
         except Exception as exc:
             print(f"[WARN] Grounding verification failed in /scenario (non-fatal): {exc}")
 
+        scenario_fact_check = None
+        try:
+            scenario_fact_check = verify_facts(analysis, osint_data)
+            print(
+                f"[FACTS] /scenario {scenario_fact_check['verdict']}: "
+                f"{scenario_fact_check['accuracy_ratio']:.0%} facts confirmed"
+            )
+        except Exception as exc:
+            print(f"[WARN] Fact verification failed in /scenario (non-fatal): {exc}")
+
         report_id = _save_to_kb(
             source_route="/scenario",
             report_type="scenario",
@@ -3253,6 +3473,8 @@ def create_app():
             "session_id": scenario_session_id,
             "scenario": analysis,
             "scenario_type": scenario_type,
+            "grounding": scenario_grounding,
+            "fact_verification": scenario_fact_check,
         }
         scenario_harm = _score_text_for_harm(osint_data)
         if scenario_harm:
@@ -4149,6 +4371,28 @@ def create_app():
                 continue
         entries.reverse()
         return jsonify({"entries": entries, "total": len(lines)})
+
+    @app.route("/pipeline-status/<session_id>", methods=["GET"])
+    @login_required
+    def pipeline_status(session_id):
+        """SSE endpoint for pipeline progress updates."""
+        def generate():
+            last_state = None
+            for _ in range(300):
+                with _pipeline_lock:
+                    state = _pipeline_progress.get(session_id)
+                if state and state != last_state:
+                    last_state = dict(state)
+                    yield f"data: {_json.dumps(state)}\n\n"
+                    if state.get("current") == "complete":
+                        return
+                time.sleep(0.5)
+
+        resp = make_response(generate())
+        resp.headers["Content-Type"] = "text/event-stream"
+        resp.headers["Cache-Control"] = "no-cache"
+        resp.headers["X-Accel-Buffering"] = "no"
+        return resp
 
     @app.route("/health", methods=["GET"])
     def health():

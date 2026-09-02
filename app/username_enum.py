@@ -1,21 +1,20 @@
 """Broad username enumeration for Fortis Intelligence Hub.
 
-Probes 100+ sites for account existence by username — Sherlock/Maigret-style
-coverage without the heavy dependency. Focuses on platforms relevant to
-OSINT and threat intelligence investigations.
-
-The site database is curated for high signal: developer platforms, security
-forums, gaming networks, crypto services, and social media that the 8-platform
-API-based search in social_client.py doesn't cover.
+Probes 700+ sites for account existence by username using two sources:
+1. A curated built-in database of ~90 high-signal OSINT-relevant sites
+2. The WhatsMyName community dataset (https://github.com/WebBreacher/WhatsMyName)
+   fetched and cached at startup — adds 600+ additional sites
 
 Env vars:
     USERNAME_ENUM_ENABLED  — Master toggle (default: true)
     USERNAME_ENUM_TIMEOUT  — Per-request timeout in seconds (default: 8)
     USERNAME_ENUM_WORKERS  — Concurrent workers (default: 20)
+    WHATSMYNAME_ENABLED    — Enable WhatsMyName dataset (default: true)
 """
 
 import logging
 import os
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
@@ -139,6 +138,94 @@ SITE_DB: list[dict[str, Any]] = [
 ]
 # fmt: on
 
+_WHATSMYNAME_ENABLED = os.getenv("WHATSMYNAME_ENABLED", "true").lower() in ("1", "true", "yes")
+_WMN_URL = "https://raw.githubusercontent.com/WebBreacher/WhatsMyName/main/wmn-data.json"
+_wmn_sites: list[dict[str, Any]] = []
+_wmn_loaded = False
+_wmn_load_time = 0.0
+
+_BUILTIN_NAMES = {s["name"].lower() for s in SITE_DB}
+
+_WMN_CATEGORY_MAP = {
+    "social": "social",
+    "gaming": "gaming",
+    "coding": "developer",
+    "finance": "commerce",
+    "music": "media",
+    "video": "media",
+    "art": "professional",
+    "shopping": "commerce",
+    "news": "community",
+    "blog": "social",
+    "dating": "social",
+    "business": "professional",
+    "crypto": "crypto",
+    "government": "knowledge",
+    "travel": "community",
+    "food": "community",
+    "health": "community",
+    "education": "knowledge",
+    "misc": "community",
+}
+
+
+def _load_whatsmyname():
+    """Fetch the WhatsMyName dataset and convert to our probe format."""
+    global _wmn_sites, _wmn_loaded, _wmn_load_time
+
+    if _wmn_loaded and (time.time() - _wmn_load_time < 86400):
+        return _wmn_sites
+
+    try:
+        resp = requests.get(_WMN_URL, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+        sites = data.get("sites", [])
+
+        converted = []
+        for site in sites:
+            name = site.get("name", "")
+            if name.lower() in _BUILTIN_NAMES:
+                continue
+
+            uri_check = site.get("uri_check", "")
+            if not uri_check or "{account}" not in uri_check:
+                continue
+
+            expected = site.get("e_code", 200)
+            e_string = site.get("e_string", "")
+            cat = _WMN_CATEGORY_MAP.get(
+                site.get("cat", "misc"), "community"
+            )
+
+            entry: dict[str, Any] = {
+                "name": name,
+                "url": uri_check.replace("{account}", "{}"),
+                "category": cat,
+                "wmn": True,
+            }
+
+            if e_string:
+                entry["method"] = "content"
+                entry["indicator"] = e_string
+            else:
+                entry["method"] = "status"
+                entry["expect"] = expected
+
+            converted.append(entry)
+
+        _wmn_sites = converted
+        _wmn_loaded = True
+        _wmn_load_time = time.time()
+        log.info("WhatsMyName dataset loaded: %d sites (after dedup)", len(converted))
+        return converted
+
+    except Exception as exc:
+        log.warning("Failed to load WhatsMyName dataset: %s", exc)
+        _wmn_loaded = True
+        _wmn_load_time = time.time()
+        return []
+
 
 def enumerate_username(username: str) -> dict[str, Any]:
     """Probe all sites for account existence.
@@ -173,8 +260,13 @@ def enumerate_username(username: str) -> dict[str, Any]:
             pass
         return None
 
+    all_sites = list(SITE_DB)
+    if _WHATSMYNAME_ENABLED:
+        wmn = _load_whatsmyname()
+        all_sites.extend(wmn)
+
     with ThreadPoolExecutor(max_workers=_WORKERS) as pool:
-        futures = {pool.submit(_probe, site): site for site in SITE_DB}
+        futures = {pool.submit(_probe, site): site for site in all_sites}
         for future in as_completed(futures):
             result = future.result()
             if result:
@@ -191,7 +283,7 @@ def enumerate_username(username: str) -> dict[str, Any]:
         "username": username,
         "found": found,
         "by_category": by_category,
-        "total_checked": len(SITE_DB),
+        "total_checked": len(all_sites),
         "total_found": len(found),
     }
 
