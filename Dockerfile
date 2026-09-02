@@ -17,7 +17,7 @@ COPY requirements.txt .
 RUN python -m pip install --no-cache-dir -r requirements.txt
 
 # Download spaCy NLP model for entity extraction
-RUN python -m spacy download en_core_web_sm
+RUN python -m spacy download xx_ent_wiki_sm
 
 # Copy application code
 COPY . .
