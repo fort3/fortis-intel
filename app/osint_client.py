@@ -281,12 +281,57 @@ class OSINTClient:
                 if otx_domain:
                     domain_intel["otx"] = otx_domain
 
+                st_domain = self._scraper.securitytrails_domain(domain)
+                if st_domain:
+                    domain_intel["securitytrails"] = st_domain
+                    for st_sub in st_domain.get("subdomains", [])[:50]:
+                        if st_sub != domain:
+                            findings.entities.append(EnrichedEntity(
+                                entity_type="subdomain",
+                                entity_value=st_sub,
+                                confidence=0.9,
+                                enrichment_sources=["securitytrails"],
+                            ))
+                    for assoc in st_domain.get("associated_domains", [])[:20]:
+                        if assoc and assoc != domain:
+                            findings.entities.append(EnrichedEntity(
+                                entity_type="associated_domain",
+                                entity_value=assoc,
+                                confidence=0.75,
+                                enrichment_sources=["securitytrails"],
+                            ))
+
+                urlscan_data = self._scraper.urlscan_search(domain, "domain")
+                if urlscan_data and urlscan_data.get("scans"):
+                    domain_intel["urlscan"] = urlscan_data
+                    malicious_scans = [s for s in urlscan_data["scans"] if s.get("malicious")]
+                    if malicious_scans:
+                        findings.entities.append(EnrichedEntity(
+                            entity_type="domain",
+                            entity_value=domain,
+                            confidence=0.9,
+                            enrichment_sources=["urlscan"],
+                            risk_indicators=[
+                                f"URLScan.io: {len(malicious_scans)} malicious scan(s) detected"
+                            ],
+                        ))
+
+                fc_company = self._scraper.fullcontact_enrich(domain=domain)
+                if fc_company and fc_company.get("company"):
+                    domain_intel["fullcontact"] = fc_company["company"]
+
                 findings.metadata["domain_intel"] = domain_intel
                 enrichment_sources = ["whois", "dns", "dnsdumpster"]
                 if crtsh_data:
                     enrichment_sources.append("crt.sh")
                 if otx_domain:
                     enrichment_sources.append("otx")
+                if st_domain:
+                    enrichment_sources.append("securitytrails")
+                if urlscan_data and urlscan_data.get("scans"):
+                    enrichment_sources.append("urlscan")
+                if fc_company and fc_company.get("company"):
+                    enrichment_sources.append("fullcontact")
                 findings.entities.append(EnrichedEntity(
                     entity_type="domain",
                     entity_value=domain,
@@ -404,6 +449,24 @@ class OSINTClient:
                     findings.metadata["ip_intel"]["otx"] = otx_ip
                     ip_enrichment_sources.append("otx")
 
+                st_ip = self._scraper.securitytrails_ip(identifier)
+                if st_ip and st_ip.get("domains"):
+                    findings.metadata["ip_intel"]["securitytrails"] = st_ip
+                    ip_enrichment_sources.append("securitytrails")
+                    for st_dom in st_ip.get("domains", [])[:10]:
+                        if st_dom:
+                            findings.entities.append(EnrichedEntity(
+                                entity_type="domain",
+                                entity_value=st_dom,
+                                confidence=0.8,
+                                enrichment_sources=["securitytrails"],
+                            ))
+
+                urlscan_ip = self._scraper.urlscan_search(identifier, "ip")
+                if urlscan_ip and urlscan_ip.get("scans"):
+                    findings.metadata["ip_intel"]["urlscan"] = urlscan_ip
+                    ip_enrichment_sources.append("urlscan")
+
                 findings.entities.append(EnrichedEntity(
                     entity_type="ip",
                     entity_value=identifier,
@@ -499,6 +562,26 @@ class OSINTClient:
                     findings.metadata["hunter_verify"] = hunter_verify
             except Exception as exc:
                 log.warning("Hunter.io email verify failed (non-fatal): %s", exc)
+
+            try:
+                fc_person = self._scraper.fullcontact_enrich(email=identifier)
+                if fc_person and fc_person.get("person"):
+                    findings.metadata["fullcontact"] = fc_person["person"]
+                    p = fc_person["person"]
+                    if p.get("full_name"):
+                        findings.entities.append(EnrichedEntity(
+                            entity_type="person",
+                            entity_value=p["full_name"],
+                            confidence=0.85,
+                            enrichment_sources=["fullcontact"],
+                            raw={
+                                "title": p.get("title", ""),
+                                "organization": p.get("organization", ""),
+                                "location": p.get("location", ""),
+                            },
+                        ))
+            except Exception as exc:
+                log.warning("FullContact person enrich failed (non-fatal): %s", exc)
 
         # ── Domain email discovery (Hunter.io) ───────────────────
         if id_type in ("domain", "url"):

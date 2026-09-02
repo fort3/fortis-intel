@@ -68,6 +68,9 @@ _PLATFORM_GRADES: dict[str, str] = {
     "newsapi": "B",
     "abuseipdb": "B",
     "otx": "B",
+    "securitytrails": "A",
+    "urlscan": "B",
+    "fullcontact": "B",
     # C -- Platform-verified possible / published content
     "twitter": "C",
     "x": "C",
