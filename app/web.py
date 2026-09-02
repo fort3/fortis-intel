@@ -1232,7 +1232,7 @@ def _process_single_identifier(identifier, identifier_type, platforms, depth,
     """Process a single identifier for batch investigation."""
     try:
         clean_id = sanitize_identifier(identifier, identifier_type)
-    except Exception:
+    except ValueError:
         clean_id = identifier
 
     # Initial dorking for batch item
@@ -1452,7 +1452,7 @@ def create_app():
         stored_state = session.get("oauth_state")
         if not state or not stored_state or not hmac_mod.compare_digest(state, stored_state):
             print("[ERROR] OAuth state mismatch (CSRF attempt)")
-            audit_logger._log_event("CSRF_ATTEMPT", {"state": state})
+            audit_logger._log_event("CSRF_ATTEMPT", None, {"state_present": bool(state)})
             session.pop("oauth_state", None)
             return redirect(url_for("welcome", error="csrf_detected"))
 
@@ -1470,6 +1470,9 @@ def create_app():
                 name=user_info.get("name", email),
                 picture=user_info.get("picture", ""),
             )
+
+            # Regenerate session to prevent fixation
+            session.clear()
 
             # Set session cookie
             session["auth_token"] = session_token
@@ -1871,8 +1874,8 @@ def create_app():
         # Sanitize identifier
         try:
             clean_id = sanitize_identifier(identifier, identifier_type)
-        except Exception:
-            clean_id = identifier
+        except ValueError as e:
+            return jsonify({"error": f"Invalid identifier: {e}"}), 400
 
         session_id = f"inv_{uuid.uuid4().hex[:16]}"
         if request.content_type and "multipart/form-data" in request.content_type:
@@ -2843,8 +2846,8 @@ def create_app():
 
         try:
             clean_id = sanitize_identifier(identifier, identifier_type)
-        except Exception:
-            clean_id = identifier
+        except ValueError as e:
+            return jsonify({"error": f"Invalid identifier: {e}"}), 400
 
         enrich_session_id = f"enr_{uuid.uuid4().hex[:16]}"
         user_hash = _get_user_hash()
@@ -4288,6 +4291,7 @@ def create_app():
     # ================================================================
 
     @app.route("/osint-status", methods=["GET"])
+    @login_required
     def osint_status():
         """Check OSINT source availability and return platform status."""
         configured = []

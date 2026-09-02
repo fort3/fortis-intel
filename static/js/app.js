@@ -401,7 +401,11 @@ function renderMarkdown(text) {
     if (!text) return '';
     if (typeof marked !== 'undefined' && marked.parse) {
         try {
-            return marked.parse(text);
+            var html = marked.parse(text);
+            if (typeof DOMPurify !== 'undefined') {
+                return DOMPurify.sanitize(html);
+            }
+            return html;
         } catch (e) {
             console.warn('[Markdown] Parsing failed, falling back:', e);
         }

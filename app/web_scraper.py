@@ -3,7 +3,7 @@
 import logging
 import os
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 
 import dns.resolver
 import feedparser
@@ -495,11 +495,11 @@ class WebScraper:
 
         try:
             if indicator_type == "domain":
-                resp = self._http.get(f"{base}/domains/{indicator}", headers=headers, timeout=15)
+                resp = self._http.get(f"{base}/domains/{quote(indicator, safe='')}", headers=headers, timeout=15)
             elif indicator_type == "ip":
-                resp = self._http.get(f"{base}/ip_addresses/{indicator}", headers=headers, timeout=15)
+                resp = self._http.get(f"{base}/ip_addresses/{quote(indicator, safe='')}", headers=headers, timeout=15)
             elif indicator_type == "hash":
-                resp = self._http.get(f"{base}/files/{indicator}", headers=headers, timeout=15)
+                resp = self._http.get(f"{base}/files/{quote(indicator, safe='')}", headers=headers, timeout=15)
             elif indicator_type == "url":
                 # URL analysis requires a POST first, then a GET on the analysis
                 submit_resp = self._http.post(
@@ -670,7 +670,7 @@ class WebScraper:
             headers = {"X-OTX-API-KEY": api_key}
 
             general_resp = self._http.get(
-                f"{base}/indicators/{otx_type}/{indicator}/{section}",
+                f"{base}/indicators/{otx_type}/{quote(indicator, safe='')}/{section}",
                 headers=headers,
                 timeout=15,
             )
@@ -807,7 +807,7 @@ class WebScraper:
                 headers["Key"] = api_key
 
             resp = self._http.get(
-                f"https://emailrep.io/{email}",
+                f"https://emailrep.io/{quote(email, safe='')}",
                 headers=headers,
                 timeout=10,
             )
@@ -852,7 +852,7 @@ class WebScraper:
 
         try:
             resp = self._http.get(
-                "http://apilayer.net/api/validate",
+                "https://apilayer.net/api/validate",
                 params={"access_key": api_key, "number": phone},
                 timeout=10,
             )

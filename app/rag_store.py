@@ -63,7 +63,7 @@ def _verify_hmac(directory: str) -> bool:
     hmac_path = os.path.join(directory, _HMAC_FILENAME)
     if not os.path.exists(hmac_path):
         print(f"  [WARN] No integrity HMAC found for vectorstore at {directory}")
-        return True
+        return False
     with open(hmac_path, "r") as f:
         stored = f.read().strip()
     computed = _compute_dir_hmac(directory)

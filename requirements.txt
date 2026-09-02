@@ -1,10 +1,10 @@
 # === Core Web Stack ===
-flask>=3.0.0
-flask-cors>=4.0.0
-flask-limiter>=3.5.0
-flask-wtf>=1.2.0
-gunicorn>=21.2.0
-waitress>=2.1.0
+flask==3.1.1
+flask-cors==5.0.1
+flask-limiter==3.12
+flask-wtf==1.2.2
+gunicorn==23.0.0
+waitress==3.0.2
 
 # === LLM / AI Stack (DeepSeek via OpenAI-compatible API) ===
 langchain>=0.3.9
@@ -60,7 +60,7 @@ numpy>=1.24.0
 # pytineye>=1.0.0  # uncomment if you have a TinEye API key
 
 # === Data Processing ===
-PyMuPDF>=1.24.0
+PyMuPDF==1.25.5
 pypdf>=4.0.0
 markdown>=3.6
 matplotlib>=3.8.0
@@ -68,7 +68,7 @@ networkx>=3.2
 openpyxl>=3.1.0
 
 # === Security / Crypto ===
-cryptography>=41.0.0
+cryptography>=44.0.0
 google-auth>=2.28.1
 google-auth-oauthlib>=1.2.0
 

@@ -12,10 +12,19 @@ REDIS_URL = os.getenv("REDIS_URL", "")
 CELERY_BROKER_URL = os.getenv("CELERY_BROKER_URL", REDIS_URL or "redis://localhost:6379/0")
 CELERY_RESULT_BACKEND = os.getenv("CELERY_RESULT_BACKEND", REDIS_URL or "redis://localhost:6379/0")
 
-# Debug logging
-print(f"[CELERY_INIT] REDIS_URL: {REDIS_URL}")
-print(f"[CELERY_INIT] CELERY_BROKER_URL: {CELERY_BROKER_URL}")
-print(f"[CELERY_INIT] CELERY_RESULT_BACKEND: {CELERY_RESULT_BACKEND}")
+def _redact_url(url: str) -> str:
+    """Redact password from Redis URLs for safe logging."""
+    from urllib.parse import urlparse, urlunparse
+    parsed = urlparse(url)
+    if parsed.password:
+        replaced = parsed._replace(netloc=f"{parsed.username or ''}:***@{parsed.hostname}:{parsed.port or 6379}")
+        return urlunparse(replaced)
+    return url
+
+# Debug logging (redacted)
+print(f"[CELERY_INIT] REDIS_URL: {_redact_url(REDIS_URL)}")
+print(f"[CELERY_INIT] CELERY_BROKER_URL: {_redact_url(CELERY_BROKER_URL)}")
+print(f"[CELERY_INIT] CELERY_RESULT_BACKEND: {_redact_url(CELERY_RESULT_BACKEND)}")
 
 # Create Celery app
 celery_app = Celery(

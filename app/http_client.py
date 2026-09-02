@@ -8,8 +8,10 @@ underlying handle — curl_cffi uses libcurl which binds to Windows COM on
 the creating thread and is NOT safe to share across threads.
 """
 
+import ipaddress
 import logging
 import threading
+from urllib.parse import urlparse
 
 log = logging.getLogger(__name__)
 
@@ -21,6 +23,36 @@ except ImportError:
     _CffiSession = None  # type: ignore[assignment,misc]
 
 _DEFAULT_IMPERSONATE = "chrome"
+
+_BLOCKED_NETWORKS = [
+    ipaddress.ip_network("10.0.0.0/8"),
+    ipaddress.ip_network("172.16.0.0/12"),
+    ipaddress.ip_network("192.168.0.0/16"),
+    ipaddress.ip_network("127.0.0.0/8"),
+    ipaddress.ip_network("169.254.0.0/16"),
+    ipaddress.ip_network("0.0.0.0/8"),
+    ipaddress.ip_network("::1/128"),
+    ipaddress.ip_network("fc00::/7"),
+    ipaddress.ip_network("fe80::/10"),
+]
+
+
+def check_ssrf(url: str) -> None:
+    """Raise ValueError if url resolves to an internal/private IP."""
+    import socket
+    parsed = urlparse(url)
+    hostname = parsed.hostname
+    if not hostname:
+        raise ValueError(f"No hostname in URL: {url}")
+    try:
+        addr = socket.getaddrinfo(hostname, None, socket.AF_UNSPEC, socket.SOCK_STREAM)
+        for family, _, _, _, sockaddr in addr:
+            ip = ipaddress.ip_address(sockaddr[0])
+            for net in _BLOCKED_NETWORKS:
+                if ip in net:
+                    raise ValueError(f"SSRF blocked: {hostname} resolves to private IP {ip}")
+    except socket.gaierror:
+        pass
 
 
 class _ThreadLocalSession:

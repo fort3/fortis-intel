@@ -95,8 +95,8 @@ def _run_llm_verifiers(
                     verifier_name = futures[future]
                     votes.append(VerifierVote(
                         verifier_id=f"llm_{verifier_name}_verifier",
-                        approved=True,
-                        reason=f"Verifier unavailable (fail-open): {str(e)[:200]}",
+                        approved=False,
+                        reason=f"Verifier unavailable (fail-closed): {str(e)[:200]}",
                         confidence=0.1,
                     ))
         except TimeoutError:
@@ -106,8 +106,8 @@ def _run_llm_verifiers(
                     future.cancel()
                     votes.append(VerifierVote(
                         verifier_id=f"llm_{name}_verifier",
-                        approved=True,
-                        reason=f"Verifier timed out after {FORGE_LLM_VERIFIER_TIMEOUT}s (fail-open)",
+                        approved=False,
+                        reason=f"Verifier timed out after {FORGE_LLM_VERIFIER_TIMEOUT}s (fail-closed)",
                         confidence=0.1,
                     ))
 

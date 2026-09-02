@@ -107,7 +107,10 @@ class ForgeChainSession:
     def verify_integrity(self) -> tuple[bool, Optional[str]]:
         for i, block in enumerate(self.blocks):
             expected_hash = ForgeBlock.compute_hash(
-                block.block_id, block.previous_hash, block.prompt_hash, block.timestamp
+                block.block_id, block.previous_hash, block.prompt_hash, block.timestamp,
+                execution_result_hash=block.execution_result_hash or "",
+                token_id=block.token_id or "",
+                execution_time_ms=block.execution_time_ms or 0.0,
             )
             if not hmac.compare_digest(block.block_hash, expected_hash):
                 return False, f"Block {i} hash mismatch"
@@ -137,6 +140,7 @@ class ForgeToken:
     created_at: float
     expires_at: float
     consumed: bool = False
+    _lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
 
     @classmethod
     def mint(cls, block_id: str, intent_scope: str, ttl_seconds: int = 60) -> "ForgeToken":
@@ -153,6 +157,7 @@ class ForgeToken:
         return not self.consumed and time.time() < self.expires_at
 
     def consume(self) -> None:
-        if self.consumed:
-            raise RuntimeError("Token already consumed")
-        self.consumed = True
+        with self._lock:
+            if self.consumed:
+                raise RuntimeError("Token already consumed")
+            self.consumed = True

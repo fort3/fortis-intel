@@ -524,8 +524,8 @@ class LLMSafetyVerifier:
         except Exception as e:
             return VerifierVote(
                 verifier_id=self.VERIFIER_ID,
-                approved=True,
-                reason=f"Safety verifier unavailable (fail-open): {str(e)[:200]}",
+                approved=False,
+                reason=f"Safety verifier unavailable (fail-closed): {str(e)[:200]}",
                 confidence=0.1,
             )
 
@@ -575,8 +575,8 @@ class LLMConsistencyVerifier:
         except Exception as e:
             return VerifierVote(
                 verifier_id=self.VERIFIER_ID,
-                approved=True,
-                reason=f"Consistency verifier unavailable (fail-open): {str(e)[:200]}",
+                approved=False,
+                reason=f"Consistency verifier unavailable (fail-closed): {str(e)[:200]}",
                 confidence=0.1,
             )
 

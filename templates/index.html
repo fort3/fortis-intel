@@ -16,11 +16,17 @@
   <link rel="icon" type="image/x-icon" href="{{ url_for('static', filename='img/favicon.ico') }}">
 
   <!-- Leaflet.markercluster -->
-  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
-  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css"
+        integrity="sha256-YU3qCpj/P06tdPBJGPax0bm6Q1wltfwjsho5TR4+TYc="
+        crossorigin="anonymous" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css"
+        integrity="sha256-YSWCMtmNZNwqex4CEw1nQhvFub2lmU7vcCKP+XVwwXA="
+        crossorigin="anonymous" />
 
   <!-- Leaflet.fullscreen -->
-  <link rel="stylesheet" href="https://unpkg.com/leaflet.fullscreen@3.0.2/Control.FullScreen.css" />
+  <link rel="stylesheet" href="https://unpkg.com/leaflet.fullscreen@3.0.2/Control.FullScreen.css"
+        integrity="sha256-oSoT0yoXsbzdYBJevW8Dt/k2kMPDUyTh7e+Y3r7J/vI="
+        crossorigin="anonymous" />
 </head>
 <body>
   <div class="bg-scanline-overlay"></div>
@@ -775,25 +781,44 @@
           crossorigin="anonymous"></script>
 
   <!-- Leaflet.heat -->
-  <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
+  <script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"
+          integrity="sha256-65UqrlgGoRAnKfKRuriH3eeDrOhZgZo1SCenduc+SGo="
+          crossorigin="anonymous"></script>
 
   <!-- Leaflet.markercluster -->
-  <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+  <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"
+          integrity="sha256-Hk4dIpcqOSb0hZjgyvFOP+cEmDXUKKNE/tT542ZbNQg="
+          crossorigin="anonymous"></script>
 
   <!-- Leaflet.fullscreen -->
-  <script src="https://unpkg.com/leaflet.fullscreen@3.0.2/Control.FullScreen.js"></script>
+  <script src="https://unpkg.com/leaflet.fullscreen@3.0.2/Control.FullScreen.js"
+          integrity="sha256-PTdt6AUmWGDZuBIqIjAs/eOIrcXNKYkP3zHWZfyNAtc="
+          crossorigin="anonymous"></script>
 
   <!-- html2canvas (map snapshot) -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"
+          integrity="sha256-6H5VB5QyLldKH9oMFUmjxw2uWpPZETQXpCkBaDjquMs="
+          crossorigin="anonymous"></script>
 
   <!-- Chart.js 4.x -->
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4/dist/chart.umd.min.js"
+          integrity="sha256-SERKgtTty1vsDxll+qzd4Y2cF9swY9BCq62i9wXJ9Uo="
+          crossorigin="anonymous"></script>
 
   <!-- Cytoscape.js 3.x -->
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.28.1/cytoscape.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/cytoscape/3.28.1/cytoscape.min.js"
+          integrity="sha256-ktdStI6pSXIGdYZRl/0qAAHJW8WIhUXpkK9gMhcS1MY="
+          crossorigin="anonymous"></script>
 
-  <!-- marked.js (Markdown rendering) -->
-  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <!-- marked.js (Markdown rendering) — pinned version -->
+  <script src="https://cdn.jsdelivr.net/npm/marked@12.0.2/marked.min.js"
+          integrity="sha256-qMxBBMcpSMrr1uvRYCOJbcdR8DNiPAeikVhbgMNBp0k="
+          crossorigin="anonymous"></script>
+
+  <!-- DOMPurify (XSS sanitization for rendered HTML) -->
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@3.1.6/dist/purify.min.js"
+          integrity="sha256-jA7VyeFNVMu6gJTkFJYNSI6WDOQ0+yMYSE5MjEJO5c="
+          crossorigin="anonymous"></script>
 
   <!-- App JS -->
   <script src="{{ url_for('static', filename='js/app.js') }}"></script>

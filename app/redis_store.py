@@ -109,7 +109,8 @@ class _BaseStore:
                 socket_timeout=2,
             )
             self._redis_client.ping()
-            log.info("Connected to Redis at %s (prefix=%s)", redis_url, self._key_prefix)
+            safe_url = redis_url.split("@")[-1] if "@" in redis_url else redis_url
+            log.info("Connected to Redis at %s (prefix=%s)", safe_url, self._key_prefix)
         except Exception as exc:
             log.warning("Redis connection failed: %s — using in-memory store", exc)
             self._redis_client = None

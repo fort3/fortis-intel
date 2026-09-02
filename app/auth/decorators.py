@@ -25,7 +25,7 @@ def login_required(f):
                 picture="",
                 created_at=datetime.utcnow(),
                 last_activity=datetime.utcnow(),
-                is_admin=True,
+                is_admin=False,
             )
             return f(*args, **kwargs)
 
