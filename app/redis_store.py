@@ -356,6 +356,25 @@ class MonitorFindingStore(_BaseStore):
             log.error("Failed to delete findings for monitor %s: %s", monitor_id, exc)
         return count
 
+    def delete_all(self) -> int:
+        """Delete ALL findings regardless of monitor.
+
+        Returns:
+            Number of findings deleted.
+        """
+        count = 0
+        try:
+            all_findings = self.list_all(limit=1000)
+            for finding in all_findings:
+                self.delete(finding.finding_id)
+                count += 1
+            if self._redis_client and self._pending_set_key:
+                self._redis_client.delete(self._pending_set_key)
+            log.info("Deleted all %d findings", count)
+        except Exception as exc:
+            log.error("Failed to delete all findings: %s", exc)
+        return count
+
 
 # ---------------------------------------------------------------------------
 # Global singleton accessors

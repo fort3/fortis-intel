@@ -194,6 +194,39 @@ def _get_feed_monitor() -> FeedMonitor:
         _shared_feed_monitor = FeedMonitor()
     return _shared_feed_monitor
 
+
+def _flush_celery_tasks() -> int:
+    """Purge the ready queue AND clear delayed/ETA tasks from Redis.
+
+    ``queue_purge`` only removes messages already in the ready queue.
+    Tasks scheduled with ``countdown``/``eta`` sit in Redis sorted sets
+    (``unacked*``) and are invisible to ``queue_purge``.  We also call
+    ``discard_all`` to tell connected workers to drop prefetched work.
+    """
+    purged = 0
+    try:
+        from app.celery_app import celery_app as _celery
+        with _celery.connection_or_acquire() as conn:
+            purged += conn.default_channel.queue_purge("fortis_monitor") or 0
+        purged += _celery.control.purge() or 0
+        _celery.control.discard_all()
+
+        # Clear delayed/ETA tasks from Redis sorted sets used by kombu
+        try:
+            redis_client = _celery.connection_for_read().channel().client
+            for key in ("unacked", "unacked_index"):
+                removed = redis_client.delete(key)
+                if removed:
+                    purged += 1
+                    print(f"[MONITOR] Cleared Redis key: {key}")
+        except Exception as rexc:
+            print(f"[WARN] Could not clear Redis ETA keys: {rexc}")
+
+        print(f"[MONITOR] Flushed {purged} queued/delayed tasks")
+    except Exception as exc:
+        print(f"[WARN] Could not flush Celery tasks: {exc}")
+    return purged
+
 # ── Helper functions ───────────────────────────────────────────────
 
 
@@ -4250,20 +4283,7 @@ def create_app():
                     deleted += 1
                     findings_purged += result.get("findings_purged", 0)
 
-            # Flush the Celery task queue to kill stale poll tasks
-            tasks_purged = 0
-            try:
-                from app.celery_app import celery_app as _celery
-                with _celery.connection_or_acquire() as conn:
-                    tasks_purged = conn.default_channel.queue_purge("fortis_monitor") or 0
-                print(f"[MONITOR] Purged {tasks_purged} tasks from fortis_monitor queue")
-                # Also discard any tasks still on the default queue
-                default_purged = _celery.control.purge() or 0
-                tasks_purged += default_purged
-                if default_purged:
-                    print(f"[MONITOR] Purged {default_purged} tasks from default queue")
-            except Exception as cexc:
-                print(f"[WARN] Could not purge Celery queue: {cexc}")
+            tasks_purged = _flush_celery_tasks()
 
             return jsonify({
                 "success": True,
@@ -4275,17 +4295,24 @@ def create_app():
             print(f"[ERROR] Monitor purge-all failed: {exc}")
             return jsonify({"error": "Failed to purge monitors"}), 500
 
+    @app.route("/monitor/findings/clear", methods=["DELETE"])
+    @login_required
+    def monitor_clear_findings():
+        """Delete ALL findings from Redis."""
+        try:
+            mon = _get_feed_monitor()
+            count = mon.clear_all_findings()
+            return jsonify({"success": True, "findings_deleted": count})
+        except Exception as exc:
+            print(f"[ERROR] Clear findings failed: {exc}")
+            return jsonify({"error": "Failed to clear findings"}), 500
+
     @app.route("/monitor/flush-queue", methods=["DELETE"])
     @login_required
     def monitor_flush_queue():
         """Flush all queued Celery monitor tasks without deleting monitor configs."""
         try:
-            from app.celery_app import celery_app as _celery
-            purged = 0
-            with _celery.connection_or_acquire() as conn:
-                purged += conn.default_channel.queue_purge("fortis_monitor") or 0
-            purged += _celery.control.purge() or 0
-            print(f"[MONITOR] Flushed {purged} queued Celery tasks")
+            purged = _flush_celery_tasks()
             return jsonify({"success": True, "tasks_flushed": purged})
         except Exception as exc:
             print(f"[ERROR] Queue flush failed: {exc}")

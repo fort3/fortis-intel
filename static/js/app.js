@@ -3813,10 +3813,22 @@ document.addEventListener('DOMContentLoaded', function () {
 
     var clearFindingsBtn = document.getElementById('btnClearFindings');
     if (clearFindingsBtn) {
-        clearFindingsBtn.addEventListener('click', function () {
-            var findingsEl = document.getElementById('watchFindings');
-            if (findingsEl) findingsEl.innerHTML = '';
-            showToast('Findings view cleared.', 'info');
+        clearFindingsBtn.addEventListener('click', async function () {
+            if (!confirm('Delete all findings from the database? This cannot be undone.')) return;
+            try {
+                var response = await fetchApi('/monitor/findings/clear', { method: 'DELETE' });
+                var data = await response.json();
+                if (response.ok && data.success) {
+                    var findingsEl = document.getElementById('watchFindings');
+                    if (findingsEl) findingsEl.innerHTML = '';
+                    showToast(data.findings_deleted + ' findings deleted.', 'success');
+                    loadWatchFindings();
+                } else {
+                    showToast('Clear failed: ' + (data.error || 'Unknown error'), 'error');
+                }
+            } catch (e) {
+                showToast('Clear findings failed: ' + e.message, 'error');
+            }
         });
     }
 

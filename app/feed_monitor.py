@@ -212,6 +212,16 @@ class FeedMonitor:
     # Finding management
     # ------------------------------------------------------------------
 
+    def clear_all_findings(self) -> int:
+        """Delete all findings from the store.
+
+        Returns:
+            Number of findings deleted.
+        """
+        count = self._findings.delete_all()
+        log.info("Cleared all findings: %d deleted", count)
+        return count
+
     def get_pending_findings(self) -> list[dict[str, Any]]:
         """Return all findings awaiting human review.
 
