@@ -319,6 +319,12 @@ def tag_entity_reliability(
             "crt.sh": "crt.sh",
             "abuseipdb": "abuseipdb",
             "otx": "otx",
+            "securitytrails": "securitytrails",
+            "urlscan": "urlscan",
+            "fullcontact": "fullcontact",
+            "hunter.io": "shodan",
+            "emailrep": "shodan",
+            "numverify": "shodan",
             "username_enum": "web_scrape",
             "email_accounts": "web_scrape",
             "pivot_breach": "web_scrape",
@@ -376,6 +382,12 @@ _SOURCE_MAP = {
     "crt.sh": "crt.sh",
     "abuseipdb": "abuseipdb",
     "otx": "otx",
+    "securitytrails": "securitytrails",
+    "urlscan": "urlscan",
+    "fullcontact": "fullcontact",
+    "hunter.io": "shodan",
+    "emailrep": "shodan",
+    "numverify": "shodan",
 }
 
 

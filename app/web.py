@@ -629,6 +629,83 @@ def _findings_to_context(findings_dict: dict) -> str:
         parts.append(f"  Carrier: {numverify.get('carrier', '?')}")
         parts.append(f"  Line type: {numverify.get('line_type', '?')}")
 
+    st_data = domain_intel.get("securitytrails", {})
+    if st_data:
+        parts.append(f"\n=== SecurityTrails [Reliability: A] ===")
+        st_subs = st_data.get("subdomains", [])
+        if st_subs:
+            parts.append(f"  Subdomains: {st_data.get('subdomain_count', len(st_subs))}")
+            for s in st_subs[:15]:
+                parts.append(f"    {s}")
+            if len(st_subs) > 15:
+                parts.append(f"    ... and {len(st_subs) - 15} more")
+        assoc = st_data.get("associated_domains", [])
+        if assoc:
+            parts.append(f"  Associated domains: {len(assoc)}")
+            for a in assoc[:10]:
+                parts.append(f"    {a}")
+        dns_hist = st_data.get("dns_history_a", [])
+        if dns_hist:
+            parts.append(f"  DNS A record history: {len(dns_hist)} entries")
+            for h in dns_hist[:5]:
+                parts.append(f"    {', '.join(h.get('values', []))} ({h.get('first_seen', '?')} - {h.get('last_seen', '?')})")
+        if st_data.get("alexa_rank"):
+            parts.append(f"  Alexa rank: {st_data['alexa_rank']}")
+
+    st_ip_data = ip_intel.get("securitytrails", {}) if ip_intel else {}
+    if st_ip_data:
+        parts.append(f"\n  --- SecurityTrails (IP Reverse) [Reliability: A] ---")
+        parts.append(f"  Domains on this IP: {st_ip_data.get('domain_count', 0)}")
+        for d in st_ip_data.get("domains", [])[:10]:
+            parts.append(f"    {d}")
+
+    urlscan_domain = domain_intel.get("urlscan", {})
+    if urlscan_domain and urlscan_domain.get("scans"):
+        parts.append(f"\n=== URLScan.io (Domain) [Reliability: B] ===")
+        parts.append(f"  Total scans: {urlscan_domain.get('total', 0)}")
+        for sc in urlscan_domain["scans"][:5]:
+            mal_tag = " !! MALICIOUS" if sc.get("malicious") else ""
+            tags = f" [{', '.join(sc['tags'])}]" if sc.get("tags") else ""
+            parts.append(f"  {sc.get('url', '?')} — {sc.get('title', '')[:60]} (IP: {sc.get('ip', '?')}, {sc.get('country', '?')}){mal_tag}{tags}")
+
+    urlscan_ip = ip_intel.get("urlscan", {}) if ip_intel else {}
+    if urlscan_ip and urlscan_ip.get("scans"):
+        parts.append(f"\n  --- URLScan.io (IP) [Reliability: B] ---")
+        parts.append(f"  Total scans: {urlscan_ip.get('total', 0)}")
+        for sc in urlscan_ip["scans"][:5]:
+            mal_tag = " !! MALICIOUS" if sc.get("malicious") else ""
+            parts.append(f"  {sc.get('url', '?')} — {sc.get('domain', '?')}{mal_tag}")
+
+    fc_domain = domain_intel.get("fullcontact", {})
+    if fc_domain:
+        parts.append(f"\n=== FullContact (Company) [Reliability: B] ===")
+        parts.append(f"  Name: {fc_domain.get('name', '?')}")
+        if fc_domain.get("location"):
+            parts.append(f"  Location: {fc_domain['location']}")
+        if fc_domain.get("founded"):
+            parts.append(f"  Founded: {fc_domain['founded']}")
+        if fc_domain.get("employees"):
+            parts.append(f"  Employees: {fc_domain['employees']}")
+        if fc_domain.get("bio"):
+            parts.append(f"  Bio: {fc_domain['bio'][:200]}")
+        if fc_domain.get("keywords"):
+            parts.append(f"  Keywords: {', '.join(fc_domain['keywords'][:10])}")
+
+    fc_person = metadata.get("fullcontact", {})
+    if fc_person:
+        parts.append(f"\n=== FullContact (Person) [Reliability: B] ===")
+        parts.append(f"  Name: {fc_person.get('full_name', '?')}")
+        if fc_person.get("title"):
+            parts.append(f"  Title: {fc_person['title']}")
+        if fc_person.get("organization"):
+            parts.append(f"  Organization: {fc_person['organization']}")
+        if fc_person.get("location"):
+            parts.append(f"  Location: {fc_person['location']}")
+        if fc_person.get("bio"):
+            parts.append(f"  Bio: {fc_person['bio'][:200]}")
+        if fc_person.get("linkedin"):
+            parts.append(f"  LinkedIn: {fc_person['linkedin']}")
+
     errors = findings_dict.get("errors", [])
     if errors:
         parts.append(f"\n=== Collection Errors ({len(errors)}) ===")
@@ -2615,6 +2692,53 @@ def create_app():
             response["civilian_harm"] = civilian_harm_data
 
         return jsonify(response)
+
+    # ── Investigation History ─────────────────────────────────────
+    @app.route("/investigation-history", methods=["GET"])
+    @login_required
+    @limiter.limit("60 per hour")
+    def investigation_history():
+        """Return recent investigation summaries from the in-memory cache."""
+        limit = min(request.args.get("limit", 50, type=int), 200)
+        items = []
+        for sid, data in stored_reports.items():
+            if not sid.startswith("inv_"):
+                continue
+            items.append({
+                "session_id": sid,
+                "identifier": data.get("identifier", ""),
+                "sensitivity_level": data.get("sensitivity_level", ""),
+                "created_at": data.get("created_at", "").isoformat()
+                    if hasattr(data.get("created_at", ""), "isoformat")
+                    else str(data.get("created_at", "")),
+                "entity_count": len(data.get("entities", [])),
+                "has_map": bool(data.get("map_data", {}).get("markers")),
+                "has_graph": bool(data.get("entity_graph")),
+            })
+        items.sort(key=lambda x: x.get("created_at", ""), reverse=True)
+        return jsonify({"history": items[:limit], "total": len(items)})
+
+    @app.route("/investigation-history/<session_id>", methods=["GET"])
+    @login_required
+    @limiter.limit("60 per hour")
+    def investigation_history_detail(session_id: str):
+        """Reload a past investigation result from the in-memory cache."""
+        if not validate_session_id(session_id):
+            return jsonify({"error": "Invalid session ID"}), 400
+        data = stored_reports.get(session_id)
+        if not data:
+            return jsonify({"error": "Investigation not found or expired"}), 404
+        return jsonify({
+            "session_id": session_id,
+            "analysis": data.get("text", ""),
+            "entities": data.get("entities", []),
+            "sensitivity_level": data.get("sensitivity_level", ""),
+            "identifier": data.get("identifier", ""),
+            "chart_data": data.get("chart_data"),
+            "map_data": data.get("map_data"),
+            "entity_graph": data.get("entity_graph"),
+            "civilian_harm": data.get("civilian_harm"),
+        })
 
     @app.route("/analyze-image", methods=["POST"])
     @login_required

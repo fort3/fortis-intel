@@ -1971,6 +1971,9 @@ function renderAnalysis(data) {
         content.innerHTML = html;
     }
 
+    // Populate raw data viewer
+    showRawData(data);
+
     // Check for map data (defer rendering until pane is visible)
     if (data.map_data && (data.map_data.markers && data.map_data.markers.length > 0 || data.map_data.triangulation)) {
         hasMap = true;
@@ -3467,6 +3470,162 @@ function handleSubmit() {
 }
 
 /* ====================================================================
+   INVESTIGATION HISTORY (B1)
+   ==================================================================== */
+
+let historyPanelOpen = false;
+
+function openHistoryPanel() {
+    var panel = document.getElementById('historyPanel');
+    var overlay = document.getElementById('historyOverlay');
+    if (panel) panel.classList.add('open');
+    if (overlay) overlay.classList.add('active');
+    historyPanelOpen = true;
+    loadInvestigationHistory();
+}
+
+function closeHistoryPanel() {
+    var panel = document.getElementById('historyPanel');
+    var overlay = document.getElementById('historyOverlay');
+    if (panel) panel.classList.remove('open');
+    if (overlay) overlay.classList.remove('active');
+    historyPanelOpen = false;
+}
+
+async function loadInvestigationHistory() {
+    var list = document.getElementById('historyList');
+    var empty = document.getElementById('historyEmpty');
+    if (!list) return;
+
+    try {
+        var resp = await fetchApi('/investigation-history?limit=50');
+        if (!resp.ok) throw new Error('Failed to load history');
+        var data = await resp.json();
+        var items = data.history || [];
+
+        if (items.length === 0) {
+            if (empty) empty.style.display = '';
+            list.innerHTML = '';
+            return;
+        }
+
+        if (empty) empty.style.display = 'none';
+        var html = '';
+        items.forEach(function(item) {
+            var date = item.created_at ? new Date(item.created_at).toLocaleString() : 'Unknown';
+            var badges = '';
+            if (item.has_map) badges += '<span class="history-badge">Map</span>';
+            if (item.has_graph) badges += '<span class="history-badge">Graph</span>';
+            html += '<div class="history-item" data-sid="' + escapeHtml(item.session_id) + '">';
+            html += '<div class="history-item-title">' + escapeHtml(item.identifier || 'Unknown') + '</div>';
+            html += '<div class="history-item-meta">';
+            html += '<span>' + escapeHtml(date) + '</span>';
+            html += '<span>' + (item.entity_count || 0) + ' entities</span>';
+            html += badges;
+            html += '</div>';
+            html += '</div>';
+        });
+        list.innerHTML = html;
+    } catch (err) {
+        list.innerHTML = '<div class="result-section result-error">Failed to load history</div>';
+    }
+}
+
+async function loadHistoryItem(sessionId) {
+    try {
+        showLoading();
+        var resp = await fetchApi('/investigation-history/' + encodeURIComponent(sessionId));
+        if (!resp.ok) throw new Error('Investigation not found');
+        var data = await resp.json();
+        closeHistoryPanel();
+        selectTool('investigate');
+        renderAnalysis(data);
+    } catch (err) {
+        showToast('Failed to load investigation: ' + err.message, 'error');
+    } finally {
+        hideLoading();
+    }
+}
+
+/* ====================================================================
+   RAW DATA VIEWER (B3)
+   ==================================================================== */
+
+function showRawData(data) {
+    var content = document.getElementById('rawDataContent');
+    var sizeEl = document.getElementById('rawDataSize');
+    var tabRaw = document.getElementById('tabRaw');
+    if (!content) return;
+
+    var jsonStr = JSON.stringify(data, null, 2);
+    content.textContent = jsonStr;
+    if (sizeEl) {
+        var kb = (new Blob([jsonStr]).size / 1024).toFixed(1);
+        sizeEl.textContent = kb + ' KB';
+    }
+    if (tabRaw) tabRaw.style.display = '';
+}
+
+function copyRawData() {
+    var content = document.getElementById('rawDataContent');
+    if (!content) return;
+    navigator.clipboard.writeText(content.textContent).then(function() {
+        showToast('Raw data copied to clipboard', 'info');
+    });
+}
+
+function downloadRawData() {
+    var content = document.getElementById('rawDataContent');
+    if (!content) return;
+    var blob = new Blob([content.textContent], { type: 'application/json' });
+    var url = URL.createObjectURL(blob);
+    var a = document.createElement('a');
+    a.href = url;
+    a.download = 'fortis-raw-data-' + (lastAnalysisData ? lastAnalysisData.identifier || 'export' : 'export') + '.json';
+    a.click();
+    URL.revokeObjectURL(url);
+}
+
+/* ====================================================================
+   GRAPH ENHANCEMENTS (B4)
+   ==================================================================== */
+
+function changeGraphLayout(layoutName) {
+    if (!graphInstance) return;
+    graphInstance.layout({
+        name: layoutName,
+        animate: true,
+        animationDuration: 500,
+        padding: 30,
+        nodeRepulsion: function() { return 8000; },
+        idealEdgeLength: function() { return 80; },
+        nodeOverlap: 20,
+    }).run();
+}
+
+function searchGraphNodes(query) {
+    if (!graphInstance || !query) {
+        if (graphInstance) {
+            graphInstance.nodes().style({ opacity: 1 });
+            graphInstance.edges().style({ opacity: 1 });
+        }
+        return;
+    }
+    var q = query.toLowerCase();
+    graphInstance.nodes().forEach(function(node) {
+        var label = (node.data('label') || '').toLowerCase();
+        var type = (node.data('type') || '').toLowerCase();
+        var match = label.includes(q) || type.includes(q);
+        node.style({ opacity: match ? 1 : 0.15 });
+        node.connectedEdges().style({ opacity: match ? 1 : 0.1 });
+    });
+}
+
+function fitGraph() {
+    if (graphInstance) graphInstance.fit(undefined, 30);
+}
+
+/* ====================================================================
    EVENT BINDINGS (DOMContentLoaded)
    ==================================================================== */
 
@@ -3685,6 +3844,81 @@ document.addEventListener('DOMContentLoaded', function () {
             showToast('KB stats refreshed.', 'info');
         });
     }
+
+    // ---- History Panel ----
+    var historyBtn = document.getElementById('btnHistory');
+    if (historyBtn) {
+        historyBtn.addEventListener('click', function () {
+            if (historyPanelOpen) {
+                closeHistoryPanel();
+            } else {
+                closeWatchPanel();
+                closeKbPanel();
+                openHistoryPanel();
+            }
+        });
+    }
+
+    var historyCloseBtn = document.getElementById('historyClose');
+    if (historyCloseBtn) {
+        historyCloseBtn.addEventListener('click', closeHistoryPanel);
+    }
+
+    var historyOverlay = document.getElementById('historyOverlay');
+    if (historyOverlay) {
+        historyOverlay.addEventListener('click', closeHistoryPanel);
+    }
+
+    var historyList = document.getElementById('historyList');
+    if (historyList) {
+        historyList.addEventListener('click', function (e) {
+            var item = e.target.closest('.history-item');
+            if (item && item.dataset.sid) {
+                loadHistoryItem(item.dataset.sid);
+            }
+        });
+    }
+
+    var clearHistoryBtn = document.getElementById('btnClearHistory');
+    if (clearHistoryBtn) {
+        clearHistoryBtn.addEventListener('click', function () {
+            var list = document.getElementById('historyList');
+            if (list) list.innerHTML = '';
+            var empty = document.getElementById('historyEmpty');
+            if (empty) empty.style.display = '';
+            showToast('History view cleared.', 'info');
+        });
+    }
+
+    // ---- Raw Data Viewer ----
+    var copyRawBtn = document.getElementById('btnCopyRaw');
+    if (copyRawBtn) copyRawBtn.addEventListener('click', copyRawData);
+
+    var downloadRawBtn = document.getElementById('btnDownloadRaw');
+    if (downloadRawBtn) downloadRawBtn.addEventListener('click', downloadRawData);
+
+    // ---- Graph Controls ----
+    var graphLayoutSelect = document.getElementById('graphLayout');
+    if (graphLayoutSelect) {
+        graphLayoutSelect.addEventListener('change', function () {
+            changeGraphLayout(this.value);
+        });
+    }
+
+    var graphSearchInput = document.getElementById('graphSearch');
+    if (graphSearchInput) {
+        var graphSearchDebounce = null;
+        graphSearchInput.addEventListener('input', function () {
+            var q = this.value;
+            clearTimeout(graphSearchDebounce);
+            graphSearchDebounce = setTimeout(function () {
+                searchGraphNodes(q);
+            }, 200);
+        });
+    }
+
+    var graphFitBtn = document.getElementById('btnGraphFit');
+    if (graphFitBtn) graphFitBtn.addEventListener('click', fitGraph);
 
     // ---- Export Buttons ----
     var exportBar = document.getElementById('exportBar');

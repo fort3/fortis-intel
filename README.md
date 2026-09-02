@@ -7,8 +7,8 @@ An OSINT-driven intelligence and analysis platform for open-source intelligence 
 ## Key Features
 
 - **Multi-Platform OSINT** -- Investigate usernames, emails, domains, and IPs across Twitter/X, Reddit, YouTube, Instagram, Mastodon, Facebook, TikTok, and Telegram
-- **Domain & IP Intelligence** -- First-class domain/IP investigations with WHOIS, DNS records, DNSdumpster subdomain enumeration, **crt.sh certificate transparency** (no API key), reverse DNS, reverse IP (co-hosted domains), HTTP header probing via HackerTarget API, **AbuseIPDB** IP reputation scoring, **AlienVault OTX** threat intelligence pulses, Wayback Machine historical enrichment, and **URL endpoint fuzzing** (curated 245-path wordlist — elevated authorization required)
-- **Email & Phone Intelligence** -- **Hunter.io** domain email discovery and email verification, **EmailRep** email reputation (suspicious activity, breach exposure, known profiles), **Numverify** phone number validation and geolocation
+- **Domain & IP Intelligence** -- First-class domain/IP investigations with WHOIS, DNS records, DNSdumpster subdomain enumeration, **crt.sh certificate transparency** (no API key), reverse DNS, reverse IP (co-hosted domains), HTTP header probing via HackerTarget API, **AbuseIPDB** IP reputation scoring, **AlienVault OTX** threat intelligence pulses, **SecurityTrails** (DNS history, subdomains, associated domains), **URLScan.io** (domain/IP scan results, malicious detection), Wayback Machine historical enrichment, and **URL endpoint fuzzing** (curated 245-path wordlist — elevated authorization required)
+- **Email & Phone Intelligence** -- **Hunter.io** domain email discovery and email verification, **EmailRep** email reputation (suspicious activity, breach exposure, known profiles), **Numverify** phone number validation and geolocation, **FullContact** person enrichment (name, title, organization, social profiles from email)
 - **Wayback Machine / Archive.org** -- Domain enrichment via CDX API: historical snapshot timeline, archived subdomain discovery, content change detection (digest comparison), and robots.txt policy history. No API key required
 - **Anti-Detection HTTP** -- All outbound HTTP uses curl_cffi with Chrome TLS fingerprinting to bypass bot detection; thread-safe per-thread session isolation for Windows COM compatibility
 - **API-Free Scrape Fallbacks** -- Every platform works without API keys via curl_cffi-powered scrape fallbacks (Reddit .json endpoints, Twitter syndication API, TikTok embedded JSON, Facebook mbasic)
@@ -27,7 +27,9 @@ An OSINT-driven intelligence and analysis platform for open-source intelligence 
 - **ForgeChain Governance** -- Every LLM request passes through a 3-verifier consensus gate (rule, safety, consistency) before execution
 - **Analysis Integrity Framework** -- Twelve-layer accuracy system: output grounding verification (semantic similarity), **field-level fact verification** (exact-match checking of dates, IPs, emails, handles, URLs against raw source data), **weighted entity confidence scoring** (NATO Admiralty grade-based, replaces naive source-count formula), **cross-source contradiction detection** (type conflicts, geo disagreements >500km), self-consistency checking (enabled by default, 2 runs), NATO Admiralty source reliability grading (A-F per source), RAG contamination guard, competing hypotheses generation (ACH), claim decomposition (CONFIRMED/INFERRED/ASSUMED), **source lineage enforcement** (every report claim must cite data sources), provenance trail, bias audit (source concentration, confirmation, temporal skew, coverage gaps, single-source), and multilingual NER
 - **Elevated Authorization** -- Investigation endpoints support elevated authorization for privileged analysts handling sensitive cases and active reconnaissance features (URL endpoint fuzzing)
-- **Entity Relationship Graphs** -- Cytoscape.js-powered interactive graphs with click-to-drill-down entity detail popups; graph context fed directly to LLM for entity-aware analysis
+- **Entity Relationship Graphs** -- Cytoscape.js-powered interactive graphs with click-to-drill-down entity detail popups, **5 layout modes** (force-directed, circle, grid, hierarchy, concentric), **node search** with opacity filtering, and a **color-coded legend**; graph context fed directly to LLM for entity-aware analysis
+- **Investigation History** -- Browse and reload past investigation results from the topbar History panel; stored server-side in the in-memory report cache for the session lifetime
+- **Raw Data Viewer** -- Toggle raw JSON view of any investigation result directly in the results panel, with copy-to-clipboard and download options
 - **Professional Export** -- PDF with section-aware layout, TLP classification banner, table of contents, and executive summary highlighting. Also Markdown (with TLP metadata), STIX 2.1, CSV, JSON, and Google Drive export with map snapshots
 - **Docker Ready** -- Dockerfile and docker-compose.yml for containerized deployment with Redis, Celery worker, and Celery beat
 - **Real-Time Pipeline Progress** -- Server-Sent Events (SSE) stream 12-stage pipeline progress to the frontend during investigations, replacing timer-based fake progress with actual stage completion tracking
@@ -41,7 +43,7 @@ An OSINT-driven intelligence and analysis platform for open-source intelligence 
 | Username enumeration sites | **700+** (WhatsMyName) | ~50 transforms | ~200 modules | N/A | 3,100+ |
 | Report accuracy verification | **12-layer** (grounding + fact check + contradiction + consistency) | None | None | Confidence scoring only | None |
 | Source reliability grading | **NATO Admiralty A-F** per data point | No standard | Simple tagging | Proprietary score | None |
-| Free OSINT API integrations | **7** (crt.sh, AbuseIPDB, OTX, EmailRep, Hunter, Numverify, DuckDuckGo) | Paid transforms | Some free | Enterprise only | None |
+| Free OSINT API integrations | **10** (crt.sh, AbuseIPDB, OTX, EmailRep, Hunter, Numverify, SecurityTrails, URLScan, FullContact, DuckDuckGo) | Paid transforms | Some free | Enterprise only | None |
 | Civilian harm detection | **Bellingcat methodology** (semantic + keyword) | None | None | Partial | None |
 | LLM-powered analysis | DeepSeek + Vision | None | None | Proprietary AI | None |
 | Entity graph analysis | Cytoscape.js interactive | **400+ transforms** | Basic graph | Advanced graph | None |
@@ -69,8 +71,8 @@ Fortis prioritizes **reporting accuracy** over raw data volume. Where platforms 
 | Civilian Harm | sentence-transformers (paraphrase-multilingual-MiniLM-L12-v2), Bellingcat methodology |
 | Image OSINT | Pillow (ELA/forensics), imagehash (perceptual hashing), numpy (steganography), CLIP (zero-shot classification via sentence-transformers), DeepSeek Vision API (contextual scene analysis) |
 | Deanonymization | HaveIBeenPwned v3 + LeakCheck (breach lookup), HTTP username enumeration (700+ sites via WhatsMyName), Holehe-style email-to-accounts, recursive pivot engine, attribution chain scoring |
-| Domain/IP Intel | python-whois, dnspython, HackerTarget API, crt.sh (cert transparency), AbuseIPDB (IP reputation), AlienVault OTX (threat intel), Wayback Machine CDX API |
-| Email/Phone Intel | Hunter.io (email finder + verify), EmailRep (email reputation), Numverify (phone validation) |
+| Domain/IP Intel | python-whois, dnspython, HackerTarget API, crt.sh (cert transparency), AbuseIPDB (IP reputation), AlienVault OTX (threat intel), SecurityTrails (DNS history + subdomains), URLScan.io (domain/IP scanning), Wayback Machine CDX API |
+| Email/Phone Intel | Hunter.io (email finder + verify), EmailRep (email reputation), Numverify (phone validation), FullContact (person + company enrichment) |
 | Web Intelligence | duckduckgo-search (Google dork queries, no API key required) |
 | Geolocation | geopy, MaxMind GeoLite2, DBSCAN clustering |
 | Video Analysis | OpenCV keyframe extraction, imagehash deduplication, pytesseract OCR |
@@ -590,8 +592,11 @@ Username enumeration now uses two sources: a built-in curated database of ~90 hi
 | `HUNTER_API_KEY` | Hunter.io API key for email finder + verification (free: 25 searches/mo) | (none) |
 | `EMAILREP_API_KEY` | EmailRep API key for full email reputation (basic works without key) | (none) |
 | `NUMVERIFY_API_KEY` | Numverify API key for phone validation (free: 100 requests/mo) | (none) |
+| `SECURITYTRAILS_API_KEY` | SecurityTrails API key for DNS history + subdomains (free: 50 queries/mo) | (none) |
+| `URLSCAN_API_KEY` | URLScan.io API key for URL scanning (free: 100 scans/day; search works without key) | (none) |
+| `FULLCONTACT_API_KEY` | FullContact API key for person + company enrichment (free: 100 matches/mo) | (none) |
 
-All OSINT APIs degrade gracefully when keys are not configured — the corresponding enrichment is simply skipped. crt.sh (certificate transparency) requires no API key.
+All OSINT APIs degrade gracefully when keys are not configured — the corresponding enrichment is simply skipped. crt.sh (certificate transparency) and URLScan.io search require no API key.
 
 ### Analysis Integrity Settings
 
@@ -864,6 +869,7 @@ The platform is designed to run with minimal configuration. Core features that w
 - CLIP zero-shot image classification via sentence-transformers (no API key needed, model downloads automatically)
 - Username enumeration across 700+ platforms via HTTP probing + WhatsMyName (no API key needed)
 - Certificate transparency via crt.sh (no API key needed)
+- URLScan.io domain/IP search (no API key needed for search queries)
 - Email reputation basics via EmailRep (no API key needed for basic checks)
 - Email-to-accounts resolution via direct service probing (no API key needed)
 - Attribution chain scoring from entity graph data (no API key needed)

@@ -47,8 +47,11 @@
 - **Feed Monitoring**: Background feed polling with Celery and auto-enrichment (including Telegram channel monitoring)
 - **Deanonymization Pipeline**: Breach lookup, username enumeration (700+ sites via WhatsMyName), email-to-accounts resolution, recursive pivoting, and attribution chain scoring
 - **Report Integrity Scorecard**: 12-layer verification — grounding, fact accuracy, consistency, contradiction detection — displayed as a visual scorecard in every investigation result
-- **OSINT API Enrichment**: crt.sh (cert transparency), AbuseIPDB (IP reputation), AlienVault OTX (threat intel), Hunter.io (email discovery), EmailRep (email reputation), Numverify (phone validation)
+- **OSINT API Enrichment**: crt.sh, AbuseIPDB, AlienVault OTX, Hunter.io, EmailRep, Numverify, SecurityTrails (DNS history), URLScan.io (scan results), FullContact (person/company enrichment)
 - **Real-Time Pipeline Progress**: Live 12-stage progress indicator during investigations via Server-Sent Events
+- **Investigation History**: Browse and reload past investigations from the topbar History panel
+- **Raw Data Viewer**: Toggle raw JSON view of investigation results with copy and download
+- **Enhanced Entity Graphs**: 5 layout modes, node search with opacity filtering, color-coded legend
 - **Civilian Harm Detection**: Bellingcat-inspired semantic scoring for conflict zones
 - **Multi-format Export**: PDF, STIX 2.1, JSON, CSV, Markdown, Google Drive
 - **Governance**: ForgeChain 3-verifier consensus for all LLM-driven operations
@@ -85,8 +88,10 @@
    - **Credential Exposure**: Breach history, password exposure alerts, data class badges (appears for email targets)
    - **Username Enumeration**: Matched accounts across 700+ platforms (WhatsMyName), grouped by category
    - **Attribution Chain**: Visual identity chain with per-link confidence scoring
+   - **Integrity Scorecard**: Grounding %, fact accuracy %, consistency %, and contradiction flags
+   - **Raw Data tab**: Full raw JSON response — copy to clipboard or download
    - **Map tab**: Appears if geolocation data was found (EXIF, IP geo)
-   - **Graph tab**: Entity relationship graph rendered with Cytoscape.js
+   - **Graph tab**: Entity relationship graph with layout selector, node search, and legend
    - **Civilian Harm**: If enabled, flagged content with severity scores appears in the analysis
 
 6. **Export Your Findings**
@@ -107,6 +112,7 @@ The interface is a single-page application (SPA) with no separate pages or setti
 - **OSINT Status**: Green dot indicates OSINT services are online
 - **User Info**: Your Google avatar and name (when OAuth is enabled)
 - **KB**: Opens the Knowledge Base slide-in panel
+- **History**: Opens the Investigation History slide-in panel to browse and reload past results
 - **Watch**: Opens the Feed Monitor slide-in panel to review findings
 - **Sign Out**: Logs out of the current session
 
@@ -132,6 +138,7 @@ Click a tool card to switch the input panel form. The active card is highlighted
 ### Slide-in Panels
 
 - **Watch Panel**: Opened via the Watch button in the top bar. Shows feed monitor findings with Approve and Dismiss actions.
+- **History Panel**: Opened via the History button. Lists past investigations with identifier, timestamp, entity count, and Map/Graph badges. Click any item to reload the result.
 - **Knowledge Base Panel**: Opened via the KB button. Shows uploaded documents with search, delete, toggle inclusion, rebuild index, and stats.
 
 ### Keyboard Shortcuts
@@ -187,7 +194,7 @@ The core OSINT feature for investigating usernames, emails, domains, and IP addr
 
 The system automatically identifies:
 - **Username**: `@username`, `username` (searches Twitter, Reddit, Instagram, etc.)
-- **Email**: `user@example.com` (breach databases, social profiles, EmailRep reputation, Hunter.io verification)
+- **Email**: `user@example.com` (breach databases, social profiles, EmailRep reputation, Hunter.io verification, FullContact person enrichment)
 - **Domain**: `example.com`, `www.example.com` (WHOIS, DNS, subdomains)
 - **IP Address**: `8.8.8.8` (geolocation, reverse DNS, co-hosted domains)
 
@@ -249,7 +256,10 @@ You can also manually set the identifier type via the dropdown.
 - **Reverse DNS/IP**: Co-hosted domains on same IP
 - **Wayback Machine**: Historical snapshots, subdomain discovery
 - **Threat Intel**: AlienVault OTX pulse data and reputation (when `OTX_API_KEY` set)
+- **DNS History**: SecurityTrails historical DNS records, associated domains (when `SECURITYTRAILS_API_KEY` set)
+- **URL Scanning**: URLScan.io scan results and malicious detection (search works without key)
 - **Email Discovery**: Hunter.io domain email search (when `HUNTER_API_KEY` set)
+- **Company Intel**: FullContact company enrichment — name, employees, founded date, keywords (when `FULLCONTACT_API_KEY` set)
 
 **IP Address Investigation**
 - **Geolocation**: Country, city, coordinates, ISP, ASN
@@ -257,6 +267,8 @@ You can also manually set the identifier type via the dropdown.
 - **Reverse IP**: Other domains hosted on same IP
 - **Abuse Reports**: AbuseIPDB confidence score and report history (when `ABUSEIPDB_API_KEY` set)
 - **Threat Intel**: AlienVault OTX pulse data and reputation (when `OTX_API_KEY` set)
+- **Hosted Domains**: SecurityTrails reverse IP lookup — domains on same IP (when `SECURITYTRAILS_API_KEY` set)
+- **URL Scanning**: URLScan.io IP scan results (search works without key)
 
 #### Civilian Harm Analysis (Optional)
 
@@ -431,7 +443,11 @@ Interactive visualisation of people, places, organisations, and their relationsh
 #### Features
 
 - **Cytoscape.js**: High-performance graph rendering in the Graph tab
+- **5 Layout Modes**: Force-directed (default), Circle, Grid, Hierarchy, and Concentric — switch via the layout dropdown
+- **Node Search**: Type in the search bar to highlight matching nodes and dim the rest
+- **Color-coded Legend**: Shows entity type colors at a glance (Person, Org, Location, Domain, IP, Account)
 - **Click-to-Inspect**: Click any node to see entity details in a popup
+- **Fit-to-View**: Click the Fit button to zoom the graph to show all nodes
 - **Entity-Aware LLM**: AI understands graph structure for better analysis
 
 #### Node Types
@@ -811,8 +827,12 @@ Flare-inspired attribution chain for unmasking anonymous identities. Runs automa
 - Without `OTX_API_KEY`: threat intel lookups skipped
 - Without `HUNTER_API_KEY`: email discovery and verification skipped
 - Without `NUMVERIFY_API_KEY`: phone validation skipped
+- Without `SECURITYTRAILS_API_KEY`: DNS history and subdomain discovery via SecurityTrails skipped
+- Without `URLSCAN_API_KEY`: URL scan submission skipped (search still works without key)
+- Without `FULLCONTACT_API_KEY`: person and company enrichment skipped
 - EmailRep basic queries work without an API key
 - crt.sh certificate transparency lookups require no API key
+- URLScan.io search queries work without an API key
 - Attribution chain scoring runs on entity graph data already collected
 
 ---
@@ -1242,6 +1262,9 @@ The LLM is prohibited from generating specific dates, usernames, URLs, or statis
 | `HUNTER_API_KEY` | (none) | Hunter.io API key (free: 25 searches/month) |
 | `EMAILREP_API_KEY` | (none) | EmailRep API key (basic queries work without key) |
 | `NUMVERIFY_API_KEY` | (none) | Numverify API key (free: 100 lookups/month) |
+| `SECURITYTRAILS_API_KEY` | (none) | SecurityTrails API key (free: 50 queries/month) |
+| `URLSCAN_API_KEY` | (none) | URLScan.io API key (free: 100 scans/day; search works without key) |
+| `FULLCONTACT_API_KEY` | (none) | FullContact API key (free: 100 matches/month) |
 
 For the full list of environment variables, see `README.md`.
 
@@ -1260,6 +1283,9 @@ For the full list of environment variables, see `README.md`.
 | Numverify | 100 lookups/month (free) | N/A |
 | crt.sh | No formal limit | No formal limit |
 | EmailRep | 100 req/month (free key) | Basic queries allowed |
+| SecurityTrails | 50 queries/month (free) | N/A |
+| URLScan.io | 100 scans/day (free) | Unlimited search |
+| FullContact | 100 matches/month (free) | N/A |
 
 ### Supported File Formats
 

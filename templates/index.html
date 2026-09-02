@@ -58,6 +58,11 @@
         &#x1F4DA; KB
       </button>
 
+      <!-- History button -->
+      <button class="topbar-btn" id="btnHistory" title="Investigation History">
+        &#x1F553; History
+      </button>
+
       <!-- Watch button -->
       <button class="topbar-btn" id="btnWatch" title="Feed Monitor">
         &#x1F514; Watch
@@ -550,6 +555,7 @@
         <!-- Result tabs -->
         <div class="result-tabs" id="resultTabs" style="display:none;">
           <button class="result-tab active" data-tab="analysis" id="tabAnalysis">Analysis</button>
+          <button class="result-tab" data-tab="raw" id="tabRaw" style="display:none;">Raw Data</button>
           <button class="result-tab" data-tab="map" id="tabMap" style="display:none;">Map</button>
           <button class="result-tab" data-tab="graph" id="tabGraph" style="display:none;">Graph</button>
           <button class="result-tab" data-tab="charts" id="tabCharts" style="display:none;">Charts</button>
@@ -574,6 +580,16 @@
               <div class="results-content" id="resultsContent"></div>
             </div>
 
+            <!-- Raw Data pane -->
+            <div class="result-pane result-pane-raw" id="paneRaw">
+              <div class="raw-data-toolbar">
+                <button class="btn btn-ghost btn-sm" id="btnCopyRaw" title="Copy to clipboard">&#x1F4CB; Copy</button>
+                <button class="btn btn-ghost btn-sm" id="btnDownloadRaw" title="Download JSON">&#x1F4E5; Download</button>
+                <span class="raw-data-size" id="rawDataSize"></span>
+              </div>
+              <pre class="raw-data-content" id="rawDataContent"></pre>
+            </div>
+
             <!-- Map pane -->
             <div class="result-pane result-pane-map" id="paneMap">
               <div class="map-container visible" id="mapContainer">
@@ -583,6 +599,25 @@
 
             <!-- Graph pane -->
             <div class="result-pane result-pane-graph" id="paneGraph">
+              <div class="graph-toolbar">
+                <input type="text" class="form-input form-input-sm" id="graphSearch" placeholder="Search nodes..." />
+                <select class="form-select form-select-sm" id="graphLayout" title="Graph layout">
+                  <option value="cose">Force-directed</option>
+                  <option value="circle">Circle</option>
+                  <option value="grid">Grid</option>
+                  <option value="breadthfirst">Hierarchy</option>
+                  <option value="concentric">Concentric</option>
+                </select>
+                <button class="btn btn-ghost btn-sm" id="btnGraphFit" title="Fit to view">&#x26F6; Fit</button>
+              </div>
+              <div class="graph-legend" id="graphLegend">
+                <span class="legend-item" data-type="person"><span class="legend-dot" style="background:#3498db;"></span>Person</span>
+                <span class="legend-item" data-type="organization"><span class="legend-dot" style="background:#9b59b6;"></span>Org</span>
+                <span class="legend-item" data-type="location"><span class="legend-dot" style="background:#22c55e;"></span>Location</span>
+                <span class="legend-item" data-type="domain"><span class="legend-dot" style="background:#e67e22;"></span>Domain</span>
+                <span class="legend-item" data-type="ip"><span class="legend-dot" style="background:#ef4444;"></span>IP</span>
+                <span class="legend-item" data-type="account"><span class="legend-dot" style="background:#8b5cf6;"></span>Account</span>
+              </div>
               <div class="graph-container visible" id="graphContainer">
                 <div id="graph"></div>
               </div>
@@ -675,6 +710,28 @@
         <button class="btn btn-secondary btn-sm" id="btnKbRebuild">&#x21BB; Rebuild Index</button>
         <button class="btn btn-ghost btn-sm" id="btnKbStats">&#x1F4CA; Stats</button>
       </div>
+    </div>
+  </div>
+
+  <!-- ====================================================================
+       SLIDE-IN PANEL: Investigation History
+       ==================================================================== -->
+  <div class="slide-panel-overlay" id="historyOverlay"></div>
+  <div class="slide-panel" id="historyPanel">
+    <div class="slide-panel-header">
+      <h2>&#x1F553; Investigation History</h2>
+      <button class="slide-panel-close" id="historyClose">&times;</button>
+    </div>
+    <div class="slide-panel-body" id="historyBody">
+      <div class="results-empty" id="historyEmpty" style="min-height:200px;">
+        <div class="results-empty-icon">&#x1F4C1;</div>
+        <div class="results-empty-text">No Investigations Yet</div>
+        <div class="results-empty-hint">Run an investigation to see it here</div>
+      </div>
+      <div class="history-list" id="historyList"></div>
+    </div>
+    <div class="slide-panel-footer">
+      <button class="btn btn-ghost btn-block" id="btnClearHistory">Clear History</button>
     </div>
   </div>
 
