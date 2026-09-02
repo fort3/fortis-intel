@@ -4235,6 +4235,29 @@ def create_app():
             print(f"[ERROR] Monitor deletion failed: {exc}")
             return jsonify({"error": "Failed to delete monitor"}), 500
 
+    @app.route("/monitor/purge-all", methods=["DELETE"])
+    @login_required
+    def monitor_purge_all():
+        """Delete ALL monitors and their findings. Use to reset stale state."""
+        try:
+            mon = _get_feed_monitor()
+            monitors = mon.list_monitors()
+            deleted = 0
+            findings_purged = 0
+            for m in monitors:
+                result = mon.delete_monitor(m["monitor_id"])
+                if result.get("success"):
+                    deleted += 1
+                    findings_purged += result.get("findings_purged", 0)
+            return jsonify({
+                "success": True,
+                "monitors_deleted": deleted,
+                "findings_purged": findings_purged,
+            })
+        except Exception as exc:
+            print(f"[ERROR] Monitor purge-all failed: {exc}")
+            return jsonify({"error": "Failed to purge monitors"}), 500
+
     @app.route("/monitor/list", methods=["GET"])
     @login_required
     def monitor_list():

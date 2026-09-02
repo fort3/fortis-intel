@@ -174,8 +174,15 @@ class FeedMonitor:
         if not ok:
             log.warning("Failed to delete monitor %s", monitor_id)
             return {"success": False, "error": f"Monitor {monitor_id} not found"}
-        log.info("Deleted monitor %s", monitor_id)
-        return {"success": True, "monitor_id": monitor_id, "status": "deleted"}
+
+        purged = self._findings.delete_by_monitor(monitor_id)
+        log.info("Deleted monitor %s and purged %d findings", monitor_id, purged)
+        return {
+            "success": True,
+            "monitor_id": monitor_id,
+            "status": "deleted",
+            "findings_purged": purged,
+        }
 
     def list_monitors(self) -> list[dict[str, Any]]:
         """List all monitors (active, paused, and expired).

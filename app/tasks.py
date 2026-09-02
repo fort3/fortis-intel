@@ -267,19 +267,23 @@ def poll_monitor(self, monitor_id: str) -> dict:
     )
     log.info("poll_monitor: updated last_poll for %s to %s", monitor_id, now_ts)
 
-    # 9. Schedule next poll based on interval
-    interval = monitor.interval_minutes or 60
-    try:
-        poll_monitor.apply_async(
-            args=[monitor_id],
-            countdown=interval * 60,
-        )
-        log.info(
-            "poll_monitor: scheduled next poll for %s in %d minutes",
-            monitor_id, interval,
-        )
-    except Exception as exc:
-        log.warning("poll_monitor: failed to schedule next poll: %s", exc)
+    # 9. Schedule next poll — but only if monitor still exists and is active
+    refreshed = monitor_store.get(monitor_id)
+    if refreshed and refreshed.status == "active":
+        interval = monitor.interval_minutes or 60
+        try:
+            poll_monitor.apply_async(
+                args=[monitor_id],
+                countdown=interval * 60,
+            )
+            log.info(
+                "poll_monitor: scheduled next poll for %s in %d minutes",
+                monitor_id, interval,
+            )
+        except Exception as exc:
+            log.warning("poll_monitor: failed to schedule next poll: %s", exc)
+    else:
+        log.info("poll_monitor: monitor %s no longer active/exists, not rescheduling", monitor_id)
 
     return {
         "monitor_id": monitor_id,

@@ -338,6 +338,24 @@ class MonitorFindingStore(_BaseStore):
     _dataclass = MonitorFinding
     _pending_set_key = "fortis:findings:pending"
 
+    def delete_by_monitor(self, monitor_id: str) -> int:
+        """Delete all findings associated with a monitor.
+
+        Returns:
+            Number of findings deleted.
+        """
+        count = 0
+        try:
+            all_findings = self.list_all(limit=500)
+            for finding in all_findings:
+                if finding.monitor_id == monitor_id:
+                    self.delete(finding.finding_id)
+                    count += 1
+            log.info("Deleted %d findings for monitor %s", count, monitor_id)
+        except Exception as exc:
+            log.error("Failed to delete findings for monitor %s: %s", monitor_id, exc)
+        return count
+
 
 # ---------------------------------------------------------------------------
 # Global singleton accessors
