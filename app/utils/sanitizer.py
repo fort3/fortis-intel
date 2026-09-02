@@ -70,6 +70,9 @@ def sanitize_identifier(identifier: str, id_type: str) -> str:
         "domain": lambda v: v.lower().strip().rstrip("."),
         "ip": lambda v: str(ipaddress.ip_address(v.strip())),
         "url": lambda v: v.strip(),
+        "phone": lambda v: re.sub(r"[^\d+\-() ]", "", v).strip(),
+        "name": lambda v: v.strip(),
+        "keyword": lambda v: v.strip(),
         "generic": lambda v: v.strip(),
     }
 
