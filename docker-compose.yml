@@ -20,7 +20,7 @@ services:
     restart: unless-stopped
 
   redis:
-    image: redis:7-alpine
+    image: redis:7.4-alpine
     command: redis-server --requirepass "${REDIS_PASSWORD:-changeme_in_production}" --bind 0.0.0.0
     expose:
       - "6379"
