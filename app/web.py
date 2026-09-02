@@ -4238,7 +4238,7 @@ def create_app():
     @app.route("/monitor/purge-all", methods=["DELETE"])
     @login_required
     def monitor_purge_all():
-        """Delete ALL monitors and their findings. Use to reset stale state."""
+        """Delete ALL monitors, their findings, and flush queued Celery tasks."""
         try:
             mon = _get_feed_monitor()
             monitors = mon.list_monitors()
@@ -4249,14 +4249,47 @@ def create_app():
                 if result.get("success"):
                     deleted += 1
                     findings_purged += result.get("findings_purged", 0)
+
+            # Flush the Celery task queue to kill stale poll tasks
+            tasks_purged = 0
+            try:
+                from app.celery_app import celery_app as _celery
+                with _celery.connection_or_acquire() as conn:
+                    tasks_purged = conn.default_channel.queue_purge("fortis_monitor") or 0
+                print(f"[MONITOR] Purged {tasks_purged} tasks from fortis_monitor queue")
+                # Also discard any tasks still on the default queue
+                default_purged = _celery.control.purge() or 0
+                tasks_purged += default_purged
+                if default_purged:
+                    print(f"[MONITOR] Purged {default_purged} tasks from default queue")
+            except Exception as cexc:
+                print(f"[WARN] Could not purge Celery queue: {cexc}")
+
             return jsonify({
                 "success": True,
                 "monitors_deleted": deleted,
                 "findings_purged": findings_purged,
+                "tasks_purged": tasks_purged,
             })
         except Exception as exc:
             print(f"[ERROR] Monitor purge-all failed: {exc}")
             return jsonify({"error": "Failed to purge monitors"}), 500
+
+    @app.route("/monitor/flush-queue", methods=["DELETE"])
+    @login_required
+    def monitor_flush_queue():
+        """Flush all queued Celery monitor tasks without deleting monitor configs."""
+        try:
+            from app.celery_app import celery_app as _celery
+            purged = 0
+            with _celery.connection_or_acquire() as conn:
+                purged += conn.default_channel.queue_purge("fortis_monitor") or 0
+            purged += _celery.control.purge() or 0
+            print(f"[MONITOR] Flushed {purged} queued Celery tasks")
+            return jsonify({"success": True, "tasks_flushed": purged})
+        except Exception as exc:
+            print(f"[ERROR] Queue flush failed: {exc}")
+            return jsonify({"error": f"Failed to flush queue: {exc}"}), 500
 
     @app.route("/monitor/list", methods=["GET"])
     @login_required

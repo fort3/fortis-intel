@@ -2819,14 +2819,59 @@ async function deleteMonitor(monitorId) {
             if (data.success === false) {
                 showToast('Delete failed: ' + (data.error || 'Unknown error'), 'error');
             } else {
-                showToast('Monitor deleted.', 'info');
+                var msg = 'Monitor deleted';
+                if (data.findings_purged) msg += ' (' + data.findings_purged + ' findings purged)';
+                showToast(msg + '.', 'info');
                 loadWatchMonitors();
+                loadWatchFindings();
             }
         } else {
             showToast('Delete failed: server returned ' + response.status, 'error');
         }
     } catch (e) {
         showToast('Delete failed: ' + e.message, 'error');
+    }
+}
+
+/**
+ * Purge all monitors, findings, and queued tasks.
+ */
+async function purgeAllMonitors() {
+    if (!confirm('This will delete ALL monitors, their findings, and flush all queued tasks. Continue?')) {
+        return;
+    }
+    try {
+        var response = await fetchApi('/monitor/purge-all', { method: 'DELETE' });
+        if (response.ok) {
+            var data = await response.json();
+            var msg = data.monitors_deleted + ' monitors deleted, ' +
+                data.findings_purged + ' findings purged, ' +
+                (data.tasks_purged || 0) + ' queued tasks flushed';
+            showToast(msg, 'success');
+            loadWatchMonitors();
+            loadWatchFindings();
+        } else {
+            showToast('Purge failed: server returned ' + response.status, 'error');
+        }
+    } catch (e) {
+        showToast('Purge failed: ' + e.message, 'error');
+    }
+}
+
+/**
+ * Flush the Celery task queue without deleting monitors.
+ */
+async function flushTaskQueue() {
+    try {
+        var response = await fetchApi('/monitor/flush-queue', { method: 'DELETE' });
+        if (response.ok) {
+            var data = await response.json();
+            showToast(data.tasks_flushed + ' queued tasks flushed.', 'success');
+        } else {
+            showToast('Flush failed: server returned ' + response.status, 'error');
+        }
+    } catch (e) {
+        showToast('Flush failed: ' + e.message, 'error');
     }
 }
 
@@ -3758,7 +3803,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
             var deleteBtn = e.target.closest('.watch-delete-btn');
             if (deleteBtn) {
-                if (confirm('Delete this monitor permanently?')) {
+                if (confirm('Delete this monitor and all its findings?')) {
                     deleteMonitor(deleteBtn.dataset.monitorId);
                 }
                 return;
@@ -3771,8 +3816,18 @@ document.addEventListener('DOMContentLoaded', function () {
         clearFindingsBtn.addEventListener('click', function () {
             var findingsEl = document.getElementById('watchFindings');
             if (findingsEl) findingsEl.innerHTML = '';
-            showToast('Findings cleared.', 'info');
+            showToast('Findings view cleared.', 'info');
         });
+    }
+
+    var purgeMonitorsBtn = document.getElementById('btnPurgeMonitors');
+    if (purgeMonitorsBtn) {
+        purgeMonitorsBtn.addEventListener('click', purgeAllMonitors);
+    }
+
+    var flushQueueBtn = document.getElementById('btnFlushQueue');
+    if (flushQueueBtn) {
+        flushQueueBtn.addEventListener('click', flushTaskQueue);
     }
 
     // ---- Knowledge Base Panel ----

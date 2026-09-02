@@ -673,8 +673,12 @@
       <!-- Monitor findings populate here dynamically -->
       <div id="watchFindings" style="display:none;"></div>
     </div>
-    <div class="slide-panel-footer">
+    <div class="slide-panel-footer" style="display:flex;flex-direction:column;gap:6px;">
       <button class="btn btn-ghost btn-block" id="btnClearFindings">Clear All Findings</button>
+      <div style="display:flex;gap:6px;">
+        <button class="btn btn-ghost" id="btnPurgeMonitors" style="flex:1;color:var(--error);border-color:var(--error);">Purge All Monitors</button>
+        <button class="btn btn-ghost" id="btnFlushQueue" style="flex:1;">Flush Task Queue</button>
+      </div>
     </div>
   </div>
 
