@@ -881,3 +881,299 @@ class WebScraper:
         except Exception:
             log.exception("Numverify lookup failed for %r", phone)
             return {}
+
+    # ── SecurityTrails ────────────────────────────────────────────
+
+    def securitytrails_domain(self, domain: str) -> dict[str, Any]:
+        """Fetch DNS history, subdomains, and associated domains via SecurityTrails.
+
+        Requires SECURITYTRAILS_API_KEY env var. Free tier: 50 queries/month.
+        """
+        api_key = os.environ.get("SECURITYTRAILS_API_KEY")
+        if not api_key:
+            return {}
+
+        headers = {"APIKEY": api_key, "Accept": "application/json"}
+        base = "https://api.securitytrails.com/v1"
+        result: dict[str, Any] = {"domain": domain}
+
+        try:
+            detail = self._http.get(
+                f"{base}/domain/{domain}",
+                headers=headers, timeout=12,
+            )
+            detail.raise_for_status()
+            d = detail.json()
+            current_dns = d.get("current_dns", {})
+            result["current_dns"] = {
+                rtype: [r.get("address") or r.get("host") or r.get("value", "")
+                        for r in vals.get("values", [])]
+                for rtype, vals in current_dns.items()
+                if isinstance(vals, dict) and "values" in vals
+            }
+            result["alexa_rank"] = d.get("alexa_rank")
+            result["hostname"] = d.get("hostname")
+        except Exception:
+            log.warning("SecurityTrails domain detail failed for %r", domain)
+
+        try:
+            subs = self._http.get(
+                f"{base}/domain/{domain}/subdomains",
+                headers=headers, timeout=12,
+            )
+            subs.raise_for_status()
+            sub_list = subs.json().get("subdomains", [])
+            result["subdomains"] = [f"{s}.{domain}" for s in sub_list[:100]]
+            result["subdomain_count"] = len(sub_list)
+        except Exception:
+            log.warning("SecurityTrails subdomains failed for %r", domain)
+
+        try:
+            assoc = self._http.get(
+                f"{base}/domain/{domain}/associated",
+                headers=headers, timeout=12,
+            )
+            assoc.raise_for_status()
+            records = assoc.json().get("records", [])
+            result["associated_domains"] = [
+                r.get("hostname", "") for r in records[:50]
+            ]
+        except Exception:
+            log.warning("SecurityTrails associated domains failed for %r", domain)
+
+        try:
+            history = self._http.get(
+                f"{base}/domain/{domain}/history/dns/a",
+                headers=headers, timeout=12,
+            )
+            history.raise_for_status()
+            records = history.json().get("records", [])
+            result["dns_history_a"] = [
+                {
+                    "values": [v.get("ip", "") for v in r.get("values", [])],
+                    "first_seen": r.get("first_seen", ""),
+                    "last_seen": r.get("last_seen", ""),
+                    "organizations": r.get("organizations", []),
+                }
+                for r in records[:20]
+            ]
+        except Exception:
+            log.warning("SecurityTrails DNS history failed for %r", domain)
+
+        if any(k in result for k in ("current_dns", "subdomains", "associated_domains", "dns_history_a")):
+            log.info("SecurityTrails for %s: %d subdomains, %d associated",
+                     domain, result.get("subdomain_count", 0),
+                     len(result.get("associated_domains", [])))
+
+        return result if len(result) > 1 else {}
+
+    def securitytrails_ip(self, ip: str) -> dict[str, Any]:
+        """Reverse lookup: domains hosted on an IP via SecurityTrails."""
+        api_key = os.environ.get("SECURITYTRAILS_API_KEY")
+        if not api_key:
+            return {}
+
+        try:
+            resp = self._http.get(
+                f"https://api.securitytrails.com/v1/domains/list",
+                headers={"APIKEY": api_key, "Accept": "application/json"},
+                params={"include_ips": "false", "page": 1},
+                json={"filter": {"ipv4": ip}},
+                timeout=12,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            records = data.get("records", [])
+            return {
+                "ip": ip,
+                "domains": [r.get("hostname", "") for r in records[:50]],
+                "domain_count": data.get("record_count", len(records)),
+            }
+        except Exception:
+            log.warning("SecurityTrails IP reverse failed for %r", ip)
+            return {}
+
+    # ── URLScan.io ────────────────────────────────────────────────
+
+    def urlscan_search(self, query: str, query_type: str = "domain") -> dict[str, Any]:
+        """Search URLScan.io for scans of a domain/IP/URL.
+
+        Requires URLSCAN_API_KEY for submission; search is free without key.
+        Free tier: 100 scans/day, unlimited search.
+        """
+        api_key = os.environ.get("URLSCAN_API_KEY", "")
+        headers = {"Accept": "application/json"}
+        if api_key:
+            headers["API-Key"] = api_key
+
+        try:
+            search_query = f"{query_type}:{query}" if query_type in ("domain", "ip") else f"page.url:{query}"
+            resp = self._http.get(
+                "https://urlscan.io/api/v1/search/",
+                params={"q": search_query, "size": 10},
+                headers=headers,
+                timeout=15,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            results = data.get("results", [])
+
+            scans = []
+            for r in results[:10]:
+                task = r.get("task", {})
+                page = r.get("page", {})
+                stats = r.get("stats", {})
+                scans.append({
+                    "url": task.get("url", ""),
+                    "domain": page.get("domain", ""),
+                    "ip": page.get("ip", ""),
+                    "country": page.get("country", ""),
+                    "server": page.get("server", ""),
+                    "status": page.get("status"),
+                    "title": page.get("title", ""),
+                    "asn": page.get("asn", ""),
+                    "asnname": page.get("asnname", ""),
+                    "screenshot": r.get("screenshot", ""),
+                    "result_url": r.get("result", ""),
+                    "time": task.get("time", ""),
+                    "malicious": r.get("verdicts", {}).get("overall", {}).get("malicious", False),
+                    "tags": r.get("verdicts", {}).get("overall", {}).get("tags", []),
+                    "unique_ips": stats.get("uniqIPs", 0),
+                })
+
+            log.info("URLScan.io search for %s:%s returned %d results",
+                     query_type, query, len(scans))
+
+            return {
+                "query": query,
+                "query_type": query_type,
+                "total": data.get("total", len(scans)),
+                "scans": scans,
+            }
+        except Exception:
+            log.warning("URLScan.io search failed for %r", query)
+            return {}
+
+    def urlscan_submit(self, url: str, visibility: str = "unlisted") -> dict[str, Any]:
+        """Submit a URL to URLScan.io for scanning.
+
+        Requires URLSCAN_API_KEY. Free tier: 100 scans/day.
+        """
+        api_key = os.environ.get("URLSCAN_API_KEY")
+        if not api_key:
+            return {}
+
+        try:
+            resp = self._http.post(
+                "https://urlscan.io/api/v1/scan/",
+                headers={"API-Key": api_key, "Content-Type": "application/json"},
+                json={"url": url, "visibility": visibility},
+                timeout=15,
+            )
+            resp.raise_for_status()
+            data = resp.json()
+            return {
+                "uuid": data.get("uuid", ""),
+                "result_url": data.get("result", ""),
+                "api_url": data.get("api", ""),
+                "visibility": data.get("visibility", visibility),
+                "message": data.get("message", ""),
+            }
+        except Exception:
+            log.warning("URLScan.io submit failed for %r", url)
+            return {}
+
+    # ── FullContact ───────────────────────────────────────────────
+
+    def fullcontact_enrich(self, email: str = "", domain: str = "") -> dict[str, Any]:
+        """Enrich a person (by email) or company (by domain) via FullContact.
+
+        Requires FULLCONTACT_API_KEY. Free tier: 100 matches/month.
+        """
+        api_key = os.environ.get("FULLCONTACT_API_KEY")
+        if not api_key:
+            return {}
+
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+
+        result: dict[str, Any] = {}
+
+        if email:
+            try:
+                resp = self._http.post(
+                    "https://api.fullcontact.com/v3/person.enrich",
+                    headers=headers,
+                    json={"email": email},
+                    timeout=12,
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    result["person"] = {
+                        "full_name": data.get("fullName", ""),
+                        "age_range": data.get("ageRange", ""),
+                        "gender": data.get("gender", ""),
+                        "location": data.get("location", ""),
+                        "title": data.get("title", ""),
+                        "organization": data.get("organization", ""),
+                        "linkedin": data.get("linkedin", ""),
+                        "twitter": data.get("twitter", ""),
+                        "facebook": data.get("facebook", ""),
+                        "bio": data.get("bio", ""),
+                        "avatar": data.get("avatar", ""),
+                        "details": {
+                            "interests": data.get("details", {}).get("interests", []),
+                            "locations": [
+                                loc.get("formatted", "")
+                                for loc in data.get("details", {}).get("locations", [])
+                            ],
+                        },
+                    }
+                    log.info("FullContact person enrich for %s: %s",
+                             email, result["person"].get("full_name", "unknown"))
+                elif resp.status_code == 404:
+                    log.info("FullContact: no person record for %s", email)
+                else:
+                    log.warning("FullContact person enrich returned %d for %s",
+                                resp.status_code, email)
+            except Exception:
+                log.warning("FullContact person enrich failed for %r", email)
+
+        if domain:
+            try:
+                resp = self._http.post(
+                    "https://api.fullcontact.com/v3/company.enrich",
+                    headers=headers,
+                    json={"domain": domain},
+                    timeout=12,
+                )
+                if resp.status_code == 200:
+                    data = resp.json()
+                    result["company"] = {
+                        "name": data.get("name", ""),
+                        "location": data.get("location", ""),
+                        "category": data.get("category", []),
+                        "logo": data.get("logo", ""),
+                        "website": data.get("website", ""),
+                        "founded": data.get("founded"),
+                        "employees": data.get("employees"),
+                        "locale": data.get("locale", ""),
+                        "linkedin": data.get("linkedin", ""),
+                        "twitter": data.get("twitter", ""),
+                        "facebook": data.get("facebook", ""),
+                        "bio": data.get("bio", ""),
+                        "keywords": data.get("details", {}).get("keywords", []),
+                    }
+                    log.info("FullContact company enrich for %s: %s",
+                             domain, result["company"].get("name", "unknown"))
+                elif resp.status_code == 404:
+                    log.info("FullContact: no company record for %s", domain)
+                else:
+                    log.warning("FullContact company enrich returned %d for %s",
+                                resp.status_code, domain)
+            except Exception:
+                log.warning("FullContact company enrich failed for %r", domain)
+
+        return result
