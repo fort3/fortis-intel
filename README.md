@@ -26,7 +26,7 @@ An OSINT-driven intelligence and analysis platform for open-source intelligence 
 - **Deanonymization Pipeline** -- Flare-inspired attribution chain: HaveIBeenPwned + LeakCheck credential exposure lookup, Sherlock-style username enumeration across **700+ platforms** (built-in 90 + WhatsMyName community dataset), Holehe-style email-to-accounts resolution, recursive pivot engine (auto-investigates discovered identifiers to 2-hop depth), and confidence-scored attribution chains (CONFIRMED/STRONG/MODERATE/CIRCUMSTANTIAL)
 - **Feed Monitoring** -- Set up keyword, username, hashtag, and Telegram channel monitors with Celery background tasks, automatic enrichment, and civilian harm scoring on new findings
 - **GDPR & NIST CSF 2.0 Compliance** -- Tiered data retention, right to erasure (Art. 17), GDPR Art. 30 processing records, NIST CSF function mapping, system credential leak detection (subject PII is never blocked)
-- **ForgeChain Governance** -- Every LLM request passes through a 3-verifier consensus gate (rule, safety, consistency) before execution
+- **ForgeChain Governance** -- Every LLM request passes through a 3-verifier consensus gate (rule, safety, consistency) before execution. https://github.com/ExaltedOWL/Forgechain/tree/main
 - **Analysis Integrity Framework** -- Twelve-layer accuracy system: output grounding verification (semantic similarity), **field-level fact verification** (exact-match checking of dates, IPs, emails, handles, URLs against raw source data), **weighted entity confidence scoring** (NATO Admiralty grade-based, replaces naive source-count formula), **cross-source contradiction detection** (type conflicts, geo disagreements >500km), self-consistency checking (enabled by default, 2 runs), NATO Admiralty source reliability grading (A-F per source), RAG contamination guard, competing hypotheses generation (ACH), claim decomposition (CONFIRMED/INFERRED/ASSUMED), **source lineage enforcement** (every report claim must cite data sources), provenance trail, bias audit (source concentration, confirmation, temporal skew, coverage gaps, single-source), and multilingual NER
 - **Elevated Authorization** -- Investigation endpoints support elevated authorization for privileged analysts handling sensitive cases and active reconnaissance features (URL endpoint fuzzing)
 - **Entity Relationship Graphs** -- Cytoscape.js-powered interactive graphs with click-to-drill-down entity detail popups, **5 layout modes** (force-directed, circle, grid, hierarchy, concentric), **node search** with opacity filtering, and a **color-coded legend**; graph context fed directly to LLM for entity-aware analysis
@@ -762,6 +762,8 @@ Every LLM invocation passes through ForgeChain, a 3-verifier consensus gate:
 3. **Consistency Verifier** (LLM-based) -- DeepSeek v4-pro checks that the request is consistent with the stated intent
 
 A configurable consensus threshold (default 2-of-3, set via `FORGE_CONSENSUS_THRESHOLD`) is required to pass. Failed requests are either healed (automatically corrected) or rejected with an explanation. Investigation endpoints support `elevated_authorization` for privileged analysts handling sensitive cases (e.g., minor-adjacent investigations). All decisions are logged in the ForgeChain audit trail.
+
+This concept was an original idea from someone else and here is the repo https://github.com/ExaltedOWL/Forgechain/
 
 ### Analysis Integrity Framework
 
