@@ -3,9 +3,7 @@
 An OSINT-driven intelligence and analysis platform for open-source intelligence gathering, geospatial triangulation, and analyst-grade report generation.
 
 ![alt text](fortis-1.png)
-<img width="880" height="368" alt="Knowledge Graph" src="https://github.com/user-attachments/assets/e5f9f15e-0e1a-4ee9-af68-6fba57ce9670" />
-
-<img  style="display: block; margin-left: auto; margin-right: auto;" alt="compare_fortis" src="https://github.com/user-attachments/assets/586cf1f3-443e-49c5-b902-ea48e7098d12" />
+<img width="1280" height="668" alt="Knowledge Graph" src="https://github.com/user-attachments/assets/39022fc0-7be6-4667-96f6-e50012f93209" />
 
 
 ## Key Features
