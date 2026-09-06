@@ -20,7 +20,7 @@ node_modules/
 .env.*.local
 
 # Local tooling / plans
-plans/
+plans/*
 
 # Runtime data
 uploads/*
