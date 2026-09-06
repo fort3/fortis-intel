@@ -1191,7 +1191,7 @@ Fortis-Intelligence-Hub/
 
 ---
 
-##DISCLAIMER: Thoughts, Opinions and the Information in this tool is strictly for educational purposes alone and use of the tool or any code or technique implied or mentioned herein for unlawful or unauthorized activities is strictly prohibited.
+## DISCLAIMER: Thoughts, Opinions and the Information in this tool is strictly for educational purposes alone and use of the tool or any code or technique implied or mentioned herein for unlawful or unauthorized activities is strictly prohibited.
 
 This project is licensed under the MIT License.
 
